@@ -1,0 +1,535 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+	"xraytool/internal/logger"
+	"xraytool/internal/subscription"
+)
+
+type ApiConfig struct {
+	APIKey      string   `json:"api_key"`
+	AllowedDirs []string `json:"allowed_dirs"`
+}
+
+var apiConfig ApiConfig
+
+func getClientIP(r *http.Request) string {
+	ip := r.Header.Get("X-Real-IP")
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+
+	port := r.Header.Get("X-Real-Port")
+	if port != "" && !strings.Contains(ip, ":") {
+		ip = ip + ":" + port
+	}
+
+	return ip
+}
+
+func logIntruder(r *http.Request, reason string) {
+	ip := getClientIP(r)
+	dump, err := httputil.DumpRequest(r, false)
+	dumpStr := "Не удалось сделать дамп"
+	if err == nil {
+		dumpStr = string(dump)
+	}
+	logger.Warnf("\n[!!!] INTRUDER ALERT | %s\nIP: %s\n--- Request Dump ---\n%s\n--------------------\n", reason, ip, dumpStr)
+}
+
+func isPathAllowed(path string) bool {
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		realPath, err = filepath.Abs(path)
+		if err != nil {
+			return false
+		}
+	}
+
+	for _, dir := range apiConfig.AllowedDirs {
+		realDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			realDir, err = filepath.Abs(dir)
+			if err != nil {
+				continue
+			}
+		}
+
+		rel, err := filepath.Rel(realDir, realPath)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			return true
+		}
+	}
+	return false
+}
+
+func startServerCmd() *cobra.Command {
+	var port int
+
+	cmd := &cobra.Command{
+		Use:   "start-server",
+		Short: "Start the xraytool REST API server",
+		Run: func(cmd *cobra.Command, _ []string) {
+			requireRoot()
+
+			executablePath, err := os.Executable()
+			if err != nil {
+				fmt.Printf("Fatal error: %v\n", err)
+				osExit(1)
+				return
+			}
+			baseDir := filepath.Dir(executablePath)
+
+			// We look for config first in WorkingDirectory (like /etc/xraytool) or next to executable
+			configPath := filepath.Join(baseDir, "xray_api_config.json")
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				// Fallback to /etc/xraytool/xray_api_config.json or current directory
+				configPath = "/etc/xraytool/xray_api_config.json"
+				if _, err := os.Stat(configPath); os.IsNotExist(err) {
+					configPath = "xray_api_config.json"
+				}
+			}
+
+			confFile, err := os.ReadFile(configPath)
+			if err != nil {
+				fmt.Printf("Ошибка: Не удалось найти конфиг %s. Работа сервера невозможна.\n", configPath)
+				osExit(1)
+				return
+			}
+
+			if err := json.Unmarshal(confFile, &apiConfig); err != nil {
+				fmt.Printf("Ошибка: Битый формат конфига %s: %v\n", configPath, err)
+				osExit(1)
+				return
+			}
+
+			if apiConfig.APIKey == "" {
+				fmt.Printf("FATAL: api_key не может быть пустым в xray_api_config.json\n")
+				osExit(1)
+				return
+			}
+
+			if !cmd.Flags().Changed("port") && cfg != nil {
+				port = cfg.Ports.APIServer
+			}
+
+			mux := http.NewServeMux()
+			xraytoolPath := executablePath
+
+			// Initialize CacheManager globally for the server
+			cacheManager := subscription.NewCacheManager(cfg)
+			cacheManager.Refresh()
+
+			subHandler := func(w http.ResponseWriter, r *http.Request) {
+				// 1. Collect request headers
+				headers := make(map[string]string)
+				for k, v := range r.Header {
+					if len(v) > 0 {
+						headers[k] = v[0]
+					}
+				}
+				headers["x-request-path"] = r.URL.Path
+
+				// 2. Parse query parameters into map[string]string
+				query := make(map[string]string)
+				for k, v := range r.URL.Query() {
+					if len(v) > 0 {
+						query[k] = v[0]
+					}
+				}
+
+				// 3. Get remote IP
+				remoteAddr := getClientIP(r)
+				isBot := strings.Contains(strings.ToLower(r.UserAgent()), "megasupersecretua")
+				if isBot {
+					logger.Debugf("Incoming subscription request from IP: %s, User-Agent: %s, Path: %s", remoteAddr, r.UserAgent(), r.URL.Path)
+				} else {
+					logger.Infof("Incoming subscription request from IP: %s, User-Agent: %s, Path: %s", remoteAddr, r.UserAgent(), r.URL.Path)
+				}
+
+				// 4. Build subscription request payload
+				subReq := &subscription.Request{
+					RemoteAddr: remoteAddr,
+					UserAgent:  r.UserAgent(),
+					Query:      query,
+					Headers:    headers,
+				}
+
+				// 5. Execute subscription process directly in memory (No exec.Command)
+				subRes := subscription.Process(cacheManager, subReq)
+
+				// 6. Send headers and write body
+				for k, v := range subRes.Headers {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(subRes.StatusCode)
+				if _, err := w.Write([]byte(subRes.Body)); err != nil {
+					logger.Errorf("Ошибка записи ответа подписки: %v", err)
+				}
+				if isBot && subRes.StatusCode < 400 {
+					logger.Debugf("Successfully served subscription to %s, status: %d", remoteAddr, subRes.StatusCode)
+				} else if subRes.StatusCode >= 400 {
+					logger.Warnf("Failed to serve subscription to %s, status: %d", remoteAddr, subRes.StatusCode)
+				} else {
+					logger.Infof("Successfully served subscription to %s, status: %d", remoteAddr, subRes.StatusCode)
+				}
+			}
+
+			mux.HandleFunc("/client", subHandler)
+			mux.HandleFunc("/api/v1/sub", subHandler)
+
+			mux.HandleFunc("/api/rest/xraytool/{command}", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					logIntruder(r, "Wrong HTTP Method")
+					http.NotFound(w, r)
+					return
+				}
+
+				reqKey := r.Header.Get("X-API-Key")
+				if reqKey == "" || reqKey != apiConfig.APIKey {
+					logIntruder(r, "Invalid or Missing API Key")
+					http.NotFound(w, r)
+					return
+				}
+
+				cmdName := r.PathValue("command")
+
+				r.Body = http.MaxBytesReader(w, r.Body, 1048576)
+				var payload map[string]interface{}
+				body, err := io.ReadAll(r.Body)
+				if err == nil && len(body) > 0 {
+					if err := json.Unmarshal(body, &payload); err != nil {
+						logIntruder(r, fmt.Sprintf("Bad JSON format: %v", err))
+						http.NotFound(w, r)
+						return
+					}
+				}
+
+				// --- Direct Execution Mapping ---
+				// For graceful migration to in-memory commands
+				type commandFunc func(payload map[string]interface{}) (string, error)
+
+				directCommands := map[string]commandFunc{
+					"newuser":   ExecNewUser,
+					"unlimit":   ExecUnlimit,
+					"setexpire": ExecSetExpire,
+					"setlimit":  ExecUpdateLimit,
+				}
+
+				if handlerFn, ok := directCommands[cmdName]; ok {
+					// Found in mapping -> Execute directly in memory
+					logger.Infof("--> DIRECT EXEC: %s (от %s)", cmdName, getClientIP(r))
+					outStr, err := handlerFn(payload)
+
+					w.Header().Set("Content-Type", "application/json")
+					if err != nil {
+						logger.Errorf(" [X] DIRECT FAIL | %v", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"status": "error",
+							"code":   err.Error(),
+							"output": outStr,
+						})
+						return
+					}
+					logger.Infof(" [V] DIRECT OK")
+					json.NewEncoder(w).Encode(map[string]string{
+						"status": "success",
+						"output": outStr,
+					})
+					return
+				}
+
+				// --- Fallback Mechanism ---
+				// If not found in mapping -> Execute via CLI (Legacy behavior)
+				// Allowlist of accepted flags per command
+				allowedFlags := map[string]map[string]bool{
+					"rmuser":     {"email": true, "name": true, "legacy": true},
+					"limit":      {"email": true, "name": true, "legacy": true},
+					"setexpire":  {"email": true, "name": true, "expire": true},
+					"setlimit":   {"email": true, "name": true, "limit": true},
+					"syncstates": {"dry-run": true, "email": true},
+					"userlist":   {"format": true},
+					"stats":      {"email": true, "name": true, "format": true},
+				}
+				cmdAllowed := allowedFlags[cmdName]
+				args := []string{"--config", cfgFile, cmdName}
+				for k, v := range payload {
+					if cmdAllowed != nil && !cmdAllowed[k] {
+						logger.Warnf("[API] Отклонён недопустимый флаг %q для команды %q", k, cmdName)
+						continue
+					}
+					flag := "--" + k
+					switch val := v.(type) {
+					case string:
+						if val != "" {
+							args = append(args, flag, val)
+						}
+					case bool:
+						if val {
+							args = append(args, flag)
+						}
+					case float64:
+						args = append(args, flag, fmt.Sprintf("%v", val))
+					}
+				}
+
+				logger.Infof("--> EXEC: %s %s (от %s)", xraytoolPath, strings.Join(args, " "), getClientIP(r))
+
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				subCmd := exec.CommandContext(ctx, xraytoolPath, args...)
+				out, err := subCmd.CombinedOutput()
+
+				w.Header().Set("Content-Type", "application/json")
+				if err != nil {
+					logger.Errorf(" [X] FAIL | %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					if err := json.NewEncoder(w).Encode(map[string]interface{}{
+						"status": "error",
+						"code":   err.Error(),
+						"output": string(out),
+					}); err != nil {
+						logger.Errorf(" [X] JSON Error: %v", err)
+					}
+					return
+				}
+
+				logger.Infof(" [V] OK")
+				if err := json.NewEncoder(w).Encode(map[string]string{
+					"status": "success",
+					"output": string(out),
+				}); err != nil {
+					logger.Errorf(" [X] JSON Error: %v", err)
+				}
+			})
+
+			mux.HandleFunc("/api/rest/update-links", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					logIntruder(r, "Wrong HTTP Method on update-links")
+					http.NotFound(w, r)
+					return
+				}
+
+				reqKey := r.Header.Get("X-API-Key")
+				if reqKey == "" || reqKey != apiConfig.APIKey {
+					logIntruder(r, "Invalid or Missing API Key on update-links")
+					http.NotFound(w, r)
+					return
+				}
+
+				if err := r.ParseMultipartForm(10 << 20); err != nil {
+					logIntruder(r, fmt.Sprintf("Form Parse Error: %v", err))
+					http.NotFound(w, r)
+					return
+				}
+
+				destPath := r.FormValue("path")
+				if destPath == "" {
+					logIntruder(r, "Missing 'path' field in update-links")
+					http.NotFound(w, r)
+					return
+				}
+
+				if !isPathAllowed(destPath) {
+					logIntruder(r, fmt.Sprintf("Path Not Allowed: %s", destPath))
+					http.NotFound(w, r)
+					return
+				}
+
+				file, _, err := r.FormFile("file")
+				if err != nil {
+					logIntruder(r, "Missing 'file' field in multipart form")
+					http.NotFound(w, r)
+					return
+				}
+				defer file.Close()
+
+				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+					logger.Errorf(" [X] Ошибка создания директорий: %v", err)
+					http.Error(w, `{"error": "disk error"}`, http.StatusInternalServerError)
+					return
+				}
+
+				dst, err := os.Create(destPath)
+				if err != nil {
+					logger.Errorf(" [X] Ошибка записи файла: %v", err)
+					http.Error(w, `{"error": "disk error"}`, http.StatusInternalServerError)
+					return
+				}
+				defer dst.Close()
+
+				const maxUploadBytes = 10 * 1024 * 1024 // 10 MB
+				if _, err := io.Copy(dst, io.LimitReader(file, maxUploadBytes)); err != nil {
+					logger.Errorf(" [X] Ошибка записи тела файла: %v", err)
+					http.Error(w, `{"error": "write error"}`, http.StatusInternalServerError)
+					return
+				}
+
+				go func() {
+					time.Sleep(2 * time.Second)
+					botPort := 8081
+					if cfg != nil {
+						botPort = cfg.Ports.PythonBot
+					}
+					resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/trigger_update", botPort), "application/json", nil)
+					if err != nil {
+						logger.Errorf("[!] Не удалось пнуть Python-бота: %v", err)
+					} else {
+						resp.Body.Close()
+						logger.Infof("[V] Python-бот успешно пнут")
+					}
+				}()
+
+				logger.Infof(" [V] Файл %s успешно загружен и бот пнут от %s", destPath, getClientIP(r))
+
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status": "success", "message": "file saved & bot triggered"}`))
+			})
+
+			mux.HandleFunc("/api/rest/upload", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					logIntruder(r, "Wrong HTTP Method on Upload")
+					http.NotFound(w, r)
+					return
+				}
+
+				reqKey := r.Header.Get("X-API-Key")
+				if reqKey == "" || reqKey != apiConfig.APIKey {
+					logIntruder(r, "Invalid or Missing API Key on Upload")
+					http.NotFound(w, r)
+					return
+				}
+
+				if err := r.ParseMultipartForm(10 << 20); err != nil {
+					logIntruder(r, fmt.Sprintf("Form Parse Error: %v", err))
+					http.NotFound(w, r)
+					return
+				}
+
+				destPath := r.FormValue("path")
+				if destPath == "" {
+					logIntruder(r, "Missing 'path' field in upload")
+					http.NotFound(w, r)
+					return
+				}
+
+				if !isPathAllowed(destPath) {
+					logIntruder(r, fmt.Sprintf("Path Not Allowed: %s", destPath))
+					http.NotFound(w, r)
+					return
+				}
+
+				logger.Infof("Incoming upload request from %s for path %s", getClientIP(r), destPath)
+
+				file, _, err := r.FormFile("file")
+				if err != nil {
+					logIntruder(r, "Missing 'file' field in multipart form")
+					http.NotFound(w, r)
+					return
+				}
+				defer file.Close()
+
+				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+					logger.Errorf(" [X] Ошибка создания директорий: %v", err)
+					http.Error(w, `{"error": "disk error"}`, http.StatusInternalServerError)
+					return
+				}
+
+				dst, err := os.Create(destPath)
+				if err != nil {
+					logger.Errorf(" [X] Ошибка записи файла: %v", err)
+					http.Error(w, `{"error": "disk error"}`, http.StatusInternalServerError)
+					return
+				}
+				defer dst.Close()
+
+				const maxUploadBytes2 = 10 * 1024 * 1024 // 10 MB
+				if _, err := io.Copy(dst, io.LimitReader(file, maxUploadBytes2)); err != nil {
+					logger.Errorf(" [X] Ошибка записи тела файла: %v", err)
+					http.Error(w, `{"error": "write error"}`, http.StatusInternalServerError)
+					return
+				}
+				logger.Infof(" [V] Файл %s успешно загружен от %s", destPath, getClientIP(r))
+
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status": "success", "message": "file saved"}`))
+			})
+
+			mux.HandleFunc("/api/rest/download", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					logIntruder(r, "Wrong HTTP Method on Download")
+					http.NotFound(w, r)
+					return
+				}
+
+				reqKey := r.Header.Get("X-API-Key")
+				if reqKey == "" || reqKey != apiConfig.APIKey {
+					logIntruder(r, "Invalid or Missing API Key on Download")
+					http.NotFound(w, r)
+					return
+				}
+
+				srcPath := r.URL.Query().Get("path")
+				if srcPath == "" {
+					logIntruder(r, "Missing 'path' parameter in download")
+					http.NotFound(w, r)
+					return
+				}
+
+				if !isPathAllowed(srcPath) {
+					logIntruder(r, fmt.Sprintf("Path Not Allowed: %s", srcPath))
+					http.NotFound(w, r)
+					return
+				}
+
+				logger.Infof("Incoming download request from %s for path %s", getClientIP(r), srcPath)
+
+				info, err := os.Stat(srcPath)
+				if os.IsNotExist(err) || info.IsDir() {
+					logIntruder(r, fmt.Sprintf("File Not Found: %s", srcPath))
+					http.NotFound(w, r)
+					return
+				}
+
+				logger.Infof(" [V] Отправка файла %s для %s", srcPath, getClientIP(r))
+				http.ServeFile(w, r, srcPath)
+			})
+
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				logIntruder(r, "Hit catch-all undefined route")
+				http.NotFound(w, r)
+			})
+
+			logger.Infof("==================================================")
+			logger.Infof(" Server:  127.0.0.1:%d", port)
+			logger.Infof(" Script:  %s", xraytoolPath)
+			logger.Infof(" Allowed: %s", strings.Join(apiConfig.AllowedDirs, ", "))
+			logger.Infof(" Mode:    Stealth (Fatality by OOM Killer allowed)")
+			logger.Infof("==================================================")
+
+			logger.Infof("API server listening on 127.0.0.1:%d", port)
+			if err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), mux); err != nil {
+				logger.Errorf("API Server failed: %v", err)
+				log.Fatal(err)
+			}
+		},
+	}
+
+	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
+	return cmd
+}

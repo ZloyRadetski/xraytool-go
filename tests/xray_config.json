@@ -1,0 +1,49 @@
+{
+  "inbounds": [
+    {
+      "port": 10085,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1"
+      },
+      "tag": "api"
+    },
+    {
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "e93fca7e-3cf1-4545-8c01-7fa918b95888",
+            "email": "test@example.com",
+            "flow": "xtls-rprx-vision",
+            "subfile": "testclient"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "privateKey": "private_key_placeholder",
+          "publicKey": "test_public_key_value",
+          "serverNames": [
+            "yahoo.com"
+          ],
+          "shortIds": [
+            "0123456789abcdef"
+          ]
+        }
+      },
+      "tag": "VLESS-Reality"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}

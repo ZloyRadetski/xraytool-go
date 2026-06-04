@@ -1,0 +1,37 @@
+# Title: Torvalds VPN Test
+# UpdateInterval: 24
+
+{
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "{HOST}",
+            "port": 443,
+            "users": [
+              {
+                "id": "{UUID}",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision",
+                "email": "{EMAIL}"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "sni": "{SNI}",
+          "fingerprint": "chrome",
+          "publicKey": "{PBK}",
+          "shortId": "{SID}"
+        }
+      },
+      "tag": "VLESS-Reality"
+    }
+  ]
+}

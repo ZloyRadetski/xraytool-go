@@ -1,0 +1,26 @@
+# Скомпилированные исполняемые файлы
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+xraytool.exe
+xraytool_very_old
+build/
+
+# Тестовые бинарники
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# Настройки редакторов
+.idea/
+.vscode/
+
+# Конфигурационные файлы (чтобы случайно не слить ключи/пароли в интернет)
+xray_api_config.json
+
+# Файлы логов
+*.log

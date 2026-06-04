@@ -1,0 +1,392 @@
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/spf13/cobra"
+	"xraytool/internal/slave"
+	"xraytool/internal/stats"
+	"xraytool/internal/xrayapi"
+	"xraytool/internal/xrayconfig"
+)
+
+func statsCmd() *cobra.Command {
+	var (
+		apiMode      bool
+		inferredMode bool
+		emailFilter  string
+		nameFilter   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "cli-stats",
+		Short: "Show per-user traffic statistics",
+		Run: func(cmd *cobra.Command, _ []string) {
+			requireRoot()
+			p := newPrinter(apiMode)
+
+			if emailFilter == "" {
+				emailFilter = nameFilter
+			}
+
+			if emailFilter != "" && !validEmail(emailFilter) {
+				p.Error("invalid characters in email filter (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
+			}
+
+			statePath := cfg.Paths.StatsState
+			if inferredMode {
+				statePath = cfg.Paths.InferredStats
+			}
+
+			// Update state from live xray API (unless in inferred mode).
+			if !inferredMode {
+				if err := updateStatsStorage(statePath); err != nil {
+					if apiMode {
+						printJSON(map[string]interface{}{"ok": false, "error": "STATS_UPDATE_FAILED", "message": err.Error()})
+					} else {
+						p.Warn("Stats update failed: %v", err)
+					}
+					return
+				}
+			}
+
+			state, err := stats.Load(statePath, cfg.DetailedRetentionSeconds())
+			if err != nil {
+				p.Errorf("loading stats state: %v", err)
+			}
+
+			localUsers := stats.Cumulative(state)
+
+			// Collect slave totals (master only, non-inferred).
+			var slaveTotals []slaveUserTotal
+			var slaveReport slaveReportJSON
+			if !inferredMode && cfg.IsMaster() {
+				slaveTotals, slaveReport = collectSlaveTotals()
+			}
+
+			// Merge local + slave data.
+			merged := mergeWithSlaves(localUsers, slaveTotals)
+
+			if emailFilter != "" {
+				for _, u := range merged {
+					if u.Email == emailFilter {
+						if apiMode {
+							printJSON(map[string]interface{}{
+								"ok":           true,
+								"generated_at": nowUTC(),
+								"user":         u,
+								"slave_report": slaveReport,
+							})
+						} else {
+							printUserStatsTable(u)
+						}
+						return
+					}
+				}
+				if apiMode {
+					printJSON(map[string]interface{}{"ok": false, "error": "USER_NOT_FOUND", "email": emailFilter})
+				} else {
+					p.Errorf("user not found: %s", emailFilter)
+				}
+				return
+			}
+
+			// Filter zero-traffic entries for interactive display.
+			sort.Slice(merged, func(i, j int) bool {
+				return clusterTotal(merged[i]) > clusterTotal(merged[j])
+			})
+
+			if apiMode {
+				// Compute totals.
+				var xTotal, slaveTotal, clTotal int64
+				for _, u := range merged {
+					xTotal += u.Xray.Total
+					slaveTotal += u.Slave
+					clTotal += clusterTotal(u)
+				}
+				printJSON(map[string]interface{}{
+					"ok":           true,
+					"generated_at": nowUTC(),
+					"partial":      slaveReport.FailedServers > 0,
+					"slave_report": slaveReport,
+					"users":        merged,
+					"totals": map[string]interface{}{
+						"xray":    map[string]int64{"up": sumField(merged, func(u mergedUser) int64 { return u.Xray.Up }), "down": sumField(merged, func(u mergedUser) int64 { return u.Xray.Down }), "total": xTotal},
+						"slave":   map[string]int64{"total": slaveTotal},
+						"cluster": map[string]int64{"combined": clTotal},
+					},
+				})
+				return
+			}
+
+			// Print slave status.
+			if cfg.IsMaster() && slaveReport.TotalServers > 0 {
+				if slaveReport.FailedServers > 0 {
+					p.Warn("Slave stats: ok=%d failed=%d total=%d",
+						slaveReport.OKServers, slaveReport.FailedServers, slaveReport.TotalServers)
+				} else {
+					p.Info("Slave stats: all %d servers responded.", slaveReport.TotalServers)
+				}
+			}
+
+			printAllStatsTable(merged)
+		},
+	}
+
+	cmd.Flags().BoolVar(&apiMode, "api", false, "Output JSON (machine-readable)")
+	cmd.Flags().BoolVar(&inferredMode, "inferred", false, "Use inferred traffic stats file")
+	cmd.Flags().StringVar(&emailFilter, "email", "", "Filter to a single user")
+	cmd.Flags().StringVar(&nameFilter, "name", "", "Alias for --email")
+	return cmd
+}
+
+// ---------------------------------------------------------------------------
+// Stats update
+// ---------------------------------------------------------------------------
+
+func updateStatsStorage(statePath string) error {
+	apiClient := xrayapi.New(cfg.Xray.APIAddr)
+	rawStats, err := apiClient.QueryStats()
+	if err != nil {
+		// Non-fatal; xray might be restarting.
+		rawStats = nil
+	}
+
+	samples := make([]stats.LiveSample, len(rawStats))
+	for i, s := range rawStats {
+		samples[i] = stats.LiveSample{Email: s.Email, Up: s.Up, Down: s.Down}
+	}
+
+	// Also include all users from config (so they appear even with zero traffic).
+	if xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig); err == nil {
+		inUsers, _ := xrayconfig.ListUsers(xrayCfg)
+		existing := make(map[string]bool, len(samples))
+		for _, s := range samples {
+			existing[s.Email] = true
+		}
+		for _, u := range inUsers {
+			if e := u.Email(); !existing[e] {
+				samples = append(samples, stats.LiveSample{Email: e})
+			}
+		}
+	}
+
+	state, err := stats.Load(statePath, cfg.DetailedRetentionSeconds())
+	if err != nil {
+		return err
+	}
+	stats.Update(state, samples, cfg.DetailedRetentionSeconds())
+	return stats.Save(statePath, state)
+}
+
+// ---------------------------------------------------------------------------
+// Slave totals collection
+// ---------------------------------------------------------------------------
+
+type slaveUserTotal struct {
+	Email string `json:"email"`
+	Slave int64  `json:"slave"`
+}
+
+type slaveReportJSON struct {
+	Enabled       bool `json:"enabled"`
+	TotalServers  int  `json:"total_servers"`
+	OKServers     int  `json:"ok_servers"`
+	FailedServers int  `json:"failed_servers"`
+}
+
+func collectSlaveTotals() ([]slaveUserTotal, slaveReportJSON) {
+	reg := slaveRegistry(cfg)
+	servers, err := reg.Servers()
+	if err != nil || len(servers) == 0 {
+		return nil, slaveReportJSON{Enabled: len(servers) > 0}
+	}
+
+	report := slaveReportJSON{Enabled: true, TotalServers: len(servers)}
+
+	type job struct {
+		server string
+		users  []slaveUserTotal
+		ok     bool
+	}
+	jobs := make(chan job, len(servers))
+
+	cli := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
+	srvMap, _ := reg.Servers()
+
+	for name, entry := range srvMap {
+		go func(name string, entry slave.Entry) {
+			out, err := cli.Call(entry, "cli-stats", map[string]string{"api": "true"})
+			if err != nil {
+				jobs <- job{server: name}
+				return
+			}
+			var parsed struct {
+				Users []struct {
+					Email string `json:"email"`
+					Total struct {
+						Combined int64 `json:"combined"`
+					} `json:"total"`
+					ClusterTotal *int64 `json:"cluster_total"`
+				} `json:"users"`
+			}
+			if json.Unmarshal([]byte(out), &parsed) != nil {
+				jobs <- job{server: name}
+				return
+			}
+			var totals []slaveUserTotal
+			for _, u := range parsed.Users {
+				t := u.Total.Combined
+				if u.ClusterTotal != nil {
+					t = *u.ClusterTotal
+				}
+				totals = append(totals, slaveUserTotal{Email: u.Email, Slave: t})
+			}
+			jobs <- job{server: name, users: totals, ok: true}
+		}(name, entry)
+	}
+
+	combined := make(map[string]int64)
+	for range srvMap {
+		j := <-jobs
+		if j.ok {
+			report.OKServers++
+			for _, u := range j.users {
+				combined[u.Email] += u.Slave
+			}
+		} else {
+			report.FailedServers++
+		}
+	}
+
+	result := make([]slaveUserTotal, 0, len(combined))
+	for email, total := range combined {
+		result = append(result, slaveUserTotal{Email: email, Slave: total})
+	}
+	return result, report
+}
+
+// ---------------------------------------------------------------------------
+// Merge + display
+// ---------------------------------------------------------------------------
+
+type mergedUser struct {
+	Email        string              `json:"email"`
+	Xray         stats.XrayCounters  `json:"xray"`
+	Total        stats.TotalCounters `json:"total"`
+	Slave        int64               `json:"slave"`
+	ClusterTotal int64               `json:"cluster_total"`
+}
+
+func mergeWithSlaves(local []stats.CumulativeUser, slaveTotals []slaveUserTotal) []mergedUser {
+	slaveMap := make(map[string]int64, len(slaveTotals))
+	for _, s := range slaveTotals {
+		slaveMap[s.Email] = s.Slave
+	}
+
+	localMap := make(map[string]stats.CumulativeUser, len(local))
+	for _, u := range local {
+		localMap[u.Email] = u
+	}
+
+	// Union of all emails.
+	all := make(map[string]bool)
+	for _, u := range local {
+		all[u.Email] = true
+	}
+	for e := range slaveMap {
+		all[e] = true
+	}
+
+	result := make([]mergedUser, 0, len(all))
+	for email := range all {
+		u := localMap[email]
+		s := slaveMap[email]
+		ct := u.Total.Combined + s
+		result = append(result, mergedUser{
+			Email:        email,
+			Xray:         u.Xray,
+			Total:        u.Total,
+			Slave:        s,
+			ClusterTotal: ct,
+		})
+	}
+	return result
+}
+
+func clusterTotal(u mergedUser) int64 { return u.ClusterTotal }
+
+func sumField(users []mergedUser, f func(mergedUser) int64) int64 {
+	var sum int64
+	for _, u := range users {
+		sum += f(u)
+	}
+	return sum
+}
+
+func printAllStatsTable(users []mergedUser) {
+	cyan := "\033[0;36m"
+	green := "\033[1;32m"
+	nc := "\033[0m"
+
+	// Only show users with traffic.
+	var active []mergedUser
+	for _, u := range users {
+		if clusterTotal(u) > 0 || u.Slave > 0 {
+			active = append(active, u)
+		}
+	}
+	if len(active) == 0 {
+		fmt.Println("No traffic data found.")
+		return
+	}
+
+	fmt.Printf("%s%-28s %12s %12s %12s%s\n", cyan, "User", "Xray", "Slave", "Total", nc)
+	fmt.Println("--------------------------------------------------------------")
+
+	var sumX, sumSlave, sumTotal int64
+	for _, u := range active {
+		fmt.Printf("%-28s %12s %12s %12s\n",
+			u.Email,
+			stats.HumanBytes(u.Xray.Total),
+			stats.HumanBytes(u.Slave),
+			stats.HumanBytes(clusterTotal(u)),
+		)
+		sumX += u.Xray.Total
+		sumSlave += u.Slave
+		sumTotal += clusterTotal(u)
+	}
+	fmt.Println("--------------------------------------------------------------")
+	fmt.Printf("%-28s %12s %12s %12s\n", "SUBTOTALS",
+		stats.HumanBytes(sumX), stats.HumanBytes(sumSlave), stats.HumanBytes(sumTotal))
+	fmt.Printf("\n%sGLOBAL TOTAL: %.3f GB (%d users)%s\n",
+		green, float64(sumTotal)/1024/1024/1024, len(active), nc)
+}
+
+func printUserStatsTable(u mergedUser) {
+	fmt.Printf("%-25s %12s %12s\n", "Field", "Direction", "Traffic")
+	fmt.Println("-------------------------------------------------------")
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray up", stats.HumanBytes(u.Xray.Up))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray down", stats.HumanBytes(u.Xray.Down))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Slave", stats.HumanBytes(u.Slave))
+	fmt.Println("-------------------------------------------------------")
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Total up", stats.HumanBytes(u.Total.Up))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Total down", stats.HumanBytes(u.Total.Down))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "TOTAL", stats.HumanBytes(clusterTotal(u)))
+}
+
+func printJSON(v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		fmt.Println(`{"error":"failed to serialize response"}`)
+		return
+	}
+	fmt.Println(string(data))
+}
+
+func nowUTC() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
+}

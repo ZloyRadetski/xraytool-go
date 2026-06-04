@@ -1,0 +1,24 @@
+mode: master
+
+server:
+  ip: "1.2.3.4"
+  domain: "testdomain.com"
+
+paths:
+  xray_config: "tests/xray_config.json"
+  limited_db: "tests/limited_users.db"
+  stats_state: "tests/traffic_stats_state.json"
+  inferred_stats: "tests/inferred_traffic.json"
+  templates_dir: "tests/inbound-client-templates"
+  servers_json: "tests/servers.json"
+  devices_state: "tests/devices_state.json"
+  json_subscription_template: "tests/configs.txt"
+  routing_template: "tests/routing.json"
+  routing_ru_template: "tests/routing_ALL_RU.json"
+  hy2_config_yaml: "tests/hy2_config.yaml"
+  geoip_dat: "tests/geoip.dat"
+  geosite_dat: "tests/geosite.dat"
+
+ports:
+  api_server: 8090
+  python_bot: 8091

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "detailed_retention_seconds": 172800,
+  "last_sample_ts": 1780314040,
+  "users": {
+    "test@example.com": {
+      "raw": {
+        "xray": {
+          "up": 0,
+          "down": 0,
+          "total": 0
+        },
+        "total": {
+          "up": 0,
+          "down": 0,
+          "combined": 0
+        }
+      },
+      "cumulative": {
+        "xray": {
+          "up": 0,
+          "down": 0,
+          "total": 0
+        },
+        "total": {
+          "up": 0,
+          "down": 0,
+          "combined": 0
+        }
+      },
+      "archived": {
+        "xray": {
+          "up": 0,
+          "down": 0,
+          "total": 0
+        },
+        "total": {
+          "up": 0,
+          "down": 0,
+          "combined": 0
+        }
+      },
+      "buckets": {
+        "1780314000": {
+          "xray": {
+            "up": 0,
+            "down": 0,
+            "total": 0
+          },
+          "total": {
+            "up": 0,
+            "down": 0,
+            "combined": 0
+          }
+        }
+      }
+    }
+  }
+}
