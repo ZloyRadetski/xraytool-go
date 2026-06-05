@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"xraytool/internal/database"
 	"xraytool/internal/logger"
+	"xraytool/internal/server"
 	"xraytool/internal/subscription"
 )
 
@@ -125,6 +127,31 @@ func startServerCmd() *cobra.Command {
 			if !cmd.Flags().Changed("port") && cfg != nil {
 				port = cfg.Ports.APIServer
 			}
+
+			// ── Step 5.1: Initialize database (non-fatal) ─────────────────────────
+			dbReady := false
+			if cfg != nil {
+				dbErr := database.Init(database.Config{
+					Driver:     cfg.Database.Driver,
+					DSN:        cfg.Database.DSN,
+					SQLitePath: cfg.Database.SQLitePath,
+				})
+				if dbErr != nil {
+					// Non-fatal: server continues without DB (legacy routes still work).
+					// Operator must fix DB config before new API endpoints become available.
+					logger.Errorf("[!] Database init failed: %v", dbErr)
+				} else {
+					dbReady = true
+					logger.Infof("[DB] Database initialized successfully (driver: %s)", cfg.Database.Driver)
+				}
+			}
+
+			// Graceful shutdown: close DB connection when server exits.
+			defer func() {
+				if err := database.Close(); err != nil {
+					logger.Errorf("[DB] Failed to close database: %v", err)
+				}
+			}()
 
 			mux := http.NewServeMux()
 			xraytoolPath := executablePath
@@ -509,6 +536,18 @@ func startServerCmd() *cobra.Command {
 				logger.Infof(" [V] Отправка файла %s для %s", srcPath, getClientIP(r))
 				http.ServeFile(w, r, srcPath)
 			})
+
+			// ── Step 5.2: Mount new REST API router (when DB is ready) ────────────
+			// The new router handles /api/v1/users/*, /api/v1/payments/*, /api/v1/admin/* and /api/v2/sub-test.
+			// Existing /client and /api/v1/sub are already registered above and take
+			// priority due to Go 1.22+ most-specific-match routing — no conflict.
+			if dbReady {
+				apiRouter := server.New(cfg, apiConfig.APIKey, cacheManager)
+				mux.Handle("/api/", apiRouter)
+				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
+			} else {
+				logger.Warnf("[API] REST API v1 handlers NOT mounted (database unavailable)")
+			}
 
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 				logIntruder(r, "Hit catch-all undefined route")

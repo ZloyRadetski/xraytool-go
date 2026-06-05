@@ -46,10 +46,16 @@ func (c *Client) AddUser(payload []xrayconfig.TaggedClient, configPath string) e
 		return fmt.Errorf("marshaling adu payload: %w", err)
 	}
 
-	// Run xray api adu passing data via stdin.
-	// This avoids creating host files and supports Docker/wrapper script environments.
-	cmd := exec.Command("xray", "api", "adu", "-s", c.addr, "/dev/stdin")
-	cmd.Stdin = bytes.NewReader(data)
+	// Fix for Windows: Write payload to temp file instead of using /dev/stdin
+	f, err := os.CreateTemp("", "xray-api-adu-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	f.Write(data)
+	f.Close()
+
+	cmd := exec.Command("xray", "api", "adu", "-s", c.addr, f.Name())
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -66,9 +72,18 @@ func (c *Client) AddUser(payload []xrayconfig.TaggedClient, configPath string) e
 			continue
 		}
 
-		singleCmd := exec.Command("xray", "api", "adu", "-s", c.addr, "/dev/stdin")
-		singleCmd.Stdin = bytes.NewReader(singleData)
+		sf, err := os.CreateTemp("", "xray-api-adu-single-*")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		sf.Write(singleData)
+		sf.Close()
+
+		singleCmd := exec.Command("xray", "api", "adu", "-s", c.addr, sf.Name())
 		singleOut, err := singleCmd.CombinedOutput()
+		os.Remove(sf.Name())
+		
 		if err != nil {
 			lastErr = fmt.Errorf("tag=%s: %v (output: %s)", aib.Tag, err, strings.TrimSpace(string(singleOut)))
 			fmt.Fprintf(os.Stderr, "[ERROR] xray api adu failed for tag=%s: %v\n", aib.Tag, lastErr)
@@ -236,22 +251,30 @@ func parseStats(data []byte) ([]UserStat, error) {
 
 	for _, s := range resp.Stat {
 		// Format: "user>>>email@example.com>>>traffic>>>uplink"
-		parts := strings.Split(s.Name, ">>>")
-		if len(parts) < 4 || parts[0] != "user" {
+		if !strings.HasPrefix(s.Name, "user>>>") {
 			continue
 		}
-		email := parts[1]
-		key := strings.ToLower(parts[3])
+		
+		var email, key string
+		if strings.HasSuffix(s.Name, ">>>traffic>>>uplink") {
+			email = s.Name[len("user>>>") : len(s.Name)-len(">>>traffic>>>uplink")]
+			key = "up"
+		} else if strings.HasSuffix(s.Name, ">>>traffic>>>downlink") {
+			email = s.Name[len("user>>>") : len(s.Name)-len(">>>traffic>>>downlink")]
+			key = "down"
+		} else {
+			continue
+		}
+
 		if email == "" {
 			continue
 		}
 		if acc[email] == nil {
 			acc[email] = &counters{}
 		}
-		switch key {
-		case "uplink", "up":
+		if key == "up" {
 			acc[email].up += s.Value
-		case "downlink", "down":
+		} else {
 			acc[email].down += s.Value
 		}
 	}

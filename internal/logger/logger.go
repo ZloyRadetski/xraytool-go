@@ -159,5 +159,6 @@ func Close() {
 	if defaultLogger.file != nil {
 		defaultLogger.file.Close()
 		defaultLogger.file = nil
+		defaultLogger.out = os.Stdout
 	}
 }

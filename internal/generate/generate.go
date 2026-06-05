@@ -6,9 +6,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
-	"os"
-	"os/exec"
-	"strings"
 )
 
 const alphanumChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -21,11 +18,7 @@ func Secret(length int) string {
 	for i := range b {
 		n, err := rand.Int(rand.Reader, charsetLen)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] crypto/rand failed: %v — using fallback (INSECURE)\n", err)
-			// Should never happen; panic would be inappropriate in a tool,
-			// so fall back to a deterministic position.
-			b[i] = alphanumChars[i%len(alphanumChars)]
-			continue
+			panic(fmt.Sprintf("crypto/rand failed: %v", err))
 		}
 		b[i] = alphanumChars[n.Int64()]
 	}
@@ -41,15 +34,7 @@ func Subfile() string {
 // compatibility with the xray UUID format), then falls back to a pure-Go
 // implementation using crypto/rand.
 func UUID() (string, error) {
-	// Try xray binary first.
-	out, err := exec.Command("xray", "uuid").Output()
-	if err == nil {
-		if u := strings.TrimSpace(string(out)); isValidUUID(u) {
-			return u, nil
-		}
-	}
-
-	// Pure-Go fallback: RFC 4122 version 4.
+	// Pure-Go implementation: RFC 4122 version 4.
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generating UUID: %w", err)

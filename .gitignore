@@ -24,3 +24,7 @@ xray_api_config.json
 
 # Файлы логов
 *.log
+
+# агенты и тп
+.agents/
+.antigravitycli/

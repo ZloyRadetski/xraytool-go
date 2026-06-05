@@ -14,10 +14,87 @@
       "settings": {
         "clients": [
           {
-            "id": "e93fca7e-3cf1-4545-8c01-7fa918b95888",
             "email": "test@example.com",
             "flow": "xtls-rprx-vision",
+            "id": "e93fca7e-3cf1-4545-8c01-7fa918b95888",
             "subfile": "testclient"
+          },
+          {
+            "email": "restcliuser@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli",
+            "subfile": "AKB4K1vzcIQILiFk.txt"
+          },
+          {
+            "email": "restcliuser_1780654801669842800@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "j4MfyKImnRdyErbX.txt"
+          },
+          {
+            "email": "restcliuser_1780654878546070700@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "GKobnfsjlNWqzRum.txt"
+          },
+          {
+            "email": "restcliuser_1780654908313229500@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "L7lFcUc9W6mivCwb.txt"
+          },
+          {
+            "email": "restcliuser_1780655442990405000@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "W3Oi1nUronijD8vP.txt"
+          },
+          {
+            "email": "restcliuser_1780655601533002400@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "iP3YMBR3GrLGHhxG.txt"
+          },
+          {
+            "email": "restcliuser_1780657475233710000@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "gNyU2Ht7wgypqd84.txt"
+          },
+          {
+            "email": "restcliuser_1780657736630890200@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "kxSiJEYFn7kgvB8X.txt"
+          },
+          {
+            "email": "testunlimit@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid123",
+            "subfile": "subfile123"
+          },
+          {
+            "email": "restcliuser_1780657792779409800@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "BrGWi7jBncqbnWOu.txt"
+          },
+          {
+            "email": "restcliuser2@example.com",
+            "expire": "05-07-2026",
+            "flow": "",
+            "id": "uuid-rest-cli2",
+            "subfile": "L64IJYaUFLmVoH9m.txt"
           }
         ],
         "decryption": "none"

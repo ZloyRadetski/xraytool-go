@@ -93,3 +93,36 @@ func TestDispatcherRetry(t *testing.T) {
 		t.Errorf("Expected 2 requests due to retry, got %d", requestCount)
 	}
 }
+
+func TestDispatcher_Dispatch_Async(t *testing.T) {
+	var requestCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	cfg := &appconfig.Config{Webhooks: []string{ts.URL}}
+	d := NewDispatcher(cfg)
+	
+	// async publish
+	d.Dispatch("async.event", nil, nil)
+	
+	// Wait a bit
+	time.Sleep(100 * time.Millisecond)
+	if atomic.LoadInt32(&requestCount) == 0 {
+		t.Errorf("Expected async event to reach webhook")
+	}
+}
+
+func TestDispatcher_DeadWebhook_Fallback(t *testing.T) {
+	// Provide a URL that will definitely fail to connect immediately
+	cfg := &appconfig.Config{Webhooks: []string{"http://127.0.0.1:0"}}
+	d := NewDispatcher(cfg)
+	// Speed up the backoff for test
+	d.client.Timeout = 1 * time.Millisecond
+	d.Dispatch("dead.event", nil, nil)
+	time.Sleep(10 * time.Millisecond)
+	// No panic = pass
+}
+

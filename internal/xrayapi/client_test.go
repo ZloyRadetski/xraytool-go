@@ -20,7 +20,7 @@ if "%MOCK_XRAY_FAIL%"=="1" (
 	exit /b 1
 )
 if "%MOCK_XRAY_PARTIAL_FAIL%"=="1" (
-	findstr "failtag" >nul
+	type %5 | findstr "failtag" >nul
 	if not errorlevel 1 (
 		echo Single tag fail
 		exit /b 1

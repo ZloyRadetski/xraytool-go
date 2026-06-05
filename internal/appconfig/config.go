@@ -21,7 +21,23 @@ type Config struct {
 	SlaveAPI SlaveAPIConf `yaml:"slave_api"`
 	Ports    PortsConf    `yaml:"ports"`
 	Logging  LoggingConf  `yaml:"logging"`
-	Webhooks []string     `yaml:"webhooks"`
+	Webhooks      []string     `yaml:"webhooks"`
+	Database      DatabaseConf `yaml:"database"`
+	PlategaSecret string       `yaml:"platega_secret"`
+}
+
+// DatabaseConf holds database connection settings.
+// Supports Postgres (production) and SQLite (lightweight/fallback).
+type DatabaseConf struct {
+	// DSN is the full Postgres connection string.
+	// Example: postgres://user:pass@localhost:5432/xraytool?sslmode=disable
+	DSN string `yaml:"dsn"`
+	// Driver selects the database backend: "postgres" or "sqlite".
+	// Defaults to "postgres".
+	Driver string `yaml:"driver"`
+	// SQLitePath is the file path used when Driver is "sqlite".
+	// Defaults to /etc/xraytool/xraytool.db.
+	SQLitePath string `yaml:"sqlite_path"`
 }
 
 // ServerConf holds server identity information.
@@ -130,6 +146,10 @@ func defaults() *Config {
 			Format:   "console",
 		},
 		Webhooks: []string{},
+		Database: DatabaseConf{
+			Driver:     "postgres",
+			SQLitePath: "/etc/xraytool/xraytool.db",
+		},
 	}
 }
 
@@ -221,6 +241,15 @@ logging:
 webhooks:
   # List of URLs to receive JSON event notifications (webhooks)
   # - "http://127.0.0.1:8081/api/v1/notify"
+
+database:
+  # Database driver: "postgres" (production) or "sqlite" (lightweight/fallback)
+  driver: "postgres"
+  # Full Postgres DSN (used when driver=postgres)
+  # dsn: "postgres://user:pass@localhost:5432/xraytool?sslmode=disable"
+  dsn: ""
+  # File path used when driver=sqlite
+  sqlite_path: "/etc/xraytool/xraytool.db"
 
 # ============================================================
 # servers.json format (object style):
@@ -348,6 +377,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Webhooks == nil {
 		cfg.Webhooks = []string{}
+	}
+	if cfg.Database.Driver == "" {
+		cfg.Database.Driver = defs.Database.Driver
+	}
+	if cfg.Database.SQLitePath == "" {
+		cfg.Database.SQLitePath = defs.Database.SQLitePath
 	}
 
 	return cfg, nil

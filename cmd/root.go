@@ -66,6 +66,7 @@ func init() {
 		genBalancerCmd(),
 		startServerCmd(),
 		convertCmd(),
+		migrateLegacyDBCmd(),
 	)
 }
 
