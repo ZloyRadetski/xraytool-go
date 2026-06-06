@@ -69,6 +69,7 @@ func Init(cfg Config) error {
 			&Device{},
 			&Payment{},
 			&ReferralReward{},
+			&SubscriptionNotification{},
 		); err != nil {
 			initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
 			return

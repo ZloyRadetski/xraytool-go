@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -16,9 +17,12 @@ import (
 
 	"github.com/spf13/cobra"
 	"xraytool/internal/database"
+	"xraytool/internal/events"
 	"xraytool/internal/logger"
 	"xraytool/internal/server"
 	"xraytool/internal/subscription"
+	"xraytool/internal/worker"
+	"xraytool/internal/xrayapi"
 )
 
 type ApiConfig struct {
@@ -408,24 +412,18 @@ func startServerCmd() *cobra.Command {
 				}
 
 				go func() {
-					time.Sleep(2 * time.Second)
-					botPort := 8081
 					if cfg != nil {
-						botPort = cfg.Ports.PythonBot
-					}
-					resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/trigger_update", botPort), "application/json", nil)
-					if err != nil {
-						logger.Errorf("[!] Не удалось пнуть Python-бота: %v", err)
-					} else {
-						resp.Body.Close()
-						logger.Infof("[V] Python-бот успешно пнут")
+						dispatcher := events.NewDispatcher(cfg)
+						dispatcher.Dispatch("file.uploaded", map[string]interface{}{
+							"path": destPath,
+						}, nil)
 					}
 				}()
 
-				logger.Infof(" [V] Файл %s успешно загружен и бот пнут от %s", destPath, getClientIP(r))
+				logger.Infof(" [V] Файл %s успешно загружен от %s (вебхук отправлен)", destPath, getClientIP(r))
 
 				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(`{"status": "success", "message": "file saved & bot triggered"}`))
+				w.Write([]byte(`{"status": "success", "message": "file saved & webhook dispatched"}`))
 			})
 
 			mux.HandleFunc("/api/rest/upload", func(w http.ResponseWriter, r *http.Request) {
@@ -545,6 +543,12 @@ func startServerCmd() *cobra.Command {
 				apiRouter := server.New(cfg, apiConfig.APIKey, cacheManager)
 				mux.Handle("/api/", apiRouter)
 				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
+
+				// Start the background expiry worker
+				apiClient := xrayapi.New(cfg.Xray.APIAddr)
+				wkr := worker.NewExpiryWorker(database.DB(), cfg, events.NewDispatcher(cfg), apiClient, slog.Default())
+				go wkr.Run(context.Background())
+				logger.Infof("[WORKER] Background Expiry Worker started with interval %s", cfg.Worker.ExpiryInterval)
 			} else {
 				logger.Warnf("[API] REST API v1 handlers NOT mounted (database unavailable)")
 			}

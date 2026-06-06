@@ -19,6 +19,8 @@ import (
 
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
+	"xraytool/internal/xrayapi"
+	"xraytool/internal/xrayconfig"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -628,6 +630,19 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		r.log.Error("admin block user", "err", result.Error)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
+	}
+
+	// 2. Remove from Xray config and API to make the ban instant
+	var tags []string
+	modErr := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
+		t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
+		tags = t
+		return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
+	})
+	
+	if modErr == nil && len(tags) > 0 {
+		apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+		_ = apiClient.RemoveUser(sub.Email, tags)
 	}
 
 	r.log.Warn("admin action", "action", "block", "email", email, "caller_ip", getClientIP(req))

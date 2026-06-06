@@ -25,8 +25,8 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	}
 
 	// 2. User-Agent Whitelisting
-	uaWhitelist := []string{"happ", "incy", "megasupersecretua", "v2ray"}
-	uaNoAccounting := []string{"v2ray"}
+	uaWhitelist := cfg.Subscription.UserAgentWhitelist
+	uaNoAccounting := cfg.Subscription.UserAgentNoChecks
 
 	matchedAgent := ""
 	uaLower := strings.ToLower(req.UserAgent)
@@ -266,30 +266,11 @@ AND NOT EXISTS (SELECT 1 FROM devices WHERE subscription_id = ? AND hw_id = ?)`
 		res.StatusCode = 200
 
 		if deviceLimitReached {
-			res.Body = strings.Join([]string{
-				"socks://cm9vdDpSb290@0.0.0.0:443#🛑 Лимит устройств 🛑",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Удалите старые устройства",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Или расширьте свой лимит",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#В нашем боте: @torvaldsvpnbot",
-			}, "\n")
+			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.DeviceLimit)
 		} else if unsupportedClient {
-			res.Body = strings.Join([]string{
-				"socks://cm9vdDpSb290@0.0.0.0:443#🛑 Приложение не поддерживается 🛑",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Клиент не отправил HWID",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Поддержка -> @torvaldsvpnbot",
-			}, "\n")
+			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.UnsupportedClient)
 		} else { // isBlockedOrExpired
-			res.Body = strings.Join([]string{
-				"socks://cm9vdDpSb290@0.0.0.0:443#🛑 ПОДПИСКА ЗАКОНЧИЛАСЬ 🛑",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Пожалуйста, продлите её,",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Чтобы вернуть доступ к сети:",
-				"socks://cm9vdDpSb290@0.0.0.0:443#👉 @torvaldsvpnbot",
-			}, "\n")
+			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.Expired)
 		}
 		return res
 	}

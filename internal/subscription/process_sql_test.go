@@ -9,6 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
+	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 )
@@ -32,6 +33,17 @@ func setupSQLProcessTestEnv(t *testing.T) (*gorm.DB, *CacheManager, func()) {
 	}
 	db.Create(&user)
 
+	_, cfg, cleanup := setupProcessTestEnv(t)
+	cfg.Subscription = appconfig.SubscriptionConf{
+		UserAgentWhitelist: []string{"happ", "incy", "megasupersecretua", "v2ray"},
+		UserAgentNoChecks:  []string{"megasupersecretua", "v2ray"},
+		DummyConfigs: appconfig.DummyConfigsConf{
+			Expired:           []string{"🛑 ПОДПИСКА ЗАКОНЧИЛАСЬ 🛑"},
+			DeviceLimit:       []string{"🛑 Лимит устройств 🛑"},
+			UnsupportedClient: []string{"🛑 Приложение не поддерживается 🛑"},
+		},
+	}
+
 	sub := database.Subscription{
 		ID:         "sub-uuid-1",
 		UserID:     "user-uuid-1",
@@ -44,7 +56,6 @@ func setupSQLProcessTestEnv(t *testing.T) (*gorm.DB, *CacheManager, func()) {
 	}
 	db.Create(&sub)
 
-	_, cfg, cleanup := setupProcessTestEnv(t)
 	cm := NewCacheManager(cfg)
 	cm.Refresh()
 

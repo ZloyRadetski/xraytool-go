@@ -65,6 +65,15 @@ func setupProcessTestEnv(t *testing.T) (string, *appconfig.Config, func()) {
 		Server: appconfig.ServerConf{
 			Domain: "sub.example.com",
 		},
+		Subscription: appconfig.SubscriptionConf{
+			UserAgentWhitelist: []string{"happ", "incy", "megasupersecretua", "v2ray"},
+			UserAgentNoChecks:  []string{"megasupersecretua", "v2ray"},
+			DummyConfigs: appconfig.DummyConfigsConf{
+				Expired:           []string{"🛑 ПОДПИСКА ЗАКОНЧИЛАСЬ 🛑"},
+				DeviceLimit:       []string{"🛑 Лимит устройств 🛑"},
+				UnsupportedClient: []string{"🛑 Приложение не поддерживается 🛑"},
+			},
+		},
 	}
 
 	return tmpDir, cfg, func() { os.RemoveAll(tmpDir) }

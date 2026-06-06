@@ -108,5 +108,13 @@ type ReferralReward struct {
 	PaymentID int64 `gorm:"not null;index"`
 	// Amount is the reward value credited to ReferrerID.
 	Amount    int `gorm:"not null"`
+	// Date of actual issuance/award.
 	CreatedAt time.Time
+}
+
+// SubscriptionNotification records that a specific webhook warning was sent for a subscription.
+type SubscriptionNotification struct {
+	SubscriptionID string    `gorm:"primaryKey;type:text"`
+	WarningLevel   string    `gorm:"primaryKey;type:text"`
+	SentAt         time.Time
 }

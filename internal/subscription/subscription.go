@@ -59,6 +59,23 @@ type ActiveUser struct {
 type LimitedUser struct {
 	Email   string
 	Subfile string
+	Limit   *float64
+}
+
+// generateDummyVless converts an array of custom strings into VLESS dummy links.
+func generateDummyVless(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	var out []string
+	for _, l := range lines {
+		if l == "" {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?type=tcp&security=none#"+l)
+	}
+	return strings.Join(out, "\n")
 }
 
 // DeviceState represents the devices_state.json structure.
@@ -93,8 +110,8 @@ func Process(cm *CacheManager, req *Request) *Response {
 	}
 
 	// 2. User-Agent Whitelisting
-	uaWhitelist := []string{"happ", "incy", "megasupersecretua", "v2ray"}
-	uaNoAccounting := []string{"megasupersecretua", "v2ray"}
+	uaWhitelist := cfg.Subscription.UserAgentWhitelist
+	uaNoAccounting := cfg.Subscription.UserAgentNoChecks
 
 	matchedAgent := ""
 	uaLower := strings.ToLower(req.UserAgent)
@@ -287,30 +304,11 @@ func Process(cm *CacheManager, req *Request) *Response {
 		res.StatusCode = 200
 
 		if deviceLimitReached {
-			res.Body = strings.Join([]string{
-				"socks://cm9vdDpSb290@0.0.0.0:443#🛑 Лимит устройств 🛑",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Удалите старые устройства",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Или расширьте свой лимит",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#В нашем боте: @torvaldsvpnbot",
-			}, "\n")
+			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.DeviceLimit)
 		} else if unsupportedClient {
-			res.Body = strings.Join([]string{
-				"socks://cm9vdDpSb290@0.0.0.0:443#🛑 Приложение не поддерживается 🛑",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Клиент не отправил HWID",
-				"",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Поддержка -> @torvaldsvpnbot",
-			}, "\n")
+			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.UnsupportedClient)
 		} else { // isBlockedOrExpired
-			res.Body = strings.Join([]string{
-				"socks://cm9vdDpSb290@0.0.0.0:443#🛑 ПОДПИСКА ЗАКОНЧИЛАСЬ 🛑",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Пожалуйста, продлите её,",
-				"socks://cm9vdDpSb290@0.0.0.0:443#Чтобы вернуть доступ к сети:",
-				"socks://cm9vdDpSb290@0.0.0.0:443#👉 @torvaldsvpnbot",
-			}, "\n")
+			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.Expired)
 		}
 		return res
 	}

@@ -35,6 +35,10 @@ func TestLoadDefaultConfig(t *testing.T) {
 	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
 		t.Error("Default config file was not created")
 	}
+
+	if len(cfg.Subscription.DummyConfigs.Expired) == 0 {
+		t.Error("Expected DummyConfigs.Expired to be populated with defaults")
+	}
 }
 
 func TestLoadCustomConfig(t *testing.T) {
@@ -45,6 +49,12 @@ ports:
   api_server: 9090
 logging:
   level: debug
+subscription:
+  user_agent_whitelist: ["custom1", "custom2"]
+  user_agent_no_checks: ["custom1"]
+worker:
+  expiry_interval: "2m"
+  expiration_warnings: ["48h", "2h"]
 `
 	err := os.WriteFile(tmpFile, []byte(customYAML), 0644)
 	if err != nil {
@@ -66,6 +76,22 @@ logging:
 
 	if cfg.Logging.Level != "debug" {
 		t.Errorf("Expected Logging.Level 'debug', got %s", cfg.Logging.Level)
+	}
+
+	if len(cfg.Subscription.UserAgentWhitelist) != 2 || cfg.Subscription.UserAgentWhitelist[0] != "custom1" {
+		t.Errorf("Expected UserAgentWhitelist 'custom1', got %v", cfg.Subscription.UserAgentWhitelist)
+	}
+
+	if len(cfg.Subscription.UserAgentNoChecks) != 1 || cfg.Subscription.UserAgentNoChecks[0] != "custom1" {
+		t.Errorf("Expected UserAgentNoChecks 'custom1', got %v", cfg.Subscription.UserAgentNoChecks)
+	}
+
+	if cfg.Worker.ExpiryInterval != "2m" {
+		t.Errorf("Expected Worker.ExpiryInterval '2m', got %v", cfg.Worker.ExpiryInterval)
+	}
+
+	if len(cfg.Worker.ExpirationWarnings) != 2 || cfg.Worker.ExpirationWarnings[0] != "48h" || cfg.Worker.ExpirationWarnings[1] != "2h" {
+		t.Errorf("Expected Worker.ExpirationWarnings ['48h', '2h'], got %v", cfg.Worker.ExpirationWarnings)
 	}
 }
 
@@ -136,10 +162,12 @@ slave_api:
   remote_path: ""
 ports:
   api_server: 0
-  python_bot: 0
 logging:
   level: ""
   format: ""
+subscription:
+  user_agent_whitelist: []
+  user_agent_no_checks: []
 `
 	os.WriteFile(tmpFile, []byte(customYAML), 0644)
 	cfg, err := Load(tmpFile)
@@ -167,8 +195,9 @@ logging:
 		cfg.Stats.DetailedRetentionDays != defs.Stats.DetailedRetentionDays ||
 		cfg.SlaveAPI.RequestTimeout != defs.SlaveAPI.RequestTimeout ||
 		cfg.SlaveAPI.RemotePath != defs.SlaveAPI.RemotePath ||
-		cfg.Ports.PythonBot != defs.Ports.PythonBot ||
-		cfg.Logging.Format != defs.Logging.Format {
+		cfg.Logging.Format != defs.Logging.Format ||
+		len(cfg.Subscription.UserAgentWhitelist) != len(defs.Subscription.UserAgentWhitelist) ||
+		len(cfg.Subscription.UserAgentNoChecks) != len(defs.Subscription.UserAgentNoChecks) {
 		t.Error("Empty config did not correctly apply all defaults")
 	}
 }

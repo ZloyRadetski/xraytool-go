@@ -128,7 +128,6 @@ paths:
   geosite_dat: %q
 ports:
   api_server: 18080
-  python_bot: 18081
 database:
   driver: "sqlite"
   sqlite_path: %q
@@ -230,7 +229,7 @@ func apiRequest(method, path string, body interface{}, useAPIKey bool) (int, str
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("User-Agent", "megasupersecretua") // Bypass subscription log checks if needed
+	req.Header.Set("User-Agent", "happ") // Use standard user-agent so device limits apply
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

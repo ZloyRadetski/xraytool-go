@@ -21,4 +21,3 @@ paths:
 
 ports:
   api_server: 8090
-  python_bot: 8091

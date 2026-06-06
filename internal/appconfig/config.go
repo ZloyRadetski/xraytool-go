@@ -21,9 +21,31 @@ type Config struct {
 	SlaveAPI SlaveAPIConf `yaml:"slave_api"`
 	Ports    PortsConf    `yaml:"ports"`
 	Logging  LoggingConf  `yaml:"logging"`
-	Webhooks      []string     `yaml:"webhooks"`
-	Database      DatabaseConf `yaml:"database"`
-	PlategaSecret string       `yaml:"platega_secret"`
+	Webhooks      []string         `yaml:"webhooks"`
+	Worker   WorkerConf   `yaml:"worker"`
+	Database      DatabaseConf     `yaml:"database"`
+	PlategaSecret string           `yaml:"platega_secret"`
+	Subscription  SubscriptionConf `yaml:"subscription"`
+}
+
+// WorkerConf holds background worker settings.
+type WorkerConf struct {
+	ExpiryInterval     string   `yaml:"expiry_interval"`     // e.g., "5m"
+	ExpirationWarnings []string `yaml:"expiration_warnings"` // e.g., ["72h", "24h", "3h", "1h"]
+}
+
+// DummyConfigsConf holds custom text arrays for error dummy profiles.
+type DummyConfigsConf struct {
+	Expired           []string `yaml:"expired"`
+	DeviceLimit       []string `yaml:"device_limit"`
+	UnsupportedClient []string `yaml:"unsupported_client"`
+}
+
+// SubscriptionConf holds subscription endpoint settings.
+type SubscriptionConf struct {
+	UserAgentWhitelist []string         `yaml:"user_agent_whitelist"`
+	UserAgentNoChecks  []string         `yaml:"user_agent_no_checks"`
+	DummyConfigs       DummyConfigsConf `yaml:"dummy_configs"`
 }
 
 // DatabaseConf holds database connection settings.
@@ -49,7 +71,6 @@ type ServerConf struct {
 // PortsConf holds the configurable ports used by xraytool.
 type PortsConf struct {
 	APIServer int `yaml:"api_server"` // default: 8080
-	PythonBot int `yaml:"python_bot"` // default: 8081
 }
 
 // PathsConf holds all filesystem paths used by xraytool.
@@ -138,7 +159,6 @@ func defaults() *Config {
 		},
 		Ports: PortsConf{
 			APIServer: 8080,
-			PythonBot: 8081,
 		},
 		Logging: LoggingConf{
 			Level:    "info",
@@ -146,9 +166,36 @@ func defaults() *Config {
 			Format:   "console",
 		},
 		Webhooks: []string{},
+		Worker: WorkerConf{
+			ExpiryInterval:     "5m",
+			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
+		},
 		Database: DatabaseConf{
 			Driver:     "postgres",
 			SQLitePath: "/etc/xraytool/xraytool.db",
+		},
+		Subscription: SubscriptionConf{
+			UserAgentWhitelist: []string{"happ", "incy", "megasupersecretua", "v2ray"},
+			UserAgentNoChecks:  []string{"megasupersecretua", "v2ray"},
+			DummyConfigs: DummyConfigsConf{
+				Expired: []string{
+					"🛑 ПОДПИСКА ЗАКОНЧИЛАСЬ 🛑",
+					"Пожалуйста, продлите её,",
+					"Чтобы вернуть доступ к сети:",
+					"👉 @torvaldsvpnbot",
+				},
+				DeviceLimit: []string{
+					"🛑 Лимит устройств 🛑",
+					"Удалите старые устройства",
+					"Или расширьте свой лимит",
+					"В нашем боте: @torvaldsvpnbot",
+				},
+				UnsupportedClient: []string{
+					"🛑 Приложение не поддерживается 🛑",
+					"Клиент не отправил HWID",
+					"Поддержка -> @torvaldsvpnbot",
+				},
+			},
 		},
 	}
 }
@@ -227,8 +274,6 @@ slave_api:
 ports:
   # Port for the REST API server (api-server / start-server)
   api_server: 8080
-  # Port for triggering the Python Telegram bot update
-  python_bot: 8081
 
 logging:
   # Logging level: "debug", "info", "warn", "error" (default: "info")
@@ -250,6 +295,44 @@ database:
   dsn: ""
   # File path used when driver=sqlite
   sqlite_path: "/etc/xraytool/xraytool.db"
+
+subscription:
+  # Allowed User-Agents to access the subscription
+  user_agent_whitelist:
+    - "happ"
+    - "incy"
+    - "megasupersecretua"
+    - "v2ray"
+  # User-Agents that bypass device limit and HWID checks
+  user_agent_no_checks:
+    - "megasupersecretua"
+    - "v2ray"
+  # Custom VLESS proxy dummy texts for subscription errors
+  dummy_configs:
+    expired:
+      - "🛑 ПОДПИСКА ЗАКОНЧИЛАСЬ 🛑"
+      - "Пожалуйста, продлите её,"
+      - "Чтобы вернуть доступ к сети"
+      - "👉 @torvaldsvpnbot"
+    device_limit:
+      - "🛑 Лимит устройств 🛑"
+      - "Удалите старые устройства"
+      - "Или расширьте свой лимит"
+      - "👉 @torvaldsvpnbot"
+    unsupported_client:
+      - "🛑 Приложение не поддерживается 🛑"
+      - "Клиент не отправил HWID"
+      - "👉 @torvaldsvpnbot"
+
+worker:
+  # How often the worker checks the database for expired users and warnings
+  expiry_interval: "5m"
+  # Thresholds for expiration warnings sent to the client app
+  expiration_warnings:
+    - "72h"
+    - "24h"
+    - "3h"
+    - "1h"
 
 # ============================================================
 # servers.json format (object style):
@@ -366,9 +449,6 @@ func Load(path string) (*Config, error) {
 	if cfg.Ports.APIServer == 0 {
 		cfg.Ports.APIServer = defs.Ports.APIServer
 	}
-	if cfg.Ports.PythonBot == 0 {
-		cfg.Ports.PythonBot = defs.Ports.PythonBot
-	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = defs.Logging.Level
 	}
@@ -383,6 +463,27 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Database.SQLitePath == "" {
 		cfg.Database.SQLitePath = defs.Database.SQLitePath
+	}
+	if len(cfg.Subscription.UserAgentWhitelist) == 0 {
+		cfg.Subscription.UserAgentWhitelist = defs.Subscription.UserAgentWhitelist
+	}
+	if len(cfg.Subscription.UserAgentNoChecks) == 0 {
+		cfg.Subscription.UserAgentNoChecks = defs.Subscription.UserAgentNoChecks
+	}
+	if cfg.Worker.ExpiryInterval == "" {
+		cfg.Worker.ExpiryInterval = defs.Worker.ExpiryInterval
+	}
+	if len(cfg.Worker.ExpirationWarnings) == 0 {
+		cfg.Worker.ExpirationWarnings = defs.Worker.ExpirationWarnings
+	}
+	if len(cfg.Subscription.DummyConfigs.Expired) == 0 {
+		cfg.Subscription.DummyConfigs.Expired = defs.Subscription.DummyConfigs.Expired
+	}
+	if len(cfg.Subscription.DummyConfigs.DeviceLimit) == 0 {
+		cfg.Subscription.DummyConfigs.DeviceLimit = defs.Subscription.DummyConfigs.DeviceLimit
+	}
+	if len(cfg.Subscription.DummyConfigs.UnsupportedClient) == 0 {
+		cfg.Subscription.DummyConfigs.UnsupportedClient = defs.Subscription.DummyConfigs.UnsupportedClient
 	}
 
 	return cfg, nil
