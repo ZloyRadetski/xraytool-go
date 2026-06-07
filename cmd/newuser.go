@@ -130,9 +130,16 @@ func newUserCmd() *cobra.Command {
 			if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
 				p.Errorf("writing xray config: %v", err)
 			}
+
 			if legacy {
 				systemctlRestart("xray")
 			}
+
+			limitInt := 3
+			if limitPtr != nil {
+				limitInt = int(*limitPtr)
+			}
+			sqlCreateUserIfNotExist(email, uuid, expireVal, limitInt, subfile)
 
 			// Propagate to slaves (master only).
 			if cfg.IsMaster() {
@@ -288,6 +295,12 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 	if legacy {
 		systemctlRestart("xray")
 	}
+
+	limitInt := 3
+	if limitPtr != nil {
+		limitInt = int(*limitPtr)
+	}
+	sqlCreateUserIfNotExist(email, uuid, expireVal, limitInt, subfile)
 
 	// Propagate to slaves
 	if cfg.IsMaster() {

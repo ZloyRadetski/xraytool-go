@@ -63,16 +63,45 @@ func rmOrLimitCmd(action string) *cobra.Command {
 
 			// Verify the user exists.
 			client, err := xrayconfig.FindUser(xrayCfg, email)
+			var subfile string
+			var limitPtr *float64
+
 			if err != nil || client == nil {
-				p.Error("user not found")
+				db := userdb.New(cfg.Paths.LimitedDB)
+				entry, err2 := db.Get(email)
+				if err2 != nil || entry == nil {
+					p.Error("user not found")
+				}
+				if action == "rm" {
+					if err := db.Remove(email); err != nil {
+						p.Errorf("removing from limited db: %v", err)
+					}
+					sqlSetStatus(email, "inactive")
+
+					if cfg.IsMaster() {
+						slaveParams := map[string]string{"email": email}
+						if legacy {
+							slaveParams["legacy"] = "true"
+						}
+						propagate(cfg, "rmuser", slaveParams, p)
+					}
+
+					if isBatch {
+						fmt.Printf("SUCCESS|%sED|%s\n", action, email)
+					} else {
+						p.OK("User %s: %s completed.", email, action)
+					}
+					return
+				} else {
+					p.Error("user is already limited")
+				}
 			}
 
 			// Collect the user's subfile & limit before removing.
-			subfile := client.GetString("subfile")
+			subfile = client.GetString("subfile")
 			if subfile == "" {
 				subfile = "unknown.txt"
 			}
-			var limitPtr *float64
 			if lv, ok := client.GetNumber("limit"); ok {
 				limitPtr = &lv
 			}
@@ -109,6 +138,12 @@ func rmOrLimitCmd(action string) *cobra.Command {
 
 			if legacy {
 				systemctlRestart("xray")
+			}
+
+			if action == "limit" {
+				sqlSetStatus(email, "blocked")
+			} else {
+				sqlSetStatus(email, "inactive") // or whatever makes sense for rmuser
 			}
 
 			// Propagate.

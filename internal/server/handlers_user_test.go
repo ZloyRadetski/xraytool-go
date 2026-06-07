@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -340,4 +342,59 @@ func TestGetUserByTelegram_EdgeCases(t *testing.T) {
 	}
 }
 
+func TestDeviceManagement(t *testing.T) {
+	r := newTestRouter(t)
 
+	// 1. Register a user
+	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":9999123,"username":"DeviceTester"}`)
+
+	// 2. Insert a device manually into the test database
+	db := database.DB()
+	var user database.User
+	if err := db.Where("json_extract(metadata, '$.telegram_id') = ?", 9999123).First(&user).Error; err != nil {
+		t.Fatalf("failed to find user: %v", err)
+	}
+
+	var sub database.Subscription
+	if err := db.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("failed to find subscription: %v", err)
+	}
+
+	device1 := database.Device{
+		SubscriptionID: sub.ID,
+		HWID:           "test-hwid-1",
+		DeviceModel:    "Test Phone",
+	}
+	db.Create(&device1)
+
+	// 3. Test GET devices
+	wGet := doAuth(r, "GET", "/api/v1/users/telegram/9999123/devices", "")
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", wGet.Code)
+	}
+	// Parse JSON array
+	var devices []map[string]interface{}
+	if err := json.Unmarshal(wGet.Body.Bytes(), &devices); err != nil {
+		t.Fatalf("failed to parse devices array: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	if devices[0]["DeviceModel"] != "Test Phone" {
+		t.Errorf("expected Test Phone, got %v", devices[0]["DeviceModel"])
+	}
+
+	// 4. Test DELETE device
+	deviceID := fmt.Sprintf("%v", devices[0]["ID"])
+	wDel := doAuth(r, "DELETE", "/api/v1/users/telegram/9999123/devices/"+deviceID, "")
+	if wDel.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", wDel.Code)
+	}
+
+	// 5. Verify device is deleted
+	var count int64
+	db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&count)
+	if count != 0 {
+		t.Fatalf("expected 0 devices, got %d", count)
+	}
+}

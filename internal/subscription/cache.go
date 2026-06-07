@@ -36,10 +36,11 @@ type CacheManager struct {
 	routeRUModTime     time.Time
 
 	// Device State
-	deviceStateMu     sync.Mutex
-	deviceState       DeviceState
-	deviceStateDirty  bool
-	deviceStateLoaded bool
+	deviceStateMu      sync.Mutex
+	deviceState        DeviceState
+	deviceStateDirty   bool
+	deviceStateLoaded  bool
+	deviceStateModTime time.Time
 
 	// done is closed by Stop() to signal the flush worker to exit.
 	done chan struct{}
@@ -67,6 +68,7 @@ func (c *CacheManager) Refresh() {
 	c.refreshXrayConfig()
 	c.refreshLimitedDB()
 	c.refreshTemplates()
+	c.refreshDeviceState()
 }
 
 func (c *CacheManager) refreshXrayConfig() {

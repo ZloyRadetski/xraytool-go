@@ -150,7 +150,19 @@ func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 		}
 		active = append(active, su)
 	}
-	return Snapshot{Active: active}
+	
+	db := userdb.New(cfg.Paths.LimitedDB)
+	limited, _ := db.All()
+	sl := make([]SnapshotLimited, 0, len(limited))
+	for _, e := range limited {
+		sl = append(sl, SnapshotLimited{
+			Email:   e.Email,
+			Subfile: e.Subfile,
+			Limit:   e.Limit,
+		})
+	}
+	
+	return Snapshot{Active: active, Limited: sl}
 }
 
 // syncSlave compares masterSnap with a slave's current snapshot and issues
@@ -181,6 +193,10 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 	masterActive := make(map[string]SnapshotUser, len(master.Active))
 	for _, u := range master.Active {
 		masterActive[u.Email] = u
+	}
+	masterLimited := make(map[string]SnapshotLimited, len(master.Limited))
+	for _, l := range master.Limited {
+		masterLimited[l.Email] = l
 	}
 
 	var ops []string
@@ -274,8 +290,31 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 
 	// 2. Remove users that are active on slave but gone from master.
 	for _, su := range slaveSnap.Active {
-		if _, ok := masterActive[su.Email]; !ok {
+		_, okActive := masterActive[su.Email]
+		_, okLimited := masterLimited[su.Email]
+		if !okActive && !okLimited {
 			op := fmt.Sprintf("rmuser %s (not on master)", su.Email)
+			ops = append(ops, op)
+			if !dryRun {
+				out, err := reg.CallOne(srvName, "rmuser", map[string]string{"email": su.Email})
+				printSyncResult(op, out, err)
+			}
+		} else if !okActive && okLimited {
+			op := fmt.Sprintf("limit %s (limited on master)", su.Email)
+			ops = append(ops, op)
+			if !dryRun {
+				out, err := reg.CallOne(srvName, "limit", map[string]string{"email": su.Email})
+				printSyncResult(op, out, err)
+			}
+		}
+	}
+
+	// 3. Clean up limited users on slave that are gone from master
+	for _, su := range slaveSnap.Limited {
+		_, okActive := masterActive[su.Email]
+		_, okLimited := masterLimited[su.Email]
+		if !okActive && !okLimited {
+			op := fmt.Sprintf("rmuser %s (was limited on slave, not on master)", su.Email)
 			ops = append(ops, op)
 			if !dryRun {
 				out, err := reg.CallOne(srvName, "rmuser", map[string]string{"email": su.Email})

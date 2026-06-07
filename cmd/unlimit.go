@@ -184,6 +184,8 @@ func unlimitCmd() *cobra.Command {
 				systemctlRestart("xray")
 			}
 
+			sqlSetStatus(email, "active")
+
 			// Propagate.
 			if cfg.IsMaster() {
 				sp := map[string]string{
@@ -360,6 +362,8 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	if legacy {
 		systemctlRestart("xray")
 	}
+
+	sqlSetStatus(email, "active")
 
 	if cfg.IsMaster() {
 		sp := map[string]string{

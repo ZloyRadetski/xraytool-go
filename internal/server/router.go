@@ -93,6 +93,8 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("GET /api/v1/users", protected(r.handleListUsers))
 	r.mux.Handle("GET /api/v1/users/admins", protected(r.handleListAdmins))
 	r.mux.Handle("GET /api/v1/users/telegram/{id}", protected(r.handleGetUserByTelegram))
+	r.mux.Handle("GET /api/v1/users/telegram/{id}/devices", protected(r.handleGetDevices))
+	r.mux.Handle("DELETE /api/v1/users/telegram/{id}/devices/{device_id}", protected(r.handleDeleteDevice))
 	r.mux.Handle("GET /api/v1/users/ref/{code}", protected(r.handleGetUserByRef))
 	r.mux.Handle("POST /api/v1/users/telegram/{id}/balance", protected(r.handleAdjustBalance))
 	r.mux.Handle("POST /api/v1/users/telegram/{id}/max-devices", protected(r.handleSetMaxDevices))

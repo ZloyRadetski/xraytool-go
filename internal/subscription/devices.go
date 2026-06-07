@@ -28,6 +28,7 @@ func (c *CacheManager) loadDeviceStateLocked() {
 		}()
 	}
 
+	info, statErr := os.Stat(resolvedPath)
 	data, err := os.ReadFile(resolvedPath)
 	state := DeviceState{Clients: make(map[string]*ClientDevices)}
 	if err == nil && len(data) > 0 {
@@ -42,6 +43,32 @@ func (c *CacheManager) loadDeviceStateLocked() {
 
 	c.deviceState = state
 	c.deviceStateLoaded = true
+	if statErr == nil {
+		c.deviceStateModTime = info.ModTime()
+	}
+}
+
+// refreshDeviceState checks if the external bot modified devices_state.json on disk and reloads it.
+func (c *CacheManager) refreshDeviceState() {
+	resolvedPath := resolveDeviceStatePath(c.cfg.Paths.DevicesState)
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return
+	}
+
+	c.deviceStateMu.Lock()
+	defer c.deviceStateMu.Unlock()
+
+	// If the server has pending writes, we skip reloading to avoid overwriting our own recent changes
+	if c.deviceStateDirty {
+		return
+	}
+
+	if !c.deviceStateLoaded || info.ModTime().After(c.deviceStateModTime) {
+		logger.Infof("[Cache] Обнаружено изменение %s сторонним процессом (например, ботом). Перезагрузка состояний...", resolvedPath)
+		c.deviceStateLoaded = false
+		c.loadDeviceStateLocked()
+	}
 }
 
 func (c *CacheManager) flushDeviceStateWorker() {
@@ -96,11 +123,18 @@ func (c *CacheManager) FlushDeviceState() {
 		return
 	}
 	if err := os.Rename(tmpPath, resolvedPath); err != nil {
-		os.Remove(tmpPath)
 		c.deviceStateMu.Lock()
 		c.deviceStateDirty = true
 		c.deviceStateMu.Unlock()
-		logger.Errorf("[Cache] renaming device state to %q: %v", resolvedPath, err)
+		logger.Errorf("[Cache] renaming device state from %q to %q: %v", tmpPath, resolvedPath, err)
+		return
+	}
+
+	// Update mod time so we don't reload our own write
+	if info, err := os.Stat(resolvedPath); err == nil {
+		c.deviceStateMu.Lock()
+		c.deviceStateModTime = info.ModTime()
+		c.deviceStateMu.Unlock()
 	}
 }
 

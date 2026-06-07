@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	once sync.Once
-	db   *gorm.DB
+	once    sync.Once
+	db      *gorm.DB
+	initErr error
 )
 
 // DB returns the global GORM instance.
@@ -36,7 +37,6 @@ type Config struct {
 // Init opens the database connection and runs AutoMigrate for all models.
 // It is safe to call multiple times — only the first call takes effect.
 func Init(cfg Config) error {
-	var initErr error
 	once.Do(func() {
 		var dialector gorm.Dialector
 

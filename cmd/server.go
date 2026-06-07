@@ -558,12 +558,9 @@ func startServerCmd() *cobra.Command {
 				http.NotFound(w, r)
 			})
 
-			logger.Infof("==================================================")
 			logger.Infof(" Server:  127.0.0.1:%d", port)
 			logger.Infof(" Script:  %s", xraytoolPath)
 			logger.Infof(" Allowed: %s", strings.Join(apiConfig.AllowedDirs, ", "))
-			logger.Infof(" Mode:    Stealth (Fatality by OOM Killer allowed)")
-			logger.Infof("==================================================")
 
 			logger.Infof("API server listening on 127.0.0.1:%d", port)
 			if err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), mux); err != nil {

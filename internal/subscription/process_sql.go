@@ -140,43 +140,49 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 		if !unsupportedClient && hwid != "" {
 			// SQL-based Device tracking
-			var count int64
-			db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&count)
-
-			var device database.Device
-			err := db.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).First(&device).Error
 
 			now := time.Now()
-			if err == gorm.ErrRecordNotFound {
-				query := `INSERT INTO devices (subscription_id, hw_id, device_model, device_os, ver_os, user_agent, request_count, first_seen, last_seen)
-SELECT ?, ?, ?, ?, ?, ?, 1, ?, ?
-WHERE (SELECT COUNT(*) FROM devices WHERE subscription_id = ?) < ?
-AND NOT EXISTS (SELECT 1 FROM devices WHERE subscription_id = ? AND hw_id = ?)`
+			
+			err := db.Transaction(func(tx *gorm.DB) error {
+				var device database.Device
+				err := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).First(&device).Error
 				
-				res := db.Exec(query, sub.ID, hwid, deviceModel, deviceOs, verOs, req.UserAgent, now, now, sub.ID, deviceLimit, sub.ID, hwid)
-				if res.Error != nil {
-					fmt.Printf("db.Exec failed: %v\n", res.Error)
-				} else if res.RowsAffected == 0 {
-					var checkCount int64
-					db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&checkCount)
-					// If count is at or above limit, and it's NOT our newly inserted concurrent device, then limit is reached.
-					// Let's also check if our device exists now.
-					var checkExists int64
-					db.Model(&database.Device{}).Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).Count(&checkExists)
-					if checkExists == 0 && checkCount >= int64(deviceLimit) {
+				if err == gorm.ErrRecordNotFound {
+					// Check device limit before inserting
+					var currentCount int64
+					tx.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&currentCount)
+					
+					if currentCount >= int64(deviceLimit) {
 						deviceLimitReached = true
+						return nil // Don't error out, just don't insert
 					}
+					
+					newDevice := database.Device{
+						SubscriptionID: sub.ID,
+						HWID:           hwid,
+						DeviceModel:    deviceModel,
+						DeviceOS:       deviceOs,
+						VerOS:          verOs,
+						UserAgent:      req.UserAgent,
+						RequestCount:   1,
+						FirstSeen:      now,
+						LastSeen:       now,
+					}
+					return tx.Create(&newDevice).Error
+				} else if err == nil {
+					return tx.Model(&device).Updates(map[string]interface{}{
+						"last_seen":     now,
+						"request_count": gorm.Expr("request_count + 1"),
+						"device_model":  deviceModel,
+						"device_os":     deviceOs,
+						"ver_os":        verOs,
+						"user_agent":    req.UserAgent,
+					}).Error
 				}
-			} else if err == nil {
-				db.Model(&device).Updates(map[string]interface{}{
-					"last_seen":     now,
-					"request_count": gorm.Expr("request_count + 1"),
-					"device_model":  deviceModel,
-					"device_os":     deviceOs,
-					"ver_os":        verOs,
-					"user_agent":    req.UserAgent,
-				})
-			} else {
+				return err
+			})
+
+			if err != nil {
 				fmt.Printf("SQL Error in device check: %v\n", err)
 				return failResponse(500, fmt.Sprintf("database error: %v", err))
 			}

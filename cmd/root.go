@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"xraytool/internal/appconfig"
+	"xraytool/internal/database"
 	"xraytool/internal/logger"
 )
 
@@ -89,6 +90,14 @@ func loadConfig() {
 
 	if err := logger.Init(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "WARN|failed to initialize logger: %v\n", err)
+	}
+
+	if err := database.Init(database.Config{
+		Driver:     cfg.Database.Driver,
+		DSN:        cfg.Database.DSN,
+		SQLitePath: cfg.Database.SQLitePath,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "WARN|failed to initialize database: %v\n", err)
 	}
 }
 

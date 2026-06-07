@@ -38,18 +38,28 @@ func setExpireCmd() *cobra.Command {
 				p.Errorf("invalid expire date format, expected DD-MM-YYYY: %v", err)
 			}
 
+			updatedActive := false
 			if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
 				exists, err := xrayconfig.UserExists(c, email)
 				if err != nil {
 					return err
 				}
 				if !exists {
-					return fmt.Errorf("user %q not found in active config", email)
+					return nil
 				}
+				updatedActive = true
 				return xrayconfig.UpdateStringField(c, email, "expire", expireVal)
 			}); err != nil {
 				p.Errorf("updating expire: %v", err)
 			}
+
+			db := userdb.New(cfg.Paths.LimitedDB)
+			entry, _ := db.Get(email)
+			if !updatedActive && entry == nil {
+				p.Errorf("user %q not found in active or blocked lists", email)
+			}
+
+			sqlSetExpire(email, expireVal)
 
 			if cfg.IsMaster() {
 				propagate(cfg, "setexpire", map[string]string{
@@ -128,6 +138,8 @@ func updateLimitCmd() *cobra.Command {
 				p.Errorf("user %q not found in active or blocked lists", email)
 			}
 
+			sqlSetLimit(email, int(*limitPtr))
+
 			if cfg.IsMaster() {
 				propagate(cfg, "setlimit", map[string]string{
 					"email": email, "limit": limitStr,
@@ -167,18 +179,28 @@ func ExecSetExpire(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("invalid expire date format, expected DD-MM-YYYY: %v", err)
 	}
 
+	updatedActive := false
 	if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
 		exists, err := xrayconfig.UserExists(c, email)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			return fmt.Errorf("user %q not found in active config", email)
+			return nil
 		}
+		updatedActive = true
 		return xrayconfig.UpdateStringField(c, email, "expire", expireVal)
 	}); err != nil {
 		return "", fmt.Errorf("updating expire: %v", err)
 	}
+
+	db := userdb.New(cfg.Paths.LimitedDB)
+	entry, _ := db.Get(email)
+	if !updatedActive && entry == nil {
+		return "", fmt.Errorf("user %q not found in active or blocked lists", email)
+	}
+
+	sqlSetExpire(email, expireVal)
 
 	if cfg.IsMaster() {
 		p := newPrinter(true)
@@ -239,6 +261,8 @@ func ExecUpdateLimit(payload map[string]interface{}) (string, error) {
 	if !updatedActive && !updatedLimited {
 		return "", fmt.Errorf("user %q not found in active or blocked lists", email)
 	}
+
+	sqlSetLimit(email, int(*limitPtr))
 
 	if cfg.IsMaster() {
 		p := newPrinter(true)

@@ -32,9 +32,22 @@ func TestMain(m *testing.M) {
 
 func newTestRouter(t *testing.T) *server.Router {
 	t.Helper()
+	
+	f, _ := os.CreateTemp("", "xrayconfig_*.json")
+	f.WriteString(`{"inbounds":[]}`)
+	f.Close()
+	t.Cleanup(func() { os.Remove(f.Name()) })
+	
+	limitDBPath := f.Name() + ".limited.db"
+	t.Cleanup(func() { os.Remove(limitDBPath) })
+
 	cfg := &appconfig.Config{
 		Server: appconfig.ServerConf{Domain: "test.example.com"},
 		Webhooks: []string{}, // no webhooks in tests
+		Paths: appconfig.PathsConf{
+			XrayConfig: f.Name(),
+			LimitedDB:  limitDBPath,
+		},
 	}
 	cm := subscription.NewCacheManager(cfg)
 	return server.New(cfg, "test-api-key", cm)

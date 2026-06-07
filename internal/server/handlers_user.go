@@ -19,6 +19,8 @@ import (
 
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
+	"xraytool/internal/templates"
+	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 )
@@ -552,6 +554,14 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Fetch the updated subscription and ensure user is unbanned in Xray config
+	var updatedSub database.Subscription
+	if err := db.Where("user_id = ?", user.ID).First(&updatedSub).Error; err == nil {
+		r.unbanUserInXray(updatedSub)
+	} else {
+		r.log.Error("failed to find subscription after auto-renew for unban", "user_id", user.ID, "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -623,16 +633,7 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	if result := db.Model(&sub).Updates(map[string]interface{}{
-		"status":     "blocked",
-		"updated_at": time.Now(),
-	}); result.Error != nil {
-		r.log.Error("admin block user", "err", result.Error)
-		writeError(w, http.StatusInternalServerError, "db error")
-		return
-	}
-
-	// 2. Remove from Xray config and API to make the ban instant
+	// 1. Remove from Xray config and API to make the ban instant
 	var tags []string
 	modErr := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
 		t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
@@ -640,9 +641,39 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
 	})
 	
-	if modErr == nil && len(tags) > 0 {
+	if modErr != nil {
+		r.log.Error("admin block user: xrayconfig update failed", "err", modErr)
+		writeError(w, http.StatusInternalServerError, "failed to update xray config")
+		return
+	}
+	
+	if len(tags) > 0 {
 		apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
 		_ = apiClient.RemoveUser(sub.Email, tags)
+	}
+
+	// 2. Add to limitedDB
+	limitDB := userdb.New(r.cfg.Paths.LimitedDB)
+	subfile := ""
+	if sub.Metadata != nil {
+		if sf, ok := sub.Metadata["subfile"].(string); ok {
+			subfile = sf
+		}
+	}
+	limitPtr := float64(sub.MaxDevices)
+	_ = limitDB.Upsert(userdb.Entry{
+		Email:   sub.Email,
+		Subfile: subfile,
+		Limit:   &limitPtr,
+	})
+
+	// 3. Update DB Status
+	if result := db.Model(&sub).Updates(map[string]interface{}{
+		"status":     "blocked",
+		"updated_at": time.Now(),
+	}); result.Error != nil {
+		r.log.Error("admin block user: db status update failed", "err", result.Error)
+		// We still return 200 because Xray was updated successfully
 	}
 
 	r.log.Warn("admin action", "action", "block", "email", email, "caller_ip", getClientIP(req))
@@ -690,6 +721,9 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
+
+	// 2. Put user back into Xray config & API memory
+	r.unbanUserInXray(sub)
 
 	r.log.Warn("admin action", "action", "unblock", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -747,6 +781,145 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
+	r.unbanUserInXray(sub)
+
 	r.log.Warn("admin action", "action", "set-expire", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// Device Management
+// ---------------------------------------------------------------------------
+
+// GET /api/v1/users/telegram/{id}/devices
+func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
+	tgIDStr := req.PathValue("id")
+	tgID, err := strconv.ParseInt(tgIDStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid telegram id")
+		return
+	}
+
+	db := database.DB()
+	user, err := findUserByTelegramID(db, tgID)
+	if err != nil || user == nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	var sub database.Subscription
+	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err != nil {
+		writeError(w, http.StatusNotFound, "subscription not found")
+		return
+	}
+
+	var devices []database.Device
+	if err := db.Where("subscription_id = ?", sub.ID).Find(&devices).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to query devices")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, devices)
+}
+
+// DELETE /api/v1/users/telegram/{id}/devices/{device_id}
+func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
+	tgIDStr := req.PathValue("id")
+	deviceIDStr := req.PathValue("device_id")
+
+	tgID, err := strconv.ParseInt(tgIDStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid telegram id")
+		return
+	}
+
+	db := database.DB()
+	user, err := findUserByTelegramID(db, tgID)
+	if err != nil || user == nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	var sub database.Subscription
+	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err != nil {
+		writeError(w, http.StatusNotFound, "subscription not found")
+		return
+	}
+
+	var device database.Device
+	if err := db.Where("id = ? AND subscription_id = ?", deviceIDStr, sub.ID).First(&device).Error; err != nil {
+		writeError(w, http.StatusNotFound, "device not found")
+		return
+	}
+
+	if err := db.Delete(&device).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete device")
+		return
+	}
+
+	// Auto-unblock if limit is resolved
+	var count int64
+	db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&count)
+	if count <= int64(sub.MaxDevices) && sub.Status == "blocked" {
+		if sub.EndsAt == nil || sub.EndsAt.After(time.Now()) {
+			db.Model(&sub).Update("status", "active")
+			r.unbanUserInXray(sub)
+			r.log.Info("auto-unblocked user after device deletion", "email", sub.Email)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (r *Router) unbanUserInXray(sub database.Subscription) {
+	// Remove from limitedDB
+	limitDB := userdb.New(r.cfg.Paths.LimitedDB)
+	_ = limitDB.Remove(sub.Email)
+
+	// We must re-add them to Xray config json & hot reload
+	xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
+	if err != nil {
+		r.log.Error("failed to read xray config for unban", "err", err)
+		return
+	}
+
+	subfile := ""
+	if sub.Metadata != nil {
+		if sf, ok := sub.Metadata["subfile"].(string); ok {
+			subfile = sf
+		}
+	}
+	expireVal := ""
+	if sub.EndsAt != nil {
+		expireVal = sub.EndsAt.Format("02.01.2006")
+	}
+
+	params := templates.ClientParams{
+		Email:   sub.Email,
+		UUID:    sub.XrayUUID,
+		Auth:    "", // Not stored in DB. Will be generated if missing, but ideally we don't break hy2
+		Subfile: subfile,
+		Expire:  expireVal,
+	}
+
+	// Try to retain existing HY2 auth if they are somehow still in config
+	if c, _ := xrayconfig.FindUser(xrayCfg, sub.Email); c != nil {
+		if a := c.GetString("auth"); a != "" {
+			params.Auth = a
+		}
+	}
+
+	payload, err := templates.BuildForAllInbounds(r.cfg.Paths.TemplatesDir, xrayCfg, params)
+	if err != nil {
+		r.log.Error("failed to build payload for unban", "err", err)
+		return
+	}
+
+	_ = xrayconfig.AddUserToInbounds(xrayCfg, payload)
+	_ = xrayconfig.Write(r.cfg.Paths.XrayConfig, xrayCfg)
+
+	apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+	if err := apiClient.AddUser(payload, r.cfg.Paths.XrayConfig); err != nil {
+		r.log.Error("hot-add failed", "email", sub.Email, "err", err)
+	}
 }
