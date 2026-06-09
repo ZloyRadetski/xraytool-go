@@ -78,15 +78,15 @@ func TestCommands_EdgeCases(t *testing.T) {
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"xraytool", "sub"}
-	
+
 	cmd := subCmd()
-	cmd.SetArgs([]string{}) 
+	cmd.SetArgs([]string{})
 	exitCalled = false
 	out = captureOutput(func() { cmd.Execute() })
 	if !strings.Contains(out, "file already closed") {
 		t.Errorf("expected json decode error, got %v", out)
 	}
-	
+
 	// genBalancerCmd with invalid args
 	cmd = genBalancerCmd()
 	cmd.SetArgs([]string{"--url=http://127.0.0.1:0/invalid"})

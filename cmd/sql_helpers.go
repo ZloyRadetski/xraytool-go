@@ -59,7 +59,7 @@ func sqlCreateUserIfNotExist(email, xrayUUID, expire string, limit int, subfile 
 			if userID == "" {
 				userID = xrayUUID
 			}
-			
+
 			subID, _ := generate.UUID()
 			if subID == "" {
 				subID = xrayUUID + "-sub"

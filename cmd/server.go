@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
@@ -23,6 +23,8 @@ import (
 	"xraytool/internal/subscription"
 	"xraytool/internal/worker"
 	"xraytool/internal/xrayapi"
+
+	"github.com/spf13/cobra"
 )
 
 type ApiConfig struct {
@@ -230,7 +232,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if reqKey == "" || reqKey != apiConfig.APIKey {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key")
 					http.NotFound(w, r)
 					return
@@ -357,7 +359,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if reqKey == "" || reqKey != apiConfig.APIKey {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key on update-links")
 					http.NotFound(w, r)
 					return
@@ -434,7 +436,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if reqKey == "" || reqKey != apiConfig.APIKey {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key on Upload")
 					http.NotFound(w, r)
 					return
@@ -503,7 +505,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if reqKey == "" || reqKey != apiConfig.APIKey {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key on Download")
 					http.NotFound(w, r)
 					return

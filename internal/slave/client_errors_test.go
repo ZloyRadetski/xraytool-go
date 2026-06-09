@@ -98,10 +98,10 @@ func TestUnwrapBodyCoverage(t *testing.T) {
 
 func TestApplyAuthHeaders(t *testing.T) {
 	req, _ := http.NewRequest("POST", "http://test", nil)
-	
+
 	e := Entry{
-		Token: "tok_123",
-		Bearer: "bear_123",
+		Token:      "tok_123",
+		Bearer:     "bear_123",
 		AuthHeader: "X-Custom: custom_val",
 	}
 	applyAuthHeaders(req, e)
@@ -119,7 +119,7 @@ func TestApplyAuthHeaders(t *testing.T) {
 	// Test malformed / empty headers
 	req2, _ := http.NewRequest("POST", "http://test", nil)
 	e2 := Entry{
-		AuthHeader: "null",
+		AuthHeader:    "null",
 		Authorization: "InvalidHeaderNoColon",
 	}
 	applyAuthHeaders(req2, e2)
@@ -129,7 +129,7 @@ func TestApplyAuthHeaders(t *testing.T) {
 }
 
 func TestPortString(t *testing.T) {
-	tests := []struct{
+	tests := []struct {
 		val interface{}
 		exp string
 	}{

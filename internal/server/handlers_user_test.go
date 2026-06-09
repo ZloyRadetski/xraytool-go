@@ -28,14 +28,14 @@ func TestRegisterUser_Idempotent(t *testing.T) {
 	r := newTestRouter(t)
 	w1 := doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1002,"username":"Bob"}`)
 	w2 := doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1002,"username":"Bob"}`)
-	
+
 	if w1.Code != http.StatusCreated {
 		t.Fatalf("first request failed: %d", w1.Code)
 	}
 	if w2.Code != http.StatusOK && w2.Code != http.StatusCreated {
 		t.Fatalf("second request failed: %d", w2.Code)
 	}
-	
+
 	id1 := jsonBody(t, w1)["id"]
 	id2 := jsonBody(t, w2)["id"]
 	if id1 != id2 {
@@ -58,7 +58,7 @@ func TestGetUserByTelegram_Found(t *testing.T) {
 func TestAdjustBalance(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1006,"username":"F"}`)
-	
+
 	w := doAuth(r, "POST", "/api/v1/users/telegram/1006/balance", `{"amount":200}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -66,7 +66,7 @@ func TestAdjustBalance(t *testing.T) {
 	if int(jsonBody(t, w)["balance"].(float64)) != 200 {
 		t.Errorf("expected 200")
 	}
-	
+
 	w2 := doAuth(r, "POST", "/api/v1/users/telegram/1006/balance", `{"amount":-50}`)
 	if w2.Code != http.StatusBadRequest {
 		t.Errorf("expected 400")
@@ -76,12 +76,12 @@ func TestAdjustBalance(t *testing.T) {
 func TestSetMaxDevices(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1007,"username":"G"}`)
-	
+
 	w := doAuth(r, "POST", "/api/v1/users/telegram/1007/max-devices", `{"max_devices":5}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	
+
 	wg := doAuth(r, "GET", "/api/v1/users/telegram/1007", "")
 	if int(jsonBody(t, wg)["max_devices"].(float64)) != 5 {
 		t.Errorf("expected 5 devices")
@@ -91,7 +91,7 @@ func TestSetMaxDevices(t *testing.T) {
 func TestAutoRenew_InsufficientBalance(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1008,"username":"H"}`)
-	
+
 	w := doAuth(r, "POST", "/api/v1/users/telegram/1008/auto-renew", `{"plan_total_price":100,"new_ends_at":"2026-07-04T00:00:00Z"}`)
 	if w.Code != http.StatusPaymentRequired {
 		t.Fatalf("expected 402 Payment Required, got %d", w.Code)
@@ -102,12 +102,12 @@ func TestAutoRenew_Success(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1009,"username":"I"}`)
 	doAuth(r, "POST", "/api/v1/users/telegram/1009/balance", `{"amount":200}`)
-	
+
 	w := doAuth(r, "POST", "/api/v1/users/telegram/1009/auto-renew", `{"plan_total_price":159,"new_ends_at":"2026-07-04T00:00:00Z"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	
+
 	wg := doAuth(r, "GET", "/api/v1/users/telegram/1009", "")
 	j := jsonBody(t, wg)
 	if int(j["balance"].(float64)) != 41 {
@@ -125,7 +125,7 @@ func TestAdminBlock_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	
+
 	wg := doAuth(r, "GET", "/api/v1/users/telegram/1014", "")
 	if jsonBody(t, wg)["sub_status"] != "blocked" {
 		t.Errorf("expected blocked")
@@ -139,7 +139,7 @@ func TestAdminSetExpire_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d. body: %s", w.Code, w.Body.String())
 	}
-	
+
 	wg := doAuth(r, "GET", "/api/v1/users/telegram/1016", "")
 	endsAt := jsonBody(t, wg)["ends_at"]
 	if endsAt == nil || endsAt == "" {
@@ -175,16 +175,16 @@ func TestGetUserByTelegram_SubstringMatch(t *testing.T) {
 	r := newTestRouter(t)
 	// Register user with a longer ID (e.g., 10034)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":10034,"username":"CharlieLong"}`)
-	
+
 	// Querying for the substring ID (1003) should not return CharlieLong
 	w := doAuth(r, "GET", "/api/v1/users/telegram/1003", "")
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for substring ID lookup, got %d", w.Code)
 	}
-	
+
 	// Register user with the shorter ID (1003)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1003,"username":"CharlieShort"}`)
-	
+
 	// Querying for 1003 should now return CharlieShort
 	w2 := doAuth(r, "GET", "/api/v1/users/telegram/1003", "")
 	if w2.Code != http.StatusOK {
@@ -193,7 +193,7 @@ func TestGetUserByTelegram_SubstringMatch(t *testing.T) {
 	if jsonBody(t, w2)["username"] != "CharlieShort" {
 		t.Errorf("expected CharlieShort, got %v", jsonBody(t, w2)["username"])
 	}
-	
+
 	// Querying for 10034 should return CharlieLong
 	w3 := doAuth(r, "GET", "/api/v1/users/telegram/10034", "")
 	if w3.Code != http.StatusOK {

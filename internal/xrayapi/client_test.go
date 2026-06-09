@@ -12,7 +12,7 @@ import (
 func setupMockXray(t *testing.T) {
 	tmp := t.TempDir()
 	batPath := filepath.Join(tmp, "xray.bat")
-	
+
 	// A batch script to simulate xray behavior based on environment variables
 	batContent := `@echo off
 if "%MOCK_XRAY_FAIL%"=="1" (
@@ -96,7 +96,7 @@ func TestClient_AddUser(t *testing.T) {
 		{Tag: "tag1", Client: rc},
 		{Tag: "failtag", Client: rc},
 	}
-	
+
 	err := c.AddUser(payloadWithFail, cfgPath)
 	if err == nil {
 		t.Errorf("expected error from failtag, got nil")

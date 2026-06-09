@@ -6,10 +6,11 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/logger"
+
+	"github.com/spf13/cobra"
 )
 
 var (

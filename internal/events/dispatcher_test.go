@@ -104,10 +104,10 @@ func TestDispatcher_Dispatch_Async(t *testing.T) {
 
 	cfg := &appconfig.Config{Webhooks: []string{ts.URL}}
 	d := NewDispatcher(cfg)
-	
+
 	// async publish
 	d.Dispatch("async.event", nil, nil)
-	
+
 	// Wait a bit
 	time.Sleep(100 * time.Millisecond)
 	if atomic.LoadInt32(&requestCount) == 0 {
@@ -125,4 +125,3 @@ func TestDispatcher_DeadWebhook_Fallback(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	// No panic = pass
 }
-

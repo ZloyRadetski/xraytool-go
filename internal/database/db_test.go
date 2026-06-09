@@ -49,7 +49,7 @@ func TestUser_CreateAndRead(t *testing.T) {
 	if fetched.Username != "alice" {
 		t.Errorf("expected username alice, got %s", fetched.Username)
 	}
-	
+
 	tgID := fetched.Metadata["telegram_id"]
 	if tgID.(float64) != 12345 {
 		t.Errorf("expected telegram_id 12345, got %v", tgID)
@@ -60,7 +60,7 @@ func TestUser_RefCodeUnique(t *testing.T) {
 	db := newTestDB(t)
 	u1 := database.User{ID: "1", Username: "u1", RefCode: "ref_1"}
 	u2 := database.User{ID: "2", Username: "u2", RefCode: "ref_1"}
-	
+
 	if err := db.Create(&u1).Error; err != nil {
 		t.Fatalf("failed to create u1: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestUser_MetadataLIKESearch(t *testing.T) {
 	if err := db.Where("metadata LIKE ?", "%\"telegram_id\":99999%").First(&found).Error; err != nil {
 		t.Fatalf("failed to find user by metadata LIKE: %v", err)
 	}
-	
+
 	var notFound database.User
 	if err := db.Where("metadata LIKE ?", "%\"telegram_id\":00001%").First(&notFound).Error; err == nil {
 		t.Fatal("expected not to find user, but did")
@@ -95,9 +95,9 @@ func TestSubscription_CreateAndLink(t *testing.T) {
 	db.Create(&user)
 
 	sub := database.Subscription{
-		ID:     "s1",
-		UserID: "u1",
-		Email:  "bot_client_12345",
+		ID:       "s1",
+		UserID:   "u1",
+		Email:    "bot_client_12345",
 		XrayUUID: "uuid",
 	}
 	if err := db.Create(&sub).Error; err != nil {
@@ -256,7 +256,7 @@ func TestSubscription_NullableTimes(t *testing.T) {
 
 	now := time.Now()
 	db.Model(&database.Subscription{}).Where("id = ?", "s1").Update("ends_at", now)
-	
+
 	db.First(&fetched, "id = ?", "s1")
 	if fetched.EndsAt == nil || fetched.EndsAt.Unix() != now.Unix() {
 		t.Errorf("expected ends_at %v, got %v", now, fetched.EndsAt)

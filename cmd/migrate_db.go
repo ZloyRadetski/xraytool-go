@@ -60,7 +60,7 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 			if err := migrateData(srcGorm, database.DB()); err != nil {
 				return err
 			}
-			
+
 			if err := migrateDevices(srcGorm, database.DB(), devicesPath); err != nil {
 				fmt.Printf("[WARN] Error migrating devices: %v\n", err)
 			}
@@ -87,20 +87,20 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 
 // legacyUser mirrors the old Telegram-bot users table.
 type legacyUser struct {
-	TgID            int64   `gorm:"column:tg_id"`
-	ID              int64   `gorm:"column:id"`         // bot-internal auto-int
-	Name            string  `gorm:"column:name"`       // display name / real name
-	Username        string  `gorm:"column:username"`   // Telegram @handle
-	Status          string  `gorm:"column:status"`
-	CreatedAt       string  `gorm:"column:created_at"` // stored as text in SQLite
-	RefCode         string  `gorm:"column:ref_code"`
-	RefCodeUsed     string  `gorm:"column:ref_code_used"`
-	RefCodeUsedIDs  string  `gorm:"column:ref_code_used_ids"`
-	IsAdmin         int     `gorm:"column:is_admin"`   // 0 / 1
-	Balance         int     `gorm:"column:balance"`
-	MaxDevices      int     `gorm:"column:max_devices"`
-	AutoRenew       int     `gorm:"column:auto_renew"` // 0 / 1
-	CashAvailable   int     `gorm:"column:cash_available"` // 0 / 1
+	TgID           int64  `gorm:"column:tg_id"`
+	ID             int64  `gorm:"column:id"`       // bot-internal auto-int
+	Name           string `gorm:"column:name"`     // display name / real name
+	Username       string `gorm:"column:username"` // Telegram @handle
+	Status         string `gorm:"column:status"`
+	CreatedAt      string `gorm:"column:created_at"` // stored as text in SQLite
+	RefCode        string `gorm:"column:ref_code"`
+	RefCodeUsed    string `gorm:"column:ref_code_used"`
+	RefCodeUsedIDs string `gorm:"column:ref_code_used_ids"`
+	IsAdmin        int    `gorm:"column:is_admin"` // 0 / 1
+	Balance        int    `gorm:"column:balance"`
+	MaxDevices     int    `gorm:"column:max_devices"`
+	AutoRenew      int    `gorm:"column:auto_renew"`     // 0 / 1
+	CashAvailable  int    `gorm:"column:cash_available"` // 0 / 1
 }
 
 // TableName makes GORM read from "users" in the legacy DB.
@@ -328,13 +328,13 @@ func migrateDevices(srcDB *gorm.DB, dstDB *gorm.DB, devicesPath string) error {
 	if err := srcDB.Find(&servers).Error; err != nil {
 		return fmt.Errorf("reading legacy server table: %w", err)
 	}
-	
+
 	keyToTgID := make(map[string]int64)
 	for _, s := range servers {
 		if s.Link == "" {
 			continue
 		}
-		
+
 		parts := strings.Split(s.Link, "id=")
 		if len(parts) > 1 {
 			key := strings.Split(parts[1], "&")[0]

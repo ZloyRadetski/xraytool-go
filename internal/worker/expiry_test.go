@@ -22,7 +22,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
-	
+
 	sqlDB, err := db.DB()
 	if err == nil {
 		t.Cleanup(func() { sqlDB.Close() })
@@ -39,7 +39,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func setupTestWorker(t *testing.T, db *gorm.DB, cfg *appconfig.Config) *ExpiryWorker {
 	// Dummy logger
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	
+
 	// Ensure dummy file paths for xrayconfig to not fail outright
 	tmpDir := t.TempDir()
 	if cfg.Paths.XrayConfig == "" {
@@ -55,7 +55,7 @@ func setupTestWorker(t *testing.T, db *gorm.DB, cfg *appconfig.Config) *ExpiryWo
 
 func TestExpiryWorker_ProcessOnce_Expired(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	// Create an expired subscription
 	endsAt := time.Now().Add(-1 * time.Hour)
 	sub := database.Subscription{
@@ -82,7 +82,7 @@ func TestExpiryWorker_ProcessOnce_Expired(t *testing.T) {
 
 func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	// Create a subscription expiring in 12 hours
 	endsAt := time.Now().Add(12 * time.Hour)
 	sub := database.Subscription{
@@ -147,7 +147,7 @@ func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 
 func TestExpiryWorker_InvalidDuration(t *testing.T) {
 	db := setupTestDB(t)
-	
+
 	endsAt := time.Now().Add(12 * time.Hour)
 	sub := database.Subscription{
 		ID:     "sub-invalid",

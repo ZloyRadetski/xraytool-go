@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"xraytool/internal/safeio"
 )
 
 // Entry represents a single blocked-user record.
@@ -206,25 +207,8 @@ func (db *DB) write(entries []Entry) error {
 		}
 	}
 
-	tmpPath := db.path + ".tmp"
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	if _, err := f.WriteString(sb.String()); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("syncing temp file: %w", err)
-	}
-	f.Close()
-	if err := os.Rename(tmpPath, db.path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("replacing limited db: %w", err)
+	if err := safeio.WriteToFile(db.path, []byte(sb.String()), 0o600); err != nil {
+		return fmt.Errorf("writing limited db: %w", err)
 	}
 	return nil
 }

@@ -98,7 +98,7 @@ func TestListUsers(t *testing.T) {
 	if len(users) != 2 {
 		t.Errorf("expected 2 unique users, got %d", len(users))
 	}
-	
+
 	// Error GetInbounds
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	_, err = ListUsers(badCfg)
@@ -151,7 +151,7 @@ func TestInboundTagsForUser(t *testing.T) {
 	if len(tags) != 0 {
 		t.Errorf("expected 0 tags, got %v", tags)
 	}
-	
+
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	_, err = InboundTagsForUser(badCfg, "a@a")
 	if err == nil {
@@ -180,7 +180,7 @@ func TestClientInbounds(t *testing.T) {
 	if len(ibs) != 2 { // in1, in2 have clients. in3 does not.
 		t.Errorf("expected 2 client inbounds, got %v", ibs)
 	}
-	
+
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	_, err = ClientInbounds(badCfg)
 	if err == nil {
@@ -208,7 +208,7 @@ func TestAddUserToInbounds(t *testing.T) {
 	if len(tags) != 2 {
 		t.Errorf("user should be added to in1 and in2, got %v", tags)
 	}
-	
+
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	if err := AddUserToInbounds(badCfg, payload); err == nil {
 		t.Errorf("expected error")
@@ -240,7 +240,7 @@ func TestRemoveUserFromAllInbounds(t *testing.T) {
 	if ex {
 		t.Errorf("user not removed")
 	}
-	
+
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	if err := RemoveUserFromAllInbounds(badCfg, "a@a"); err == nil {
 		t.Errorf("expected error")
@@ -259,7 +259,7 @@ func TestRemoveUserFromAllInbounds(t *testing.T) {
 
 func TestUpdateFields(t *testing.T) {
 	cfg := buildTestConfig()
-	
+
 	// UpdateStringField
 	err := UpdateStringField(cfg, "a@a", "subfile", "newsub")
 	if err != nil {
@@ -284,7 +284,7 @@ func TestUpdateFields(t *testing.T) {
 	if err := UpdateStringField(badCfg, "a@a", "k", "v"); err == nil {
 		t.Errorf("expected error")
 	}
-	
+
 	badSettingsCfg := RawConfig{"inbounds": []byte(`[{"tag": "t1", "settings": "bad"}]`)}
 	if err := UpdateStringField(badSettingsCfg, "a@a", "k", "v"); err == nil {
 		t.Errorf("expected error")
@@ -309,7 +309,7 @@ func TestReplaceAllClients(t *testing.T) {
 	if len(c1) != 1 || c1[0].Email() != "new@new" {
 		t.Errorf("in1 not replaced correctly")
 	}
-	
+
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	if err := ReplaceAllClients(badCfg, payload); err == nil {
 		t.Errorf("expected error")

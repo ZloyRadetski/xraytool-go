@@ -83,7 +83,7 @@ func (c *Client) AddUser(payload []xrayconfig.TaggedClient, configPath string) e
 		singleCmd := exec.Command("xray", "api", "adu", "-s", c.addr, sf.Name())
 		singleOut, err := singleCmd.CombinedOutput()
 		os.Remove(sf.Name())
-		
+
 		if err != nil {
 			lastErr = fmt.Errorf("tag=%s: %v (output: %s)", aib.Tag, err, strings.TrimSpace(string(singleOut)))
 			fmt.Fprintf(os.Stderr, "[ERROR] xray api adu failed for tag=%s: %v\n", aib.Tag, lastErr)
@@ -254,7 +254,7 @@ func parseStats(data []byte) ([]UserStat, error) {
 		if !strings.HasPrefix(s.Name, "user>>>") {
 			continue
 		}
-		
+
 		var email, key string
 		if strings.HasSuffix(s.Name, ">>>traffic>>>uplink") {
 			email = s.Name[len("user>>>") : len(s.Name)-len(">>>traffic>>>uplink")]

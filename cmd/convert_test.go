@@ -32,7 +32,7 @@ func TestConvertCmd(t *testing.T) {
 	}
 
 	// 2. Removed invalid resolve test
-	
+
 	// 3. Invalid JSON format
 	cmd.SetArgs([]string{"--input", "invalid json!!"})
 	exitCalled = false
@@ -57,7 +57,7 @@ func TestConvertCmd(t *testing.T) {
 	if exitCalled {
 		t.Errorf("expected success, got exit %v", out)
 	}
-	
+
 	// 6. Valid JSON but XrayJSONToShareText fails (simulated by invalid json content without inbounds?)
 	// Not easy to simulate without modifying convert package, we'll try something that fails parsing in convert
 }

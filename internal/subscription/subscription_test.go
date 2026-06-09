@@ -1,6 +1,8 @@
 package subscription
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,8 +136,18 @@ func TestProcessSubscription_Expired(t *testing.T) {
 }
 
 func TestProcessSubscription_DeviceLimit(t *testing.T) {
+	var webhookFired bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		webhookFired = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
 	_, cfg, cleanup := setupProcessTestEnv(t)
 	defer cleanup()
+
+	// Inject test webhook
+	cfg.Webhooks = []string{ts.URL}
 
 	cm := NewCacheManager(cfg)
 	cm.Refresh()
@@ -166,6 +178,9 @@ func TestProcessSubscription_DeviceLimit(t *testing.T) {
 	if res1.StatusCode != 200 {
 		t.Errorf("Expected status 200 for first device, got %d", res1.StatusCode)
 	}
+	if webhookFired {
+		t.Errorf("Expected webhook NOT to fire on first device")
+	}
 
 	// Second request should be blocked (limit=1 reached)
 	res2 := Process(cm, req2)
@@ -174,6 +189,10 @@ func TestProcessSubscription_DeviceLimit(t *testing.T) {
 	}
 	if !strings.Contains(res2.Body, "Лимит устройств") {
 		t.Errorf("Expected limit exceeded body, got: %s", res2.Body)
+	}
+
+	if !webhookFired {
+		t.Errorf("Expected device.limit_reached webhook to fire")
 	}
 }
 

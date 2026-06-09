@@ -79,14 +79,12 @@ func (r *Router) registerRoutes() {
 	// ── Public routes (no API key required) ──────────────────────────────────
 	r.mux.Handle("GET /client", http.HandlerFunc(r.handleSubscription))
 	r.mux.Handle("GET /api/v1/sub", http.HandlerFunc(r.handleSubscription))
-	
+
 	// New subscription format path
 	r.mux.Handle("GET /api/v2/sub", http.HandlerFunc(r.handleSubscriptionV2))
 
 	// ── Protected routes ─────────────────────────────────────────────────────
 	protected := r.authMiddleware
-
-
 
 	// Users
 	r.mux.Handle("POST /api/v1/users/register", protected(r.handleRegisterUser))
@@ -178,5 +176,3 @@ func (r *Router) handleNotFound(w http.ResponseWriter, req *http.Request) {
 	r.logIntruder(req, "hit undefined route")
 	http.NotFound(w, req)
 }
-
-

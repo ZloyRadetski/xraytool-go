@@ -29,7 +29,7 @@ func TestSystemCmds(t *testing.T) {
 
 	exitCalled = false
 	// Test migrate failure (this covers the migration start and error handling)
-	
+
 	// Test migrate failure
 	os.WriteFile("test_xray_config.json", []byte("invalid json"), 0644)
 	exitCalled = false

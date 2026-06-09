@@ -3,12 +3,13 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/generate"
 	"xraytool/internal/templates"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 const minSubfileLen = 5 // Minimum valid subfile identifier length

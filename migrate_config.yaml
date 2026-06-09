@@ -1,3 +1,0 @@
-database:
-  driver: 'sqlite'
-  sqlite_path: 'xraytool.db'

@@ -6,11 +6,12 @@ import (
 	"sort"
 	"time"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/slave"
 	"xraytool/internal/stats"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 func statsCmd() *cobra.Command {

@@ -6,8 +6,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/subscription"
+
+	"github.com/spf13/cobra"
 )
 
 func subCmd() *cobra.Command {

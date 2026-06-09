@@ -83,7 +83,7 @@ func TestProcessSQL_Normal(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Errorf("Expected status 200, got %d. Body: %s", res.StatusCode, res.Body)
 	}
-	
+
 	if res.Body == "" {
 		t.Errorf("Expected non-empty body")
 	}

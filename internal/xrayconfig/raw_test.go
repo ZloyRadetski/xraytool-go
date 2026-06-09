@@ -154,7 +154,7 @@ func TestRawInbound_GetClients(t *testing.T) {
 	if err != nil || n != nil {
 		t.Errorf("expected nil, nil, got %v, %v", n, err)
 	}
-	
+
 	// null settings
 	ibNull := RawInbound{"settings": []byte(`null`)}
 	n2, err := ibNull.GetClients()
@@ -206,13 +206,13 @@ func TestRawInbound_SetClients(t *testing.T) {
 
 func TestRawClient_Methods(t *testing.T) {
 	c := RawClient{
-		"email":   []byte(`"test@test"`),
-		"name":    []byte(`"test-name"`),
-		"limit":   []byte(`100`),
-		"subfile": []byte(`"sub"`),
-		"expire":  []byte(`"exp"`),
-		"other":   []byte(`"o"`),
-		"bool":    []byte(`true`),
+		"email":    []byte(`"test@test"`),
+		"name":     []byte(`"test-name"`),
+		"limit":    []byte(`100`),
+		"subfile":  []byte(`"sub"`),
+		"expire":   []byte(`"exp"`),
+		"other":    []byte(`"o"`),
+		"bool":     []byte(`true`),
 		"hy2_auth": []byte(`"auth"`),
 	}
 
@@ -285,7 +285,7 @@ func TestRawClient_Methods(t *testing.T) {
 
 func TestTaggedClient(t *testing.T) {
 	tc := TaggedClient{
-		Tag: "t1",
+		Tag:    "t1",
 		Client: RawClient{"id": []byte(`"123"`)},
 	}
 	if tc.Tag != "t1" {

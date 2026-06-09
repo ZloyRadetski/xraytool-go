@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"time"
 
-	"golang.org/x/time/rate"
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 
 	"xraytool/internal/database"
@@ -640,13 +640,13 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		tags = t
 		return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
 	})
-	
+
 	if modErr != nil {
 		r.log.Error("admin block user: xrayconfig update failed", "err", modErr)
 		writeError(w, http.StatusInternalServerError, "failed to update xray config")
 		return
 	}
-	
+
 	if len(tags) > 0 {
 		apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
 		_ = apiClient.RemoveUser(sub.Email, tags)

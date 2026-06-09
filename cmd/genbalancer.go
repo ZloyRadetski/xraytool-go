@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"xraytool/internal/safeio"
 
 	"github.com/spf13/cobra"
 )
@@ -190,7 +191,7 @@ func runGenBalancer2(subURL, remarks, outputFile, upsertInto string) error {
 
 	// 6. Write standalone output (can be combined with upsert)
 	if outputFile != "" {
-		if err := os.WriteFile(outputFile, data, 0o644); err != nil {
+		if err := safeio.WriteToFile(outputFile, data, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", outputFile, err)
 		}
 		fmt.Fprintf(os.Stderr, "Written to %s\n", outputFile)
@@ -931,15 +932,9 @@ func upsertBalancerIntoSubFile(filePath, targetRemarks string, newConfigJSON []b
 	finalContent.WriteString("\n")
 
 	// Atomic write via temp file
-	tmpFile := filePath + ".tmp"
-	defer os.Remove(tmpFile)
 	finalBytes := []byte(finalContent.String())
-	if err := os.WriteFile(tmpFile, finalBytes, 0o644); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := os.Rename(tmpFile, filePath); err != nil {
-		_ = os.Remove(tmpFile)
-		return fmt.Errorf("rename to %s: %w", filePath, err)
+	if err := safeio.WriteToFile(filePath, finalBytes, 0o644); err != nil {
+		return fmt.Errorf("write final file: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Subscription file updated: %s (%d entries total)\n", filePath, len(configs))

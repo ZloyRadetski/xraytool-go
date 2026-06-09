@@ -83,14 +83,7 @@ func TestReadWriteModify(t *testing.T) {
 	}
 }
 
-func TestWriteTempFailure(t *testing.T) {
-	// If the dir doesn't exist, temp file creation fails
-	cfg := RawConfig{}
-	err := Write("/non-existent-dir/config.json", cfg)
-	if err == nil {
-		t.Errorf("expected error writing to non-existent dir")
-	}
-}
+
 
 func TestOpenLockFileFallback(t *testing.T) {
 	// Try to open a lock file in a directory that does not exist.

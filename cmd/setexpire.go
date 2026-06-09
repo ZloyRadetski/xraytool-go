@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 func setExpireCmd() *cobra.Command {

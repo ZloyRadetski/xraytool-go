@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/slave"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 // ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 		}
 		active = append(active, su)
 	}
-	
+
 	db := userdb.New(cfg.Paths.LimitedDB)
 	limited, _ := db.All()
 	sl := make([]SnapshotLimited, 0, len(limited))
@@ -161,7 +162,7 @@ func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 			Limit:   e.Limit,
 		})
 	}
-	
+
 	return Snapshot{Active: active, Limited: sl}
 }
 

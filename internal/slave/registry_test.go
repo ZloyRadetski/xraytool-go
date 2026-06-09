@@ -50,7 +50,7 @@ func TestParseServers(t *testing.T) {
 
 func TestRegistryServers(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Test missing file
 	reg := NewRegistry(filepath.Join(dir, "missing.json"), nil)
 	servers, err := reg.Servers()

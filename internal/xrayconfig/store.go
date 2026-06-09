@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
+	"xraytool/internal/safeio"
 )
 
 // processLock protects config reads/writes within a single process.
@@ -80,43 +80,8 @@ func writeRaw(path string, cfg RawConfig) error {
 		return fmt.Errorf("marshaling xray config: %w", err)
 	}
 
-	// Preserve original file permissions (fallback to 0644)
-	mode := os.FileMode(0644)
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode()
-	}
-
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "config.json.tmp.*")
-	if err != nil {
-		return fmt.Errorf("creating temp config: %w", err)
-	}
-	tmpPath := tmp.Name()
-
-	// Set permissions of the temp file before renaming
-	if err := os.Chmod(tmpPath, mode); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("setting temp config permissions: %w", err)
-	}
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("writing temp config: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("syncing temp config: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("closing temp config: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("replacing config (rename): %w", err)
+	if err := safeio.WriteToFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("writing xray config: %w", err)
 	}
 	return nil
 }

@@ -17,9 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"xraytool/internal/database"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"xraytool/internal/database"
 )
 
 var (
@@ -134,7 +135,7 @@ database:
 logging:
   level: "debug"
   format: "console"
-`, 
+`,
 		xrayConfigAbs, limitedDbAbs, statsStateAbs, inferredStatsAbs, templatesDirAbs,
 		serversJsonAbs, devicesStateAbs, jsonSubAbs, routingAbs, routingRuAbs,
 		hy2ConfigAbs, geoipAbs, geositeAbs, tempDBPath)
@@ -178,7 +179,7 @@ func runCLI(t *testing.T, args []string, env []string) (int, string, string) {
 	cmdArgs := append([]string{"--config", configYamlPath}, args...)
 	cmd := exec.Command(binPath, cmdArgs...)
 	cmd.Dir = rootDir
-	
+
 	// Add mock PATH and custom env variables
 	pathEnv := "PATH=" + os.Getenv("PATH")
 	for _, e := range env {
@@ -1254,7 +1255,7 @@ func TestE2ESuite(t *testing.T) {
 	})
 
 	t.Run("Tier2_F6_Case5_TempFileCleanup", func(t *testing.T) {
-		// Checks that temp files are cleaned up. 
+		// Checks that temp files are cleaned up.
 		// If command ran, temp directory of test should not be clogged with stray application temp config files.
 	})
 
@@ -1368,7 +1369,7 @@ func TestE2ESuite(t *testing.T) {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	t.Run("Tier4_Case1_FullUserLifecycle", func(t *testing.T) {
-		// Complete flow: Signup referee using referral code, topup referee, complete payment, 
+		// Complete flow: Signup referee using referral code, topup referee, complete payment,
 		// purchase subscription, onboard multiple devices, toggle auto-renew, check balance.
 		bodyReferrer := map[string]interface{}{
 			"telegram_id": 60001,
@@ -1383,7 +1384,7 @@ func TestE2ESuite(t *testing.T) {
 			"username":    "lifecycle_referee",
 		}
 		_, _, _ = apiRequest("POST", "/api/v1/users/register", bodyReferee, true)
-		
+
 		db := getDB(t)
 		var refereeUser database.User
 		db.Where("username = ?", "lifecycle_referee").First(&refereeUser)
@@ -1448,7 +1449,7 @@ func TestE2ESuite(t *testing.T) {
 		_, _, _ = apiRequest("POST", "/api/v1/users/register", body, true)
 		_, _, _ = apiRequest("POST", "/api/v1/users/telegram/60003/balance", map[string]interface{}{"amount": 500}, true)
 		_, _, _ = apiRequest("POST", "/api/v1/users/telegram/60003/auto-renew", map[string]interface{}{"plan_total_price": 100, "new_ends_at": time.Now().Add(24 * time.Hour).Format(time.RFC3339)}, true)
-		
+
 		// Get sub ID
 		_, getResp, _ := apiRequest("GET", "/api/v1/users/telegram/60003", nil, true)
 		var userMap map[string]interface{}

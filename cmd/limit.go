@@ -3,10 +3,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 // rmUserCmd and limitCmd share the same core logic; the difference is whether

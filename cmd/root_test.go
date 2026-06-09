@@ -33,7 +33,7 @@ func TestRoot_LoadConfig(t *testing.T) {
 
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
-	
+
 	// Test skip
 	os.Args = []string{"xraytool"}
 	loadConfig()

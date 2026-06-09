@@ -5,9 +5,10 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/templates"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 // updateXrayCmd downloads the latest xray-core binary.

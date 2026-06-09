@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"xraytool/internal/safeio"
 )
 
 // ---------------------------------------------------------------------------
@@ -130,13 +131,8 @@ func Save(path string, s *State) error {
 	if err != nil {
 		return fmt.Errorf("marshaling stats: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("writing stats tmp: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("replacing stats file: %w", err)
+	if err := safeio.WriteToFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("writing stats file: %w", err)
 	}
 	return nil
 }

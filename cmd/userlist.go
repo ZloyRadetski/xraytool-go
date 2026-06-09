@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayconfig"
+
+	"github.com/spf13/cobra"
 )
 
 func userListCmd() *cobra.Command {

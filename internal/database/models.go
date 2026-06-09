@@ -26,7 +26,7 @@ type User struct {
 	// ReferredBy is the ID of the user who referred this user (nullable FK → User.ID).
 	ReferredBy *string `gorm:"type:text"`
 	// Metadata stores platform-specific data as a JSON object.
-	Metadata  Metadata  `gorm:"serializer:json;type:text"`
+	Metadata  Metadata `gorm:"serializer:json;type:text"`
 	CreatedAt time.Time
 }
 
@@ -46,12 +46,12 @@ type Subscription struct {
 	// MaxDevices is how many devices can simultaneously use this subscription.
 	MaxDevices int `gorm:"default:3;not null"`
 	// StartsAt and EndsAt define the validity window (nullable for indefinite).
-	StartsAt  *time.Time
-	EndsAt    *time.Time
+	StartsAt *time.Time
+	EndsAt   *time.Time
 	// AutoRenew indicates whether to automatically extend the subscription.
 	AutoRenew bool `gorm:"default:false;not null"`
 	// Metadata stores extra data (plan name, coupon, etc.).
-	Metadata  Metadata  `gorm:"serializer:json;type:text"`
+	Metadata  Metadata `gorm:"serializer:json;type:text"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -59,7 +59,7 @@ type Subscription struct {
 // Device tracks individual client devices that have accessed a subscription.
 type Device struct {
 	// ID is an auto-increment integer primary key.
-	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	ID int64 `gorm:"primaryKey;autoIncrement"`
 	// SubscriptionID links this device to a Subscription.
 	SubscriptionID string `gorm:"type:text;not null;index"`
 	// HWID is a hardware fingerprint hash supplied by the client.
@@ -70,7 +70,7 @@ type Device struct {
 	VerOS     string `gorm:"type:text"`
 	UserAgent string `gorm:"type:text"`
 	// RequestCount is incremented each time this device fetches a subscription.
-	RequestCount int       `gorm:"default:1;not null"`
+	RequestCount int `gorm:"default:1;not null"`
 	FirstSeen    time.Time
 	LastSeen     time.Time
 }
@@ -82,7 +82,7 @@ type Payment struct {
 	// UserID is the payer's UUID (FK → User.ID).
 	UserID string `gorm:"type:text;not null;index"`
 	// Amount is the payment value in integer units (kopecks, etc.).
-	Amount int    `gorm:"not null"`
+	Amount int `gorm:"not null"`
 	// Status is the payment state: "pending_card", "completed", "canceled", etc.
 	Status string `gorm:"type:text;not null"`
 	// PaymentType describes what was purchased: "subscription", "device_slot", etc.
@@ -90,7 +90,7 @@ type Payment struct {
 	// Method is the payment provider/method: "platega", "cash", "transfer", "sbp".
 	Method string `gorm:"type:text"`
 	// ExternalID is the provider's transaction reference (unique, nullable for manual payments).
-	ExternalID string   `gorm:"type:text;uniqueIndex"`
+	ExternalID string `gorm:"type:text;uniqueIndex"`
 	// CustomData stores provider-specific response fields.
 	CustomData Metadata `gorm:"serializer:json;type:text"`
 	CreatedAt  time.Time
@@ -107,14 +107,14 @@ type ReferralReward struct {
 	// PaymentID is the triggering payment's ID.
 	PaymentID int64 `gorm:"not null;index"`
 	// Amount is the reward value credited to ReferrerID.
-	Amount    int `gorm:"not null"`
+	Amount int `gorm:"not null"`
 	// Date of actual issuance/award.
 	CreatedAt time.Time
 }
 
 // SubscriptionNotification records that a specific webhook warning was sent for a subscription.
 type SubscriptionNotification struct {
-	SubscriptionID string    `gorm:"primaryKey;type:text"`
-	WarningLevel   string    `gorm:"primaryKey;type:text"`
+	SubscriptionID string `gorm:"primaryKey;type:text"`
+	WarningLevel   string `gorm:"primaryKey;type:text"`
 	SentAt         time.Time
 }

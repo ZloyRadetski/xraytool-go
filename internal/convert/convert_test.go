@@ -285,7 +285,7 @@ func TestTrimVMessQRCodePayload(t *testing.T) {
 	if _, ok := trimVMessQRCodePayload(b64 + "==padding"); !ok {
 		t.Error("expected true")
 	}
-	
+
 	if _, ok := trimVMessQRCodePayload(b64 + "=padding"); !ok {
 		t.Error("expected true")
 	}
@@ -316,17 +316,17 @@ func TestIsVMessQRCodeLink(t *testing.T) {
 func TestNormalizeVMessQRCodeLink(t *testing.T) {
 	validJSON := `{"add":"1.1.1.1","id":"uuid","port":"443"}`
 	b64 := base64.StdEncoding.EncodeToString([]byte(validJSON))
-	
-	if normalizeVMessQRCodeLink("vmess://" + b64) != "vmess://" + b64 {
+
+	if normalizeVMessQRCodeLink("vmess://"+b64) != "vmess://"+b64 {
 		t.Error("expected no change")
 	}
 
-	if normalizeVMessQRCodeLink("vless://" + b64) != "vless://" + b64 {
+	if normalizeVMessQRCodeLink("vless://"+b64) != "vless://"+b64 {
 		t.Error("expected no change")
 	}
 
 	// with padding
-	if normalizeVMessQRCodeLink("vmess://" + b64 + "==suffix") != "vmess://" + b64 {
+	if normalizeVMessQRCodeLink("vmess://"+b64+"==suffix") != "vmess://"+b64 {
 		t.Error("expected trimmed")
 	}
 }
@@ -542,8 +542,8 @@ func TestNormalizeOutboundSettingsForShareLink(t *testing.T) {
 	settingsServer := map[string]any{
 		"servers": []any{
 			map[string]any{
-				"address": "ss.com",
-				"method": "aes",
+				"address":  "ss.com",
+				"method":   "aes",
 				"password": "pass",
 			},
 		},
@@ -559,15 +559,15 @@ func TestNormalizeVNextSettingsForShareLink(t *testing.T) {
 		"vnext": []any{
 			map[string]any{
 				"address": "server.com",
-				"port": 443,
+				"port":    443,
 				"users": []any{
 					map[string]any{
-						"id": "uuid",
-						"level": 0,
-						"email": "a@b.com",
-						"flow": "xtls-rprx-vision",
+						"id":         "uuid",
+						"level":      0,
+						"email":      "a@b.com",
+						"flow":       "xtls-rprx-vision",
 						"encryption": "none",
-						"security": "auto",
+						"security":   "auto",
 					},
 				},
 			},
@@ -615,10 +615,10 @@ func TestNormalizeServerSettingsForShareLink(t *testing.T) {
 	settings := map[string]any{
 		"servers": []any{
 			map[string]any{
-				"address": "t.com",
-				"port": 443,
+				"address":  "t.com",
+				"port":     443,
 				"password": "pass",
-				"flow": "xtls",
+				"flow":     "xtls",
 			},
 		},
 	}
@@ -867,7 +867,7 @@ func TestReadDictionaryFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "words")
 	os.WriteFile(path, []byte("valid\ninvalid123\ntoolongwordtoolongword\n"), 0644)
-	
+
 	seen := make(map[string]struct{})
 	err := readDictionaryFile(path, seen)
 	if err != nil {
@@ -885,4 +885,3 @@ func TestReadDictionaryFile(t *testing.T) {
 		t.Error("expected err on missing file")
 	}
 }
-

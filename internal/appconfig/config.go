@@ -13,16 +13,16 @@ import (
 
 // Config is the top-level xraytool configuration.
 type Config struct {
-	Mode     string       `yaml:"mode"` // "master" or "slave"
-	Server   ServerConf   `yaml:"server"`
-	Paths    PathsConf    `yaml:"paths"`
-	Xray     XrayConf     `yaml:"xray"`
-	Stats    StatsConf    `yaml:"stats"`
-	SlaveAPI SlaveAPIConf `yaml:"slave_api"`
-	Ports    PortsConf    `yaml:"ports"`
-	Logging  LoggingConf  `yaml:"logging"`
+	Mode          string           `yaml:"mode"` // "master" or "slave"
+	Server        ServerConf       `yaml:"server"`
+	Paths         PathsConf        `yaml:"paths"`
+	Xray          XrayConf         `yaml:"xray"`
+	Stats         StatsConf        `yaml:"stats"`
+	SlaveAPI      SlaveAPIConf     `yaml:"slave_api"`
+	Ports         PortsConf        `yaml:"ports"`
+	Logging       LoggingConf      `yaml:"logging"`
 	Webhooks      []string         `yaml:"webhooks"`
-	Worker   WorkerConf   `yaml:"worker"`
+	Worker        WorkerConf       `yaml:"worker"`
 	Database      DatabaseConf     `yaml:"database"`
 	PlategaSecret string           `yaml:"platega_secret"`
 	Subscription  SubscriptionConf `yaml:"subscription"`

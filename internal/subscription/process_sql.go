@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm"
 	"xraytool/internal/convert"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
+
+	"gorm.io/gorm"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -142,21 +143,21 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 			// SQL-based Device tracking
 
 			now := time.Now()
-			
+
 			err := db.Transaction(func(tx *gorm.DB) error {
 				var device database.Device
 				err := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).First(&device).Error
-				
+
 				if err == gorm.ErrRecordNotFound {
 					// Check device limit before inserting
 					var currentCount int64
 					tx.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&currentCount)
-					
+
 					if currentCount >= int64(deviceLimit) {
 						deviceLimitReached = true
 						return nil // Don't error out, just don't insert
 					}
-					
+
 					newDevice := database.Device{
 						SubscriptionID: sub.ID,
 						HWID:           hwid,
@@ -199,7 +200,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 					"ver_os":       verOs,
 					"user_agent":   req.UserAgent,
 				}
-				
+
 				var userMetadata map[string]interface{}
 				if user.Metadata != nil {
 					userMetadata = user.Metadata

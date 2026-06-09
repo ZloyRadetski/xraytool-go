@@ -21,7 +21,7 @@ func TestPermissions(t *testing.T) {
 	os.WriteFile("test_xray_config.json", []byte{}, 0644)
 	os.WriteFile("test_limited.db", []byte{}, 0644)
 	os.MkdirAll("test_templates", 0755)
-	
+
 	// Test checkPath
 	// checkPath is private, but checkAndReportPermissions calls it.
 	out = captureOutput(func() { checkAndReportPermissions() })

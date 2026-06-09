@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"xraytool/internal/logger"
+	"xraytool/internal/safeio"
 )
 
 // DeviceItem struct exists in subscription.go, but we will redefine or use the existing one.
@@ -103,8 +104,6 @@ func (c *CacheManager) FlushDeviceState() {
 	}
 
 	resolvedPath := resolveDeviceStatePath(c.cfg.Paths.DevicesState)
-	tmpPath := resolvedPath + ".tmp"
-
 	// Lock the file for safe writing across processes
 	lf, err := os.OpenFile(resolvedPath+".lock", os.O_CREATE|os.O_RDWR, 0644)
 	if err == nil {
@@ -115,18 +114,11 @@ func (c *CacheManager) FlushDeviceState() {
 		}()
 	}
 
-	if err := os.WriteFile(tmpPath, payload, 0644); err != nil {
+	if err := safeio.WriteToFile(resolvedPath, payload, 0644); err != nil {
 		c.deviceStateMu.Lock()
 		c.deviceStateDirty = true
 		c.deviceStateMu.Unlock()
-		logger.Errorf("[Cache] writing device state to %q: %v", tmpPath, err)
-		return
-	}
-	if err := os.Rename(tmpPath, resolvedPath); err != nil {
-		c.deviceStateMu.Lock()
-		c.deviceStateDirty = true
-		c.deviceStateMu.Unlock()
-		logger.Errorf("[Cache] renaming device state from %q to %q: %v", tmpPath, resolvedPath, err)
+		logger.Errorf("[Cache] writing device state to %q: %v", resolvedPath, err)
 		return
 	}
 

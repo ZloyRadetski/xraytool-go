@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"xraytool/internal/convert"
+
+	"github.com/spf13/cobra"
 )
 
 func convertCmd() *cobra.Command {

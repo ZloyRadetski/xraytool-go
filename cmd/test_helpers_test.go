@@ -26,7 +26,7 @@ func setupTest(t *testing.T) {
 	testingExitCode = 0
 	currentGOOS = "linux"
 	geteuid = func() int { return 0 }
-	
+
 	// Create a dummy config
 	cfg = &appconfig.Config{
 		Server: appconfig.ServerConf{
@@ -40,11 +40,11 @@ func setupTest(t *testing.T) {
 			LimitedDB:    "test_limited.db",
 			TemplatesDir: "test_templates",
 			ServersJSON:  "test_servers.json",
-			GeoIPDat:     "test_geoip.dat",
-			GeositeDat:   "test_geosite.dat",
+			GeoIPDat:     "../tests/test_geoip.dat",
+			GeositeDat:   "../tests/test_geosite.dat",
 		},
 	}
-	
+
 	// Create test_config.yaml
 	yamlData, _ := yaml.Marshal(cfg)
 	os.WriteFile("test_config.yaml", yamlData, 0644)
