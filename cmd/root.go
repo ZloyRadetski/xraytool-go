@@ -93,10 +93,16 @@ func loadConfig() {
 		fmt.Fprintf(os.Stderr, "WARN|failed to initialize logger: %v\n", err)
 	}
 
+	isServerOrMigrate := false
+	if len(os.Args) > 1 && (os.Args[1] == "server" || os.Args[1] == "migrate") {
+		isServerOrMigrate = true
+	}
+
 	if err := database.Init(database.Config{
 		Driver:     cfg.Database.Driver,
 		DSN:        cfg.Database.DSN,
 		SQLitePath: cfg.Database.SQLitePath,
+		Silent:     !isServerOrMigrate,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "WARN|failed to initialize database: %v\n", err)
 	}

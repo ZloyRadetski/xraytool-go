@@ -68,6 +68,7 @@ func sqlCreateUserIfNotExist(email, xrayUUID, expire string, limit int, subfile 
 			db.Create(&database.User{
 				ID:        userID,
 				Username:  email,
+				RefCode:   "ref_" + generate.Secret(8),
 				CreatedAt: time.Now(),
 			})
 			db.Create(&database.Subscription{

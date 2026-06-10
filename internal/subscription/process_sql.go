@@ -20,7 +20,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	cfg := cm.cfg
 
 	// 1. Resolve Client ID from request (xray_uuid)
-	clientId, _ := resolveClientID(req)
+	clientId, _ := ResolveClientID(req)
 	if clientId == "" {
 		return failResponse(404, "Invalid client id")
 	}

@@ -32,6 +32,8 @@ type Config struct {
 	// SQLitePath is the file path (used when Driver == "sqlite").
 	// Defaults to /etc/xraytool/xraytool.db if empty.
 	SQLitePath string
+	// Silent disables GORM logging. Useful for CLI tools.
+	Silent bool
 }
 
 // Init opens the database connection and runs AutoMigrate for all models.
@@ -50,9 +52,14 @@ func Init(cfg Config) error {
 			return
 		}
 
+		logMode := logger.Warn
+		if cfg.Silent {
+			logMode = logger.Silent
+		}
+		
 		gormCfg := &gorm.Config{
 			// Warn on slow queries; adjust to logger.Info for development verbosity.
-			Logger: logger.Default.LogMode(logger.Warn),
+			Logger: logger.Default.LogMode(logMode),
 		}
 
 		conn, err := gorm.Open(dialector, gormCfg)

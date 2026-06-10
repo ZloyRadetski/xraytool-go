@@ -204,6 +204,14 @@ func startServerCmd() *cobra.Command {
 				// 5. Execute subscription process directly in memory (No exec.Command)
 				subRes := subscription.Process(cacheManager, subReq)
 
+				subID := subRes.SubID
+				if subID == "" {
+					_, subID = subscription.ResolveClientID(subReq)
+					if subID == "" {
+						subID = "unknown"
+					}
+				}
+
 				// 6. Send headers and write body
 				for k, v := range subRes.Headers {
 					w.Header().Set(k, v)
@@ -213,11 +221,15 @@ func startServerCmd() *cobra.Command {
 					logger.Errorf("Ошибка записи ответа подписки: %v", err)
 				}
 				if isBot && subRes.StatusCode < 400 {
-					logger.Debugf("Successfully served subscription to %s, status: %d", remoteAddr, subRes.StatusCode)
+					logger.Debugf("Successfully served subscription to %s, sub_id: %s, status: %d", remoteAddr, subID, subRes.StatusCode)
 				} else if subRes.StatusCode >= 400 {
-					logger.Warnf("Failed to serve subscription to %s, status: %d", remoteAddr, subRes.StatusCode)
+					reason := subRes.ErrorReason
+					if reason == "" {
+						reason = "unknown reason"
+					}
+					logger.Warnf("Failed to serve subscription to %s, sub_id: %s, status: %d, reason: %s", remoteAddr, subID, subRes.StatusCode, reason)
 				} else {
-					logger.Infof("Successfully served subscription to %s, status: %d", remoteAddr, subRes.StatusCode)
+					logger.Infof("Successfully served subscription to %s, sub_id: %s, status: %d", remoteAddr, subID, subRes.StatusCode)
 				}
 			}
 
@@ -546,11 +558,14 @@ func startServerCmd() *cobra.Command {
 				mux.Handle("/api/", apiRouter)
 				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
 
-				// Start the background expiry worker
-				apiClient := xrayapi.New(cfg.Xray.APIAddr)
-				wkr := worker.NewExpiryWorker(database.DB(), cfg, events.NewDispatcher(cfg), apiClient, slog.Default())
-				go wkr.Run(context.Background())
-				logger.Infof("[WORKER] Background Expiry Worker started with interval %s", cfg.Worker.ExpiryInterval)
+				if cfg.Worker.Enabled {
+					apiClient := xrayapi.New(cfg.Xray.APIAddr)
+					wkr := worker.NewExpiryWorker(database.DB(), cfg, events.NewDispatcher(cfg), apiClient, slog.Default())
+					go wkr.Run(context.Background())
+					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", cfg.Worker.ExpiryInterval)
+				} else {
+					logger.Infof("[WORKER] Background Expiry Worker is DISABLED in config")
+				}
 			} else {
 				logger.Warnf("[API] REST API v1 handlers NOT mounted (database unavailable)")
 			}

@@ -178,13 +178,26 @@ func checkPath(name, path, needRoot, needWeb string, isDir bool, webUID, webGID 
 				_, rootW := checkUnixAccess(pInfo, 0, 0)
 				_, webW := checkUnixAccess(pInfo, webUID, webGID)
 
+				rootOk, webOk := true, true
+
 				if needRoot == "RW" && !rootW {
 					check.StatusRoot = "Parent No Write"
 					check.FixCmds = append(check.FixCmds, "sudo chmod 755 "+filepath.ToSlash(parent))
+					rootOk = false
 				}
 				if needWeb == "RW" && !webW {
 					check.StatusWeb = "Parent No Write"
 					check.FixCmds = append(check.FixCmds, "sudo chown :"+webUser+" "+filepath.ToSlash(parent), "sudo chmod 775 "+filepath.ToSlash(parent))
+					webOk = false
+				}
+
+				if rootOk {
+					check.StatusRoot = "OK"
+				}
+				if webOk && needWeb != "-" {
+					check.StatusWeb = "OK"
+				} else if needWeb == "-" {
+					check.StatusWeb = "OK" // Just clear the "Missing" text
 				}
 			}
 			return check

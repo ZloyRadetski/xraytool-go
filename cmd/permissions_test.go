@@ -10,11 +10,11 @@ func TestPermissions(t *testing.T) {
 	setupTest(t)
 	defer teardownTest()
 
-	// It checks paths from config. We will let it check the test paths.
-	// Because test paths do not exist, it should report warnings.
+	// We'll check output. With our new logic, if the files are missing
+	// but the parent directory (current dir) is writable, it should not report warnings for them.
 	out := captureOutput(func() { checkAndReportPermissions() })
-	if !strings.Contains(out, "WARNING:") {
-		t.Errorf("expected warnings, got %v", out)
+	if strings.Contains(out, "Missing") && !strings.Contains(out, "OK") {
+		t.Errorf("expected 'OK' or nothing for missing files in writable dir, got %v", out)
 	}
 
 	// Create paths so they exist

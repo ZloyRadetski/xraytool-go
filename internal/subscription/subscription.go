@@ -38,9 +38,11 @@ type Request struct {
 
 // Response is the output containing HTTP headers and body sent back to PHP.
 type Response struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
+	StatusCode  int               `json:"status_code"`
+	Headers     map[string]string `json:"headers"`
+	Body        string            `json:"body"`
+	ErrorReason string            `json:"-"` // Internal use for logging
+	SubID       string            `json:"-"` // Extracted subfile/ID
 }
 
 // ActiveUser represents merged client data from active config.
@@ -104,7 +106,7 @@ type DeviceItem struct {
 func Process(cm *CacheManager, req *Request) *Response {
 	cfg := cm.cfg
 	// 1. Resolve Client ID from request
-	clientId, filename := resolveClientID(req)
+	clientId, filename := ResolveClientID(req)
 	if clientId == "" || filename == "" {
 		return failResponse(404, "Invalid client id")
 	}
@@ -412,7 +414,8 @@ func failResponse(code int, msg string) *Response {
 		Headers: map[string]string{
 			"Content-Type": "text/plain; charset=utf-8",
 		},
-		Body: msg,
+		Body:        msg,
+		ErrorReason: msg,
 	}
 }
 
@@ -434,7 +437,7 @@ func normalizeSubfileToID(s string) string {
 	return strings.ToLower(sb.String())
 }
 
-func resolveClientID(req *Request) (string, string) {
+func ResolveClientID(req *Request) (string, string) {
 	if id, ok := req.Query["id"]; ok && id != "" {
 		id = normalizeClientIDValue(id)
 		if id != "" {

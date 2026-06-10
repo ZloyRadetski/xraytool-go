@@ -30,6 +30,7 @@ type Config struct {
 
 // WorkerConf holds background worker settings.
 type WorkerConf struct {
+	Enabled            bool     `yaml:"enabled"`             // defaults to true
 	ExpiryInterval     string   `yaml:"expiry_interval"`     // e.g., "5m"
 	ExpirationWarnings []string `yaml:"expiration_warnings"` // e.g., ["72h", "24h", "3h", "1h"]
 }
@@ -165,6 +166,7 @@ func defaults() *Config {
 		},
 		Webhooks: []string{},
 		Worker: WorkerConf{
+			Enabled:            true,
 			ExpiryInterval:     "5m",
 			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
 		},
@@ -319,6 +321,8 @@ subscription:
       - "👉 @torvaldsvpnbot"
 
 worker:
+  # Enable or disable the background expiry worker
+  enabled: true
   # How often the worker checks the database for expired users and warnings
   expiry_interval: "5m"
   # Thresholds for expiration warnings sent to the client app
