@@ -79,7 +79,6 @@ type PathsConf struct {
 	LimitedDB     string `yaml:"limited_db"`
 	StatsState    string `yaml:"stats_state"`
 	InferredStats string `yaml:"inferred_stats"`
-	TemplatesDir  string `yaml:"templates_dir"`
 	ServersJSON   string `yaml:"servers_json"`
 	DevicesState  string `yaml:"devices_state"`
 	// JSONSubscriptionTemplate is the path to the main (all-protocols) subscription txt file.
@@ -135,7 +134,6 @@ func defaults() *Config {
 			LimitedDB:                "/etc/xraytool/limited_users.db",
 			StatsState:               "/etc/xraytool/traffic_stats_state.json",
 			InferredStats:            "/etc/xraytool/inferred_traffic.json",
-			TemplatesDir:             "/etc/xraytool/inbound-client-templates",
 			ServersJSON:              "/etc/xraytool/servers.json",
 			DevicesState:             "/etc/xraytool/devices_state.json",
 			JSONSubscriptionTemplate: "/etc/xraytool/configs.txt",
@@ -228,10 +226,6 @@ paths:
 
   # JSON file for inferred/analyzer traffic stats
   inferred_stats: "/etc/xraytool/inferred_traffic.json"
-
-  # Directory with per-inbound client templates (one file per inbound tag)
-  # Example: /etc/xraytool/inbound-client-templates/reality-in-443.txt
-  templates_dir: "/etc/xraytool/inbound-client-templates"
 
   # JSON file listing slave servers (required only when mode=master)
   servers_json: "/etc/xraytool/servers.json"
@@ -392,9 +386,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Paths.InferredStats == "" {
 		cfg.Paths.InferredStats = defs.Paths.InferredStats
-	}
-	if cfg.Paths.TemplatesDir == "" {
-		cfg.Paths.TemplatesDir = defs.Paths.TemplatesDir
 	}
 	if cfg.Paths.ServersJSON == "" {
 		cfg.Paths.ServersJSON = defs.Paths.ServersJSON

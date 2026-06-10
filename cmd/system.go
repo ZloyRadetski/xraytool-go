@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 
-	"xraytool/internal/templates"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
@@ -87,10 +86,6 @@ func migrateCmd() *cobra.Command {
 				}
 				fmt.Printf("[INFO] Found %d users. Cleaning config…\n", len(users))
 
-				// Validate templates exist for all inbounds.
-				if err := templates.Validate(cfg.Paths.TemplatesDir, xrayCfg); err != nil {
-					return err
-				}
 
 				// Re-apply all users: remove each user and re-add using current template.
 				// This strips any legacy fields.
@@ -102,8 +97,7 @@ func migrateCmd() *cobra.Command {
 
 					authVal := u.GetString("auth")
 
-					// Build params from the existing config values.
-					params := templates.ClientParams{
+					params := xrayconfig.ClientParams{
 						Email:   email,
 						UUID:    u.GetString("id"),
 						Auth:    authVal,
@@ -120,8 +114,7 @@ func migrateCmd() *cobra.Command {
 						continue
 					}
 
-					// Re-add using fresh template.
-					payload, err := templates.BuildForAllInbounds(cfg.Paths.TemplatesDir, xrayCfg, params)
+					payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 					if err != nil {
 						fmt.Printf("  [WARN] Template build failed for %s: %v\n", email, err)
 						continue

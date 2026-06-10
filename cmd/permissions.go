@@ -82,7 +82,6 @@ func checkAndReportPermissions() {
 			{"Inferred stats", localCfg.Paths.InferredStats, "RW", "R", false},
 			{"Stats state file", localCfg.Paths.StatsState, "RW", "-", false},
 			{"Servers JSON file", localCfg.Paths.ServersJSON, "RW", "-", false},
-			{"Templates directory", localCfg.Paths.TemplatesDir, "RW", "R", true},
 			{"Devices state file", localCfg.Paths.DevicesState, "RW", "RW", false},
 			{"Subscription template", resolvePath(localCfg.Paths.JSONSubscriptionTemplate, "configs.txt"), "RW", "R", false},
 			{"Routing template", resolvePath(localCfg.Paths.RoutingTemplate, "routing.json"), "RW", "R", false},

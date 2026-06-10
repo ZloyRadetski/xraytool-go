@@ -142,7 +142,6 @@ paths:
   limited_db: ""
   stats_state: ""
   inferred_stats: ""
-  templates_dir: ""
   servers_json: ""
   devices_state: ""
   json_subscription_template: ""
@@ -183,7 +182,6 @@ subscription:
 		cfg.Ports.APIServer != defs.Ports.APIServer ||
 		cfg.Logging.Level != defs.Logging.Level ||
 		cfg.Paths.InferredStats != defs.Paths.InferredStats ||
-		cfg.Paths.TemplatesDir != defs.Paths.TemplatesDir ||
 		cfg.Paths.ServersJSON != defs.Paths.ServersJSON ||
 		cfg.Paths.DevicesState != defs.Paths.DevicesState ||
 		cfg.Paths.RoutingTemplate != defs.Paths.RoutingTemplate ||

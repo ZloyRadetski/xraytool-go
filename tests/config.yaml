@@ -9,7 +9,6 @@ paths:
   limited_db: "tests/limited_users.db"
   stats_state: "tests/traffic_stats_state.json"
   inferred_stats: "tests/inferred_traffic.json"
-  templates_dir: "tests/inbound-client-templates"
   servers_json: "tests/servers.json"
   devices_state: "tests/devices_state.json"
   json_subscription_template: "tests/configs.txt"

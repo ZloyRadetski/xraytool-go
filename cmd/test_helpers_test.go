@@ -38,7 +38,6 @@ func setupTest(t *testing.T) {
 		Paths: appconfig.PathsConf{
 			XrayConfig:   "test_xray_config.json",
 			LimitedDB:    "test_limited.db",
-			TemplatesDir: "test_templates",
 			ServersJSON:  "test_servers.json",
 			GeoIPDat:     "../tests/test_geoip.dat",
 			GeositeDat:   "../tests/test_geosite.dat",

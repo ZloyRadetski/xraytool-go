@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"xraytool/internal/generate"
-	"xraytool/internal/templates"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
@@ -62,9 +61,6 @@ func newUserCmd() *cobra.Command {
 				p.Error("user already exists")
 			}
 
-			if err := templates.Validate(cfg.Paths.TemplatesDir, xrayCfg); err != nil {
-				p.Errorf("template validation: %v", err)
-			}
 
 			// --- Generate or use forced values ---
 			uuid := forcedUUID
@@ -90,7 +86,7 @@ func newUserCmd() *cobra.Command {
 				p.Errorf("%v", err)
 			}
 
-			params := templates.ClientParams{
+			params := xrayconfig.ClientParams{
 				Email:   email,
 				UUID:    uuid,
 				Auth:    auth,
@@ -99,7 +95,7 @@ func newUserCmd() *cobra.Command {
 				Limit:   limitPtr,
 			}
 
-			payload, err := templates.BuildForAllInbounds(cfg.Paths.TemplatesDir, xrayCfg, params)
+			payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 			if err != nil {
 				p.Errorf("building client payload: %v", err)
 			}
@@ -232,9 +228,7 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("user already exists")
 	}
 
-	if err := templates.Validate(cfg.Paths.TemplatesDir, xrayCfg); err != nil {
-		return "", fmt.Errorf("template validation: %v", err)
-	}
+
 
 	uuid := forcedUUID
 	if uuid == "" {
@@ -259,7 +253,7 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 		return "", err
 	}
 
-	params := templates.ClientParams{
+	params := xrayconfig.ClientParams{
 		Email:   email,
 		UUID:    uuid,
 		Auth:    auth,
@@ -268,7 +262,7 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 		Limit:   limitPtr,
 	}
 
-	clientsPayload, err := templates.BuildForAllInbounds(cfg.Paths.TemplatesDir, xrayCfg, params)
+	clientsPayload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 	if err != nil {
 		return "", fmt.Errorf("building client payload: %v", err)
 	}

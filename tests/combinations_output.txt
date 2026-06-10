@@ -1,0 +1,1380 @@
+vless tcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless tcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "flow": "xtls-rprx-vision",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless tcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "flow": "xtls-rprx-vision",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless tcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless kcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless kcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless kcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless kcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless ws none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless ws tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless ws reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless ws default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless http none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless http tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless http reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless http default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless quic none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless quic tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless quic reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless quic default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless grpc none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless grpc tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless grpc reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless grpc default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless xhttp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless xhttp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless xhttp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless xhttp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless default(tcp) none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless default(tcp) tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "flow": "xtls-rprx-vision",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless default(tcp) reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "flow": "xtls-rprx-vision",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vless default(tcp) default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess tcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess tcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess tcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess tcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess kcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess kcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess kcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess kcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess ws none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess ws tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess ws reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess ws default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess http none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess http tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess http reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess http default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess quic none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess quic tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess quic reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess quic default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess grpc none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess grpc tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess grpc reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess grpc default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess xhttp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess xhttp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess xhttp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess xhttp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess default(tcp) none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess default(tcp) tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess default(tcp) reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+vmess default(tcp) default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "subfile": "sub12345"
+}
+
+trojan tcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan tcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan tcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan tcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan kcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan kcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan kcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan kcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan ws none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan ws tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan ws reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan ws default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan http none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan http tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan http reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan http default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan quic none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan quic tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan quic reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan quic default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan grpc none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan grpc tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan grpc reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan grpc default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan xhttp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan xhttp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan xhttp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan xhttp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan default(tcp) none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan default(tcp) tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan default(tcp) reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+trojan default(tcp) default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks tcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks tcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks tcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks tcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks kcp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks kcp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks kcp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks kcp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks ws none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks ws tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks ws reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks ws default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks http none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks http tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks http reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks http default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks quic none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks quic tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks quic reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks quic default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks grpc none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks grpc tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks grpc reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks grpc default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks xhttp none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks xhttp tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks xhttp reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks xhttp default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks default(tcp) none:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks default(tcp) tls:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks default(tcp) reality:
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+shadowsocks default(tcp) default(none):
+{
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "password": "my-secret-password",
+  "subfile": "sub12345"
+}
+
+hysteria2 tcp none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 tcp tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 tcp reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 tcp default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 kcp none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 kcp tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 kcp reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 kcp default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 ws none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 ws tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 ws reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 ws default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 http none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 http tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 http reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 http default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 quic none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 quic tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 quic reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 quic default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 grpc none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 grpc tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 grpc reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 grpc default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 xhttp none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 xhttp tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 xhttp reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 xhttp default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 default(tcp) none:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 default(tcp) tls:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 default(tcp) reality:
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+hysteria2 default(tcp) default(none):
+{
+  "auth": "my-secret-password",
+  "email": "test@example.com",
+  "expire": "01.01.2030",
+  "subfile": "sub12345"
+}
+
+wireguard tcp none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard tcp tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard tcp reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard tcp default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard kcp none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard kcp tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard kcp reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard kcp default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard ws none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard ws tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard ws reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard ws default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard http none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard http tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard http reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard http default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard quic none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard quic tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard quic reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard quic default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard grpc none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard grpc tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard grpc reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard grpc default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard xhttp none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard xhttp tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard xhttp reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard xhttp default(none):
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard default(tcp) none:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard default(tcp) tls:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard default(tcp) reality:
+ERROR: unsupported protocol for user generation: wireguard
+
+wireguard default(tcp) default(none):
+ERROR: unsupported protocol for user generation: wireguard
+

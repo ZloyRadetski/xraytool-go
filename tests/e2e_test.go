@@ -99,7 +99,6 @@ func TestMain(m *testing.M) {
 	limitedDbAbs := filepath.Join(rootDir, "tests", "limited_users.db")
 	statsStateAbs := filepath.Join(rootDir, "tests", "traffic_stats_state.json")
 	inferredStatsAbs := filepath.Join(rootDir, "tests", "inferred_traffic.json")
-	templatesDirAbs := filepath.Join(rootDir, "tests", "inbound-client-templates")
 	serversJsonAbs := filepath.Join(rootDir, "tests", "servers.json")
 	devicesStateAbs := filepath.Join(rootDir, "tests", "devices_state.json")
 	jsonSubAbs := filepath.Join(rootDir, "tests", "configs.txt")
@@ -118,7 +117,6 @@ paths:
   limited_db: %q
   stats_state: %q
   inferred_stats: %q
-  templates_dir: %q
   servers_json: %q
   devices_state: %q
   json_subscription_template: %q
@@ -136,7 +134,7 @@ logging:
   level: "debug"
   format: "console"
 `,
-		xrayConfigAbs, limitedDbAbs, statsStateAbs, inferredStatsAbs, templatesDirAbs,
+		xrayConfigAbs, limitedDbAbs, statsStateAbs, inferredStatsAbs,
 		serversJsonAbs, devicesStateAbs, jsonSubAbs, routingAbs, routingRuAbs,
 		hy2ConfigAbs, geoipAbs, geositeAbs, tempDBPath)
 

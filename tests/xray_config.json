@@ -167,13 +167,6 @@
             "subfile": "yjWXJZHtFdJfL6fU.txt"
           },
           {
-            "email": "testunlimit@example.com",
-            "expire": "09-07-2026",
-            "flow": "",
-            "id": "uuid123",
-            "subfile": "subfile123"
-          },
-          {
             "email": "restcliuser_1781014119599341500@example.com",
             "expire": "09-07-2026",
             "flow": "",
@@ -181,11 +174,144 @@
             "subfile": "Kv3u6CzNmsOO3Pic.txt"
           },
           {
-            "email": "restcliuser2@example.com",
-            "expire": "09-07-2026",
-            "flow": "",
+            "email": "bot_client_10003",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "22d4ef3e-6b0f-466d-b388-05067fbaaea0",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_10003",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "22d4ef3e-6b0f-466d-b388-05067fbaaea0",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_10004",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "f74af3e1-0442-4f82-8c00-cb5ad2ace2d0",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_10006",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "d6745449-7b15-4908-aef0-100e83f313cb",
+            "limit": 3
+          },
+          {
+            "email": "restcliuser_1781100591953720600@example.com",
+            "expire": "10-07-2026",
+            "flow": "xtls-rprx-vision",
             "id": "uuid-rest-cli2",
-            "subfile": "dnUKDBUh90M2B4Zw.txt"
+            "subfile": "CrQhv0actdTry3pu.txt"
+          },
+          {
+            "email": "bot_client_50004",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "d354b07e-1406-4634-a2c1-4584b33bb6a2",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_60002",
+            "expire": "10.07.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "a0ccc35c-9408-4bff-886e-8ef2cafcc342",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_60003",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "84b7a87f-a66d-42b1-aae2-e6eef2267467",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_70001",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "da592455-75e0-42e8-be98-97b211c2c012",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_10003",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "dff2f230-2bf1-4974-b790-246f2dfcf316",
+            "limit": 3
+          },
+          {
+            "email": "testunlimit@example.com",
+            "expire": "10-07-2026",
+            "flow": "xtls-rprx-vision",
+            "id": "uuid123",
+            "subfile": "subfile123"
+          },
+          {
+            "email": "bot_client_10003",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "dff2f230-2bf1-4974-b790-246f2dfcf316",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_10004",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "a6283eed-04d0-4ae9-81a0-916012712d2d",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_10006",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "986a20fb-37ad-4154-9070-6761241d9f48",
+            "limit": 3
+          },
+          {
+            "email": "restcliuser_1781103462565268100@example.com",
+            "expire": "10-07-2026",
+            "flow": "xtls-rprx-vision",
+            "id": "uuid-rest-cli2",
+            "subfile": "56VRAJeoLaVJ4TNi.txt"
+          },
+          {
+            "email": "restcliuser2@example.com",
+            "expire": "10-07-2026",
+            "flow": "xtls-rprx-vision",
+            "id": "uuid-rest-cli2",
+            "subfile": "jgqjzm91sMsxed2m.txt"
+          },
+          {
+            "email": "bot_client_50004",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "21b669b2-4297-4cea-84f7-1ab1ed6dd0f8",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_60002",
+            "expire": "10.07.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "797c0ba1-2b9c-402b-a558-5fa98b0a5610",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_60003",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "25f47ea9-0a94-47a7-8063-2db863992713",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_70001",
+            "expire": "11.06.2026",
+            "flow": "xtls-rprx-vision",
+            "id": "47171758-6e8f-4895-8633-80c8c9a45dcc",
+            "limit": 3
           }
         ],
         "decryption": "none"

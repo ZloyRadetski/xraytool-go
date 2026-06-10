@@ -19,7 +19,6 @@ import (
 
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
-	"xraytool/internal/templates"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
@@ -603,7 +602,7 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 	}
 	user.Metadata[body.Key] = body.Value
 
-	if result := db.Model(user).Update("metadata", user.Metadata); result.Error != nil {
+	if result := db.Model(user).Updates(database.User{Metadata: user.Metadata}); result.Error != nil {
 		r.log.Error("set metadata", "err", result.Error)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
@@ -894,22 +893,17 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 		expireVal = sub.EndsAt.Format("02.01.2006")
 	}
 
-	params := templates.ClientParams{
+	limitF := float64(sub.MaxDevices)
+	params := xrayconfig.ClientParams{
 		Email:   sub.Email,
 		UUID:    sub.XrayUUID,
-		Auth:    "", // Not stored in DB. Will be generated if missing, but ideally we don't break hy2
+		Auth:    "", 
 		Subfile: subfile,
 		Expire:  expireVal,
+		Limit:   &limitF,
 	}
 
-	// Try to retain existing HY2 auth if they are somehow still in config
-	if c, _ := xrayconfig.FindUser(xrayCfg, sub.Email); c != nil {
-		if a := c.GetString("auth"); a != "" {
-			params.Auth = a
-		}
-	}
-
-	payload, err := templates.BuildForAllInbounds(r.cfg.Paths.TemplatesDir, xrayCfg, params)
+	payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 	if err != nil {
 		r.log.Error("failed to build payload for unban", "err", err)
 		return

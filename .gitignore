@@ -9,6 +9,7 @@ xraytool_very_old
 build/
 
 # Тестовые бинарники
+*.lock
 *.test
 
 # Go workspace
@@ -28,3 +29,5 @@ xray_api_config.json
 # агенты и тп
 .agents/
 .antigravitycli/
+
+xray-core*/

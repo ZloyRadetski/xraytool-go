@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"xraytool/internal/generate"
-	"xraytool/internal/templates"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
@@ -137,12 +136,8 @@ func unlimitCmd() *cobra.Command {
 				auth = generate.Secret(32)
 			}
 
-			// Validate templates.
-			if err := templates.Validate(cfg.Paths.TemplatesDir, xrayCfg); err != nil {
-				p.Errorf("template validation: %v", err)
-			}
 
-			params := templates.ClientParams{
+			params := xrayconfig.ClientParams{
 				Email:   email,
 				UUID:    uuid,
 				Auth:    auth,
@@ -160,7 +155,7 @@ func unlimitCmd() *cobra.Command {
 				xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email) //nolint:errcheck
 			}
 
-			payload, err := templates.BuildForAllInbounds(cfg.Paths.TemplatesDir, xrayCfg, params)
+			payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 			if err != nil {
 				p.Errorf("building payload: %v", err)
 			}
@@ -319,11 +314,9 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		auth = generate.Secret(32)
 	}
 
-	if err := templates.Validate(cfg.Paths.TemplatesDir, xrayCfg); err != nil {
-		return "", fmt.Errorf("template validation: %v", err)
-	}
 
-	params := templates.ClientParams{
+
+	params := xrayconfig.ClientParams{
 		Email:   email,
 		UUID:    uuid,
 		Auth:    auth,
@@ -340,7 +333,7 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email) //nolint:errcheck
 	}
 
-	clientsPayload, err := templates.BuildForAllInbounds(cfg.Paths.TemplatesDir, xrayCfg, params)
+	clientsPayload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 	if err != nil {
 		return "", fmt.Errorf("building payload: %v", err)
 	}
