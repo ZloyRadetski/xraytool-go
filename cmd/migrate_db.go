@@ -61,9 +61,22 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 				return err
 			}
 
+			if err := migratePayments(srcGorm, database.DB()); err != nil {
+				fmt.Printf("[WARN] Error migrating payments: %v\n", err)
+			}
+
 			if err := migrateDevices(srcGorm, database.DB(), devicesPath); err != nil {
 				fmt.Printf("[WARN] Error migrating devices: %v\n", err)
 			}
+
+			// Cleanly close both databases to trigger SQLite WAL checkpoint!
+			if sqlDB, err := srcGorm.DB(); err == nil {
+				sqlDB.Close()
+			}
+			if sqlDB, err := database.DB().DB(); err == nil {
+				sqlDB.Close()
+			}
+
 			return nil
 		},
 	}
@@ -127,6 +140,25 @@ type legacyServer struct {
 
 func (legacyServer) TableName() string { return "server" }
 
+// legacyPayment mirrors the old payments table.
+type legacyPayment struct {
+	ID            int64  `gorm:"column:id"`
+	TgID          int64  `gorm:"column:tg_id"`
+	Status        string `gorm:"column:status"`
+	Amount        int    `gorm:"column:amount"`
+	ProofFileID   string `gorm:"column:proof_file_id"`
+	ProofFileType string `gorm:"column:proof_file_type"`
+	CreatedAt     string `gorm:"column:created_at"`
+	TargetLimit   int    `gorm:"column:target_limit"`
+	FullAmount    int    `gorm:"column:full_amount"`
+	ExternalID    string `gorm:"column:external_id"`
+	Method        string `gorm:"column:method"`
+	PaymentType   string `gorm:"column:payment_type"`
+	CustomData    string `gorm:"column:custom_data"`
+}
+
+func (legacyPayment) TableName() string { return "payments" }
+
 // ─────────────────────────────────────────────────────────────────────────────
 // migrateData is the core migration logic.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -149,6 +181,15 @@ func migrateData(srcDB *gorm.DB, dstDB *gorm.DB) error {
 	subByTgID := make(map[int64]legacySubscription, len(legacySubs))
 	for _, s := range legacySubs {
 		subByTgID[s.TgID] = s
+	}
+
+	var legacyServers []legacyServer
+	if err := srcDB.Find(&legacyServers).Error; err != nil {
+		return fmt.Errorf("reading legacy servers: %w", err)
+	}
+	serverByTgID := make(map[int64]legacyServer, len(legacyServers))
+	for _, s := range legacyServers {
+		serverByTgID[s.TgID] = s
 	}
 
 	migrated, skipped, failed := 0, 0, 0
@@ -215,6 +256,19 @@ func migrateData(srcDB *gorm.DB, dstDB *gorm.DB) error {
 				maxDevices = 3 // sane default
 			}
 
+			metadata := database.Metadata{"migrated_from": "telegram_bot"}
+			
+			// Parse legacy subfile ID from the server table Link if it exists
+			if srv, ok := serverByTgID[lu.TgID]; ok && srv.Link != "" {
+				parts := strings.Split(srv.Link, "id=")
+				if len(parts) > 1 {
+					key := strings.Split(parts[1], "&")[0]
+					if key != "" {
+						metadata["subfile"] = key
+					}
+				}
+			}
+
 			newSub := database.Subscription{
 				ID:         newSubID,
 				UserID:     newUserID,
@@ -225,7 +279,7 @@ func migrateData(srcDB *gorm.DB, dstDB *gorm.DB) error {
 				AutoRenew:  lu.AutoRenew != 0,
 				StartsAt:   startsAt,
 				EndsAt:     endsAt,
-				Metadata:   database.Metadata{"migrated_from": "telegram_bot"},
+				Metadata:   metadata,
 			}
 
 			if err := dstDB.Create(&newSub).Error; err != nil {
@@ -285,6 +339,132 @@ func parseFlexibleTimePtr(s string) *time.Time {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Payments migration
+// ─────────────────────────────────────────────────────────────────────────────
+
+func migratePayments(srcDB *gorm.DB, dstDB *gorm.DB) error {
+	var legacyPayments []legacyPayment
+	if err := srcDB.Find(&legacyPayments).Error; err != nil {
+		return fmt.Errorf("reading legacy payments: %w", err)
+	}
+
+	// Read all target users to map TgID -> UserID
+	var allUsers []database.User
+	if err := dstDB.Find(&allUsers).Error; err != nil {
+		return fmt.Errorf("reading target users: %w", err)
+	}
+	tgIDToUserID := make(map[int64]string)
+	for _, u := range allUsers {
+		if tgIDVal, ok := u.Metadata["telegram_id"]; ok {
+			if strVal, ok := tgIDVal.(string); ok {
+				var id int64
+				fmt.Sscanf(strVal, "%d", &id)
+				tgIDToUserID[id] = u.ID
+			}
+		}
+	}
+
+	// Read all target payments to ensure idempotency
+	var allPayments []database.Payment
+	if err := dstDB.Find(&allPayments).Error; err != nil {
+		return fmt.Errorf("reading target payments: %w", err)
+	}
+	migratedLegacyIDs := make(map[int64]bool)
+	existingExternalIDs := make(map[string]bool)
+	for _, p := range allPayments {
+		if p.ExternalID != nil {
+			existingExternalIDs[*p.ExternalID] = true
+		}
+		if legacyIDVal, ok := p.CustomData["legacy_id"]; ok {
+			switch v := legacyIDVal.(type) {
+			case float64:
+				migratedLegacyIDs[int64(v)] = true
+			case int64:
+				migratedLegacyIDs[v] = true
+			}
+		}
+	}
+
+	migrated, skipped, failed := 0, 0, 0
+
+	for _, lp := range legacyPayments {
+		if migratedLegacyIDs[lp.ID] {
+			skipped++
+			continue
+		}
+		if lp.ExternalID != "" && existingExternalIDs[lp.ExternalID] {
+			skipped++
+			continue
+		}
+
+		userID, ok := tgIDToUserID[lp.TgID]
+		if !ok {
+			fmt.Printf("[SKIP] Payment ID=%d tg_id=%d: User not found\n", lp.ID, lp.TgID)
+			skipped++
+			continue
+		}
+
+		customData := database.Metadata{
+			"legacy_id": lp.ID,
+		}
+		if lp.ProofFileID != "" {
+			customData["proof_file_id"] = lp.ProofFileID
+		}
+		if lp.ProofFileType != "" {
+			customData["proof_file_type"] = lp.ProofFileType
+		}
+		if lp.TargetLimit != 0 {
+			customData["target_limit"] = lp.TargetLimit
+		}
+		if lp.FullAmount != 0 {
+			customData["full_amount"] = lp.FullAmount
+		}
+		if lp.CustomData != "" {
+			var cd map[string]interface{}
+			if err := json.Unmarshal([]byte(lp.CustomData), &cd); err == nil {
+				for k, v := range cd {
+					customData[k] = v
+				}
+			} else {
+				customData["legacy_custom_data"] = lp.CustomData
+			}
+		}
+
+		var externalID *string
+		if lp.ExternalID != "" {
+			extID := lp.ExternalID
+			externalID = &extID
+		}
+
+		status := lp.Status
+		if status == "success" {
+			status = "completed"
+		}
+
+		newPayment := database.Payment{
+			UserID:      userID,
+			Amount:      lp.Amount,
+			Status:      status,
+			PaymentType: lp.PaymentType,
+			Method:      lp.Method,
+			ExternalID:  externalID,
+			CustomData:  customData,
+			CreatedAt:   parseFlexibleTime(lp.CreatedAt),
+		}
+
+		if err := dstDB.Create(&newPayment).Error; err != nil {
+			fmt.Printf("[FAIL] Payment ID=%d insert: %v\n", lp.ID, err)
+			failed++
+			continue
+		}
+		migrated++
+	}
+
+	fmt.Printf("\n=== Payments Migration complete: %d migrated, %d skipped, %d failed ===\n", migrated, skipped, failed)
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Devices migration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -295,7 +475,7 @@ type legacyDeviceState struct {
 			DeviceModel  string `json:"device_model"`
 			DeviceOS     string `json:"device_os"`
 			VerOS        string `json:"ver_os"`
-			UserAgent    string `json:"user_agent"`
+			UserAgent    string `json:"last_user_agent"`
 			RequestCount int    `json:"request_count"`
 			FirstSeen    string `json:"first_seen"`
 			LastSeen     string `json:"last_seen"`
@@ -348,17 +528,27 @@ func migrateDevices(srcDB *gorm.DB, dstDB *gorm.DB, devicesPath string) error {
 	for clientKey, clientData := range state.Clients {
 		normalizedKey := strings.ToLower(clientKey)
 		tgID, ok := keyToTgID[normalizedKey]
-		if !ok {
-			fmt.Printf("[SKIP] Could not find tg_id for clientKey=%q\n", clientKey)
-			continue
+		
+		var sub database.Subscription
+		found := false
+
+		if ok {
+			email := fmt.Sprintf("bot_client_%d", tgID)
+			if err := dstDB.Where("email = ?", email).First(&sub).Error; err == nil {
+				found = true
+			}
 		}
 
-		email := fmt.Sprintf("bot_client_%d", tgID)
+		if !found {
+			// Fallback: search by subfile directly in metadata
+			if err := dstDB.Where("json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?", clientKey, normalizedKey).First(&sub).Error; err == nil {
+				found = true
+			}
+		}
 
-		var sub database.Subscription
-		if err := dstDB.Where("email = ?", email).First(&sub).Error; err != nil {
-			fmt.Printf("[SKIP] Sub not found for email=%q\n", email)
-			continue // Subscription not found
+		if !found {
+			fmt.Printf("[SKIP] Sub not found for clientKey=%q\n", clientKey)
+			continue
 		}
 
 		for _, d := range clientData.Devices {

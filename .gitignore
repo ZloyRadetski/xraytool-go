@@ -11,6 +11,11 @@ build/
 # Тестовые бинарники
 *.lock
 *.test
+devices_state.json
+*.db
+*.db-shm
+*.db-wal
+build.ps1
 
 # Go workspace
 go.work
@@ -22,6 +27,7 @@ go.work.sum
 
 # Конфигурационные файлы (чтобы случайно не слить ключи/пароли в интернет)
 xray_api_config.json
+non_existent_config.yaml
 
 # Файлы логов
 *.log

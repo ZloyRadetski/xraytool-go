@@ -3,6 +3,9 @@ package tests
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -130,6 +133,7 @@ ports:
 database:
   driver: "sqlite"
   sqlite_path: %q
+platega_secret: "dummy"
 logging:
   level: "debug"
   format: "console"
@@ -926,7 +930,9 @@ func TestE2ESuite(t *testing.T) {
 		data, _ := json.Marshal(body)
 		req, _ := http.NewRequest("POST", apiBase+"/api/v1/payments/platega/callback", bytes.NewReader(data))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Platega-Signature", "dummy")
+		mac := hmac.New(sha256.New, []byte("dummy"))
+		mac.Write(data)
+		req.Header.Set("X-Platega-Signature", hex.EncodeToString(mac.Sum(nil)))
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
@@ -980,7 +986,9 @@ func TestE2ESuite(t *testing.T) {
 		data, _ := json.Marshal(body)
 		req, _ := http.NewRequest("POST", apiBase+"/api/v1/payments/platega/callback", bytes.NewReader(data))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Platega-Signature", "dummy")
+		mac := hmac.New(sha256.New, []byte("dummy"))
+		mac.Write(data)
+		req.Header.Set("X-Platega-Signature", hex.EncodeToString(mac.Sum(nil)))
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
@@ -995,11 +1003,15 @@ func TestE2ESuite(t *testing.T) {
 
 	t.Run("Tier2_F4_Case4_PlategaCallbackInvalidSignature", func(t *testing.T) {
 		// Send callback with fake signature. If verified, should fail.
-		// Currently missing verification. Expect this test to fail (returns 200 instead of 400).
-		status, _, err := apiRequest("POST", "/api/v1/payments/platega/callback", map[string]interface{}{}, true)
+		req, _ := http.NewRequest("POST", apiBase+"/api/v1/payments/platega/callback", bytes.NewReader([]byte("{}")))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Platega-Signature", "wrong_signature")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
 		}
+		defer resp.Body.Close()
+		status := resp.StatusCode
 		if status == http.StatusOK {
 			t.Errorf("Vulnerability: accepted Platega callback with missing/invalid signature. Got 200 OK.")
 		}
@@ -1521,7 +1533,7 @@ func TestE2ESuite(t *testing.T) {
 		// Verify device count in DB
 		db := getDB(t)
 		var actualSub database.Subscription
-		db.Where("xray_uuid = ?", subID).First(&actualSub)
+		db.Where("id = ?", subID).First(&actualSub)
 
 		var count int64
 		db.Model(&database.Device{}).Where("subscription_id = ?", actualSub.ID).Count(&count)

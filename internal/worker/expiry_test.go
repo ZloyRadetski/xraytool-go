@@ -28,7 +28,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Cleanup(func() { sqlDB.Close() })
 	}
 
-	err = db.AutoMigrate(&database.Subscription{}, &database.SubscriptionNotification{})
+	err = db.AutoMigrate(&database.User{}, &database.Subscription{}, &database.SubscriptionNotification{}, &database.Device{})
 	if err != nil {
 		t.Fatalf("Failed to migrate test database: %v", err)
 	}
@@ -59,9 +59,10 @@ func TestExpiryWorker_ProcessOnce_Expired(t *testing.T) {
 	// Create an expired subscription
 	endsAt := time.Now().Add(-1 * time.Hour)
 	sub := database.Subscription{
-		ID:     "sub-1",
-		UserID: "user-1",
-		Email:  "test@example.com",
+		ID:       "sub-1",
+		UserID:   "user-1",
+		XrayUUID: "uuid-sub-1",
+		Email:    "test@example.com",
 		Status: "active",
 		EndsAt: &endsAt,
 	}
@@ -86,9 +87,10 @@ func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 	// Create a subscription expiring in 12 hours
 	endsAt := time.Now().Add(12 * time.Hour)
 	sub := database.Subscription{
-		ID:     "sub-2",
-		UserID: "user-1",
-		Email:  "test2@example.com",
+		ID:       "sub-2",
+		UserID:   "user-1",
+		XrayUUID: "uuid-sub-2",
+		Email:    "test2@example.com",
 		Status: "active",
 		EndsAt: &endsAt,
 	}
@@ -150,11 +152,12 @@ func TestExpiryWorker_InvalidDuration(t *testing.T) {
 
 	endsAt := time.Now().Add(12 * time.Hour)
 	sub := database.Subscription{
-		ID:     "sub-invalid",
-		UserID: "user-1",
-		Email:  "test-inv@example.com",
-		Status: "active",
-		EndsAt: &endsAt,
+		ID:       "sub-invalid",
+		UserID:   "user-1",
+		XrayUUID: "uuid-sub-invalid",
+		Email:    "test-inv@example.com",
+		Status:   "active",
+		EndsAt:   &endsAt,
 	}
 	db.Create(&sub)
 
@@ -185,21 +188,23 @@ func TestExpiryWorker_IgnoreUnlimitedAndBlocked(t *testing.T) {
 
 	// User 1: Active, but EndsAt is NULL (Unlimited)
 	db.Create(&database.Subscription{
-		ID:     "sub-unlim",
-		UserID: "user-unlim",
-		Email:  "unlim@example.com",
-		Status: "active",
-		EndsAt: nil,
+		ID:       "sub-unlim",
+		UserID:   "user-unlim",
+		XrayUUID: "uuid-sub-unlim",
+		Email:    "unlim@example.com",
+		Status:   "active",
+		EndsAt:   nil,
 	})
 
 	// User 2: Blocked, EndsAt is in the past
 	endsAtPast := time.Now().Add(-1 * time.Hour)
 	db.Create(&database.Subscription{
-		ID:     "sub-block",
-		UserID: "user-block",
-		Email:  "block@example.com",
-		Status: "blocked", // NOT active
-		EndsAt: &endsAtPast,
+		ID:       "sub-block",
+		UserID:   "user-block",
+		XrayUUID: "uuid-sub-block",
+		Email:    "block@example.com",
+		Status:   "blocked", // NOT active
+		EndsAt:   &endsAtPast,
 	})
 
 	cfg := &appconfig.Config{
@@ -228,11 +233,12 @@ func TestExpiryWorker_EmptyWarningsConfig(t *testing.T) {
 
 	endsAt := time.Now().Add(12 * time.Hour)
 	db.Create(&database.Subscription{
-		ID:     "sub-1",
-		UserID: "user-1",
-		Email:  "test@example.com",
-		Status: "active",
-		EndsAt: &endsAt,
+		ID:       "sub-1",
+		UserID:   "user-1",
+		XrayUUID: "uuid-sub-1-b",
+		Email:    "test@example.com",
+		Status:   "active",
+		EndsAt:   &endsAt,
 	})
 
 	// Empty array of warnings
@@ -257,11 +263,12 @@ func TestExpiryWorker_UnorderedConfigAndMultipleHits(t *testing.T) {
 	// Only 2 hours left
 	endsAt := time.Now().Add(2 * time.Hour)
 	sub := database.Subscription{
-		ID:     "sub-1",
-		UserID: "user-1",
-		Email:  "unordered@example.com",
-		Status: "active",
-		EndsAt: &endsAt,
+		ID:       "sub-1",
+		UserID:   "user-1",
+		XrayUUID: "uuid-sub-1-c",
+		Email:    "unordered@example.com",
+		Status:   "active",
+		EndsAt:   &endsAt,
 	}
 	db.Create(&sub)
 
@@ -306,9 +313,9 @@ func TestExpiryWorker_BatchMixedUsers(t *testing.T) {
 	endsSoon := now.Add(10 * time.Hour)
 	endsLate := now.Add(100 * time.Hour)
 
-	db.Create(&database.Subscription{ID: "sub-exp", UserID: "u1", Email: "exp@x.com", Status: "active", EndsAt: &endsExpired})
-	db.Create(&database.Subscription{ID: "sub-soon", UserID: "u2", Email: "soon@x.com", Status: "active", EndsAt: &endsSoon})
-	db.Create(&database.Subscription{ID: "sub-late", UserID: "u3", Email: "late@x.com", Status: "active", EndsAt: &endsLate})
+	db.Create(&database.Subscription{ID: "sub-exp", UserID: "u1", XrayUUID: "uuid1", Email: "exp@x.com", Status: "active", EndsAt: &endsExpired})
+	db.Create(&database.Subscription{ID: "sub-soon", UserID: "u2", XrayUUID: "uuid2", Email: "soon@x.com", Status: "active", EndsAt: &endsSoon})
+	db.Create(&database.Subscription{ID: "sub-late", UserID: "u3", XrayUUID: "uuid3", Email: "late@x.com", Status: "active", EndsAt: &endsLate})
 
 	cfg := &appconfig.Config{
 		Worker: appconfig.WorkerConf{

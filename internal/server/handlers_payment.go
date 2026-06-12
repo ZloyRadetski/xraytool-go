@@ -11,9 +11,9 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -30,13 +30,17 @@ import (
 //
 //	{"id":42,"status":"pending_card","amount":159,"payment_type":"...","method":"...","external_id":"...","custom_data":{"telegram_id":123}}
 func buildPaymentResponse(p *database.Payment) map[string]interface{} {
+	extID := ""
+	if p.ExternalID != nil {
+		extID = *p.ExternalID
+	}
 	return map[string]interface{}{
 		"id":           p.ID,
 		"status":       p.Status,
 		"amount":       p.Amount,
 		"payment_type": p.PaymentType,
 		"method":       p.Method,
-		"external_id":  p.ExternalID,
+		"external_id":  extID,
 		"custom_data":  p.CustomData,
 		"created_at":   p.CreatedAt.UTC().Format(time.RFC3339),
 		"user_id":      p.UserID,
@@ -82,11 +86,11 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Ensure ExternalID uniqueness: if empty, generate a synthetic one so the
-	// unique DB index is satisfied without collisions.
-	externalID := body.ExternalID
-	if externalID == "" {
-		externalID = fmt.Sprintf("internal_%d_%d", body.TelegramID, time.Now().UnixNano())
+	// Ensure ExternalID uniqueness: if non-empty store it; otherwise leave nil
+	// so the NULL-allows-duplicates unique index is satisfied without collisions.
+	var externalIDPtr *string
+	if body.ExternalID != "" {
+		externalIDPtr = &body.ExternalID
 	}
 
 	payment := database.Payment{
@@ -95,7 +99,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		Status:      "pending_card",
 		PaymentType: body.PaymentType,
 		Method:      body.Method,
-		ExternalID:  externalID,
+		ExternalID:  externalIDPtr,
 		CustomData: database.Metadata{
 			"telegram_id": body.TelegramID,
 		},
@@ -290,6 +294,18 @@ func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Pa
 
 	if txErr != nil {
 		r.log.Error("referral reward transaction failed", "err", txErr)
+		return
+	}
+
+	var referrer database.User
+	if err := db.First(&referrer, "id = ?", referrerID).Error; err == nil {
+		if tgIDRaw, ok := referrer.Metadata["telegram_id"]; ok {
+			r.dispatcher.Dispatch("referral.reward", map[string]interface{}{
+				"telegram_id":       tgIDRaw,
+				"reward_amount":     reward,
+				"referred_username": user.Username,
+			}, nil)
+		}
 	}
 }
 
@@ -311,15 +327,19 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	if r.cfg.PlategaSecret != "" {
-		mac := hmac.New(sha256.New, []byte(r.cfg.PlategaSecret))
-		mac.Write(rawBody)
-		expectedMAC := hex.EncodeToString(mac.Sum(nil))
-		if subtle.ConstantTimeCompare([]byte(signature), []byte(expectedMAC)) != 1 {
-			r.log.Warn("platega callback signature mismatch", "ip", getClientIP(req))
-			writeError(w, http.StatusUnauthorized, "invalid signature")
-			return
-		}
+	if r.cfg.PlategaSecret == "" {
+		r.log.Error("platega webhook received but platega_secret is not configured")
+		writeError(w, http.StatusServiceUnavailable, "webhook not configured")
+		return
+	}
+
+	mac := hmac.New(sha256.New, []byte(r.cfg.PlategaSecret))
+	mac.Write(rawBody)
+	expectedMAC := hex.EncodeToString(mac.Sum(nil))
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(expectedMAC)) != 1 {
+		r.log.Warn("platega callback signature mismatch", "ip", getClientIP(req))
+		writeError(w, http.StatusUnauthorized, "invalid signature")
+		return
 	}
 
 	var body map[string]interface{}
@@ -332,7 +352,85 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 	status, _ := body["status"].(string)
 	r.log.Info("platega callback received", "external_id", extID, "status", status)
 
+	// Always dispatch the raw Platega callback event
 	r.dispatcher.Dispatch("platega.callback", body, nil)
 
+	// Automatically update the payment status if external_id and status are present
+	if extID != "" && status != "" {
+		mappedStatus := status
+		if status == "success" {
+			mappedStatus = "completed"
+		}
+
+		db := database.DB()
+		var payment database.Payment
+		if err := db.Where("external_id = ?", extID).First(&payment).Error; err == nil {
+			if payment.Status != mappedStatus && payment.Status != "completed" {
+				db.Model(&payment).Update("status", mappedStatus)
+				r.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
+
+				if mappedStatus == "completed" {
+					// Dispatch payment.completed so external systems can process the renewal/balance update
+					r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
+						"payment_id":   payment.ID,
+						"amount":       payment.Amount,
+						"payment_type": payment.PaymentType,
+						"method":       payment.Method,
+						"user_id":      payment.UserID,
+					}, nil)
+
+					// Apply referral logic
+					go r.applyReferralRewardForPayment(db, &payment)
+				}
+			}
+		} else {
+			r.log.Warn("platega callback: payment not found by external_id", "external_id", extID)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// GET /api/v1/admin/payments/stats
+func (r *Router) handleAdminPaymentsStats(w http.ResponseWriter, req *http.Request) {
+	db := database.DB()
+	var payments []database.Payment
+	if err := db.Select("amount", "status", "created_at").Find(&payments).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	type MonthStat struct {
+		Month             string `json:"month"`
+		TotalRevenue      int    `json:"total_revenue"`
+		CompletedCount    int    `json:"completed_count"`
+		TotalCount        int    `json:"total_count"`
+	}
+
+	statsMap := make(map[string]*MonthStat)
+	for i := range payments {
+		p := &payments[i]
+		m := p.CreatedAt.UTC().Format("2006-01")
+		stat, ok := statsMap[m]
+		if !ok {
+			stat = &MonthStat{Month: m}
+			statsMap[m] = stat
+		}
+		stat.TotalCount++
+		if p.Status == "completed" {
+			stat.CompletedCount++
+			stat.TotalRevenue += p.Amount
+		}
+	}
+
+	var results []MonthStat
+	for _, v := range statsMap {
+		results = append(results, *v)
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Month > results[j].Month
+	})
+
+	writeJSON(w, http.StatusOK, results)
 }

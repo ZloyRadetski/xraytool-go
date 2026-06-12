@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"xraytool/internal/database"
 	"xraytool/internal/slave"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayconfig"
@@ -37,6 +38,23 @@ type SnapshotLimited struct {
 	Limit   *float64 `json:"limit,omitempty"`
 }
 
+func getBlockedEmails() map[string]bool {
+	db := database.DB()
+	var blockedSubs []database.Subscription
+	// Only run this query if the database connection exists.
+	if db != nil {
+		db.Joins("JOIN users ON users.id = subscriptions.user_id").
+			Where("users.is_blocked = ?", true).
+			Find(&blockedSubs)
+	}
+
+	blockedMap := make(map[string]bool)
+	for _, sub := range blockedSubs {
+		blockedMap[sub.Email] = true
+	}
+	return blockedMap
+}
+
 func userSnapshotCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "usersnapshot",
@@ -50,9 +68,14 @@ func userSnapshotCmd() *cobra.Command {
 				return
 			}
 
+			blockedMap := getBlockedEmails()
+
 			users, _ := xrayconfig.ListUsers(xrayCfg)
 			active := make([]SnapshotUser, 0, len(users))
 			for _, u := range users {
+				if blockedMap[u.Email()] {
+					continue
+				}
 				authVal := u.GetString("auth")
 				su := SnapshotUser{
 					Email:   u.Email(),
@@ -71,6 +94,9 @@ func userSnapshotCmd() *cobra.Command {
 			limited, _ := db.All()
 			sl := make([]SnapshotLimited, 0, len(limited))
 			for _, e := range limited {
+				if blockedMap[e.Email] {
+					continue
+				}
 				sl = append(sl, SnapshotLimited{
 					Email:   e.Email,
 					Subfile: e.Subfile,
@@ -135,9 +161,14 @@ func syncStatesCmd() *cobra.Command {
 
 // buildMasterSnapshot returns the current master user state.
 func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
+	blockedMap := getBlockedEmails()
+
 	users, _ := xrayconfig.ListUsers(xrayCfg)
 	active := make([]SnapshotUser, 0, len(users))
 	for _, u := range users {
+		if blockedMap[u.Email()] {
+			continue
+		}
 		authVal := u.GetString("auth")
 		su := SnapshotUser{
 			Email:   u.Email(),
@@ -156,6 +187,9 @@ func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 	limited, _ := db.All()
 	sl := make([]SnapshotLimited, 0, len(limited))
 	for _, e := range limited {
+		if blockedMap[e.Email] {
+			continue
+		}
 		sl = append(sl, SnapshotLimited{
 			Email:   e.Email,
 			Subfile: e.Subfile,
@@ -169,16 +203,25 @@ func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 // syncSlave compares masterSnap with a slave's current snapshot and issues
 // the minimum set of commands to reconcile the slave to match the master.
 func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool) {
-	// Fetch slave snapshot.
-	out, err := reg.CallOne(srvName, "usersnapshot", map[string]string{"api": "true"})
+	out, err := reg.CallOne(srvName, "usersnapshot", map[string]string{})
 	if err != nil {
 		fmt.Printf("  [FAIL] Could not get snapshot: %v\n", err)
 		return
 	}
 
 	var slaveSnap Snapshot
-	if err := json.Unmarshal([]byte(out), &slaveSnap); err != nil {
-		fmt.Printf("  [FAIL] Could not parse snapshot: %v\n  raw: %s\n", err, out)
+	
+	// Safely extract JSON payload to ignore any leading warnings or text
+	firstBrace := strings.Index(out, "{")
+	lastBrace := strings.LastIndex(out, "}")
+	if firstBrace == -1 || lastBrace == -1 || firstBrace > lastBrace {
+		fmt.Printf("  [FAIL] No JSON object found in snapshot output\n  raw: %s\n", out)
+		return
+	}
+	
+	jsonStr := out[firstBrace : lastBrace+1]
+	if err := json.Unmarshal([]byte(jsonStr), &slaveSnap); err != nil {
+		fmt.Printf("  [FAIL] Could not parse snapshot JSON: %v\n  raw: %s\n", err, out)
 		return
 	}
 
@@ -251,17 +294,22 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 			op := fmt.Sprintf("repair-uuid %s (slave=%s master=%s)", mu.Email, su.UUID[:8], mu.UUID[:8])
 			ops = append(ops, op)
 			if !dryRun {
-				reg.CallOne(srvName, "rmuser", map[string]string{"email": mu.Email}) //nolint:errcheck
-				params := map[string]string{
-					"email": mu.Email, "uuid": mu.UUID,
-					"subfile": mu.Subfile, "expire": mu.Expire,
-					"auth": mu.Auth,
+				rmOut, rmErr := reg.CallOne(srvName, "rmuser", map[string]string{"email": mu.Email})
+				if rmErr != nil {
+					printSyncResult("repair-uuid:rmuser "+mu.Email, rmOut, rmErr)
+					// Don't proceed with newuser if rmuser failed — would create a duplicate.
+				} else {
+					params := map[string]string{
+						"email": mu.Email, "uuid": mu.UUID,
+						"subfile": mu.Subfile, "expire": mu.Expire,
+						"auth": mu.Auth,
+					}
+					if mu.Limit != nil {
+						params["limit"] = fmt.Sprintf("%.0f", *mu.Limit)
+					}
+					out, err := reg.CallOne(srvName, "newuser", params)
+					printSyncResult(op, out, err)
 				}
-				if mu.Limit != nil {
-					params["limit"] = fmt.Sprintf("%.0f", *mu.Limit)
-				}
-				out, err := reg.CallOne(srvName, "newuser", params)
-				printSyncResult(op, out, err)
 			}
 		}
 		if su.Expire != mu.Expire && mu.Expire != "" {

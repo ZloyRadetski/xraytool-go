@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	once    sync.Once
+	dbMutex sync.RWMutex
 	db      *gorm.DB
 	initErr error
 )
@@ -17,10 +17,19 @@ var (
 // DB returns the global GORM instance.
 // Panics if Init has not been called successfully.
 func DB() *gorm.DB {
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
 	if db == nil {
 		panic("database: DB() called before Init()")
 	}
 	return db
+}
+
+// IsReady returns true if the database is successfully connected.
+func IsReady() bool {
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+	return db != nil
 }
 
 // Config holds the parameters needed to open a database connection.
@@ -39,57 +48,70 @@ type Config struct {
 // Init opens the database connection and runs AutoMigrate for all models.
 // It is safe to call multiple times — only the first call takes effect.
 func Init(cfg Config) error {
-	once.Do(func() {
-		var dialector gorm.Dialector
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 
-		switch cfg.Driver {
-		case "sqlite", "":
-			dialector = sqliteDialector(cfg.SQLitePath)
-		case "postgres":
-			dialector = postgresDialector(cfg.DSN)
-		default:
-			initErr = fmt.Errorf("database: unknown driver %q", cfg.Driver)
-			return
-		}
+	if db != nil {
+		return nil // Already initialized successfully
+	}
 
-		logMode := logger.Warn
-		if cfg.Silent {
-			logMode = logger.Silent
-		}
-		
-		gormCfg := &gorm.Config{
-			// Warn on slow queries; adjust to logger.Info for development verbosity.
-			Logger: logger.Default.LogMode(logMode),
-		}
+	var dialector gorm.Dialector
 
-		conn, err := gorm.Open(dialector, gormCfg)
-		if err != nil {
-			initErr = fmt.Errorf("database: connect failed: %w", err)
-			return
-		}
+	switch cfg.Driver {
+	case "sqlite", "":
+		dialector = sqliteDialector(cfg.SQLitePath)
+	case "postgres":
+		dialector = postgresDialector(cfg.DSN)
+	default:
+		initErr = fmt.Errorf("database: unknown driver %q", cfg.Driver)
+		return initErr
+	}
 
-		// AutoMigrate creates or updates tables to match the current model structs.
-		// It is intentionally non-destructive: it never drops columns or indexes.
-		if err := conn.AutoMigrate(
-			&User{},
-			&Subscription{},
-			&Device{},
-			&Payment{},
-			&ReferralReward{},
-			&SubscriptionNotification{},
-		); err != nil {
-			initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
-			return
-		}
+	logMode := logger.Warn
+	if cfg.Silent {
+		logMode = logger.Silent
+	}
+	
+	gormCfg := &gorm.Config{
+		// Warn on slow queries; adjust to logger.Info for development verbosity.
+		Logger: logger.Default.LogMode(logMode),
+	}
 
-		db = conn
-	})
-	return initErr
+	conn, err := gorm.Open(dialector, gormCfg)
+	if err != nil {
+		initErr = fmt.Errorf("database: connect failed: %w", err)
+		return initErr
+	}
+
+	if cfg.Driver == "sqlite" || cfg.Driver == "" {
+		sqlDB, err := conn.DB()
+		if err == nil {
+			sqlDB.SetMaxOpenConns(1)
+		}
+	}
+
+	// AutoMigrate creates or updates tables to match the current model structs.
+	// It is intentionally non-destructive: it never drops columns or indexes.
+	if err := conn.AutoMigrate(
+		&User{},
+		&Subscription{},
+		&Device{},
+		&Payment{},
+		&ReferralReward{},
+		&SubscriptionNotification{},
+	); err != nil {
+		initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
+		return initErr
+	}
+
+	db = conn
+	initErr = nil
+	return nil
 }
 
-// Close closes the underlying *sql.DB connection pool.
-// Safe to call even if Init was never called.
 func Close() error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 	if db == nil {
 		return nil
 	}
@@ -97,5 +119,6 @@ func Close() error {
 	if err != nil {
 		return err
 	}
+	db = nil // Ensure we can re-init if needed
 	return sqlDB.Close()
 }

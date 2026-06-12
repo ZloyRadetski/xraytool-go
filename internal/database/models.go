@@ -24,9 +24,11 @@ type User struct {
 	// RefCode is the user's own referral code, used to invite others.
 	RefCode string `gorm:"type:text;uniqueIndex"`
 	// ReferredBy is the ID of the user who referred this user (nullable FK → User.ID).
-	ReferredBy *string `gorm:"type:text"`
+	ReferredBy *string `gorm:"type:text;index"`
 	// Metadata stores platform-specific data as a JSON object.
-	Metadata  Metadata `gorm:"serializer:json;type:text"`
+	Metadata  Metadata `gorm:"serializer:json"`
+	// IsBlocked indicates if the user is globally banned.
+	IsBlocked bool `gorm:"default:false;not null"`
 	CreatedAt time.Time
 }
 
@@ -40,18 +42,18 @@ type Subscription struct {
 	// Must be unique across all subscriptions.
 	Email string `gorm:"type:text;not null;uniqueIndex"`
 	// XrayUUID is the xray client UUID used in the inbound config.
-	XrayUUID string `gorm:"type:text;not null"`
+	XrayUUID string `gorm:"type:text;not null;uniqueIndex"`
 	// Status is the subscription lifecycle state: "active", "inactive", "expired", etc.
-	Status string `gorm:"type:text;not null;default:'inactive'"`
+	Status string `gorm:"type:text;not null;default:'inactive';index"`
 	// MaxDevices is how many devices can simultaneously use this subscription.
 	MaxDevices int `gorm:"default:3;not null"`
 	// StartsAt and EndsAt define the validity window (nullable for indefinite).
 	StartsAt *time.Time
-	EndsAt   *time.Time
+	EndsAt   *time.Time `gorm:"index"`
 	// AutoRenew indicates whether to automatically extend the subscription.
 	AutoRenew bool `gorm:"default:false;not null"`
 	// Metadata stores extra data (plan name, coupon, etc.).
-	Metadata  Metadata `gorm:"serializer:json;type:text"`
+	Metadata  Metadata `gorm:"serializer:json"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -90,9 +92,11 @@ type Payment struct {
 	// Method is the payment provider/method: "platega", "cash", "transfer", "sbp".
 	Method string `gorm:"type:text"`
 	// ExternalID is the provider's transaction reference (unique, nullable for manual payments).
-	ExternalID string `gorm:"type:text;uniqueIndex"`
+	// Using *string (pointer) so that multiple manual payments without an ExternalID
+	// can coexist — NULL values are never considered equal in a unique index.
+	ExternalID *string `gorm:"type:text;uniqueIndex"`
 	// CustomData stores provider-specific response fields.
-	CustomData Metadata `gorm:"serializer:json;type:text"`
+	CustomData Metadata `gorm:"serializer:json"`
 	CreatedAt  time.Time
 }
 
@@ -116,5 +120,5 @@ type ReferralReward struct {
 type SubscriptionNotification struct {
 	SubscriptionID string `gorm:"primaryKey;type:text"`
 	WarningLevel   string `gorm:"primaryKey;type:text"`
-	SentAt         time.Time
+	SentAt         time.Time `gorm:"autoCreateTime"`
 }

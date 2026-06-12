@@ -1,6 +1,8 @@
 package xrayconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -68,7 +70,7 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 			return nil, fmt.Errorf("vless requires UUID")
 		}
 		result.Set("id", params.UUID)
-		
+
 		flow := params.Flow
 		if flow == "" && hasXTLS(ib) {
 			flow = "xtls-rprx-vision"
@@ -84,10 +86,15 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 		result.Set("id", params.UUID)
 
 	case "trojan", "shadowsocks":
-		if params.Auth == "" {
-			return nil, fmt.Errorf("%s requires auth/password", protocol)
+		auth := params.Auth
+		if auth == "" {
+			if params.UUID != "" {
+				auth = params.UUID
+			} else {
+				return nil, fmt.Errorf("%s requires auth/password", protocol)
+			}
 		}
-		result.Set("password", params.Auth)
+		result.Set("password", auth)
 
 	case "hysteria", "hysteria2", "hy2":
 		auth := params.Auth
@@ -118,12 +125,12 @@ func hasXTLS(ib RawInbound) bool {
 	if !ok {
 		return false
 	}
-	
+
 	var stream map[string]json.RawMessage
 	if err := json.Unmarshal(rawStream, &stream); err != nil {
 		return false
 	}
-	
+
 	var net string
 	if rawNet, ok := stream["network"]; ok {
 		_ = json.Unmarshal(rawNet, &net)
@@ -150,29 +157,10 @@ func hasXTLS(ib RawInbound) bool {
 	return sec == "reality" || sec == "tls"
 }
 
-func buildDeterministicHy2Pass(uuidHint, email string) string {
-	seed := strings.ReplaceAll(uuidHint, "-", "")
-	if seed != "" && strings.ToLower(seed) != "null" {
-		pass := strings.Repeat(seed, 4)
-		if len(pass) < 32 {
-			pass = pass + strings.Repeat("0", 32-len(pass))
-		}
-		return pass[:32]
-	}
-	// Build seed from email
-	var sb strings.Builder
-	for _, r := range email {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			sb.WriteRune(r)
-		}
-	}
-	seed = sb.String()
-	if seed == "" {
-		seed = "hy2fallback"
-	}
-	pass := strings.Repeat(seed, 4)
-	if len(pass) < 32 {
-		pass = pass + strings.Repeat("0", 32-len(pass))
-	}
-	return pass[:32]
+func buildDeterministicHy2Pass(uuid, email string) string {
+	// Revert to a deterministic derivation using HKDF or HMAC
+	// We'll use SHA256 over UUID + email for stable stateless passwords
+	h := sha256.New()
+	h.Write([]byte(uuid + ":" + email + ":hy2"))
+	return hex.EncodeToString(h.Sum(nil))
 }

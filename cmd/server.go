@@ -302,13 +302,14 @@ func startServerCmd() *cobra.Command {
 				// If not found in mapping -> Execute via CLI (Legacy behavior)
 				// Allowlist of accepted flags per command
 				allowedFlags := map[string]map[string]bool{
-					"rmuser":     {"email": true, "name": true, "legacy": true},
-					"limit":      {"email": true, "name": true, "legacy": true},
-					"setexpire":  {"email": true, "name": true, "expire": true},
-					"setlimit":   {"email": true, "name": true, "limit": true},
-					"syncstates": {"dry-run": true, "email": true},
-					"userlist":   {"format": true},
-					"stats":      {"email": true, "name": true, "format": true},
+					"rmuser":       {"email": true, "name": true, "legacy": true},
+					"limit":        {"email": true, "name": true, "legacy": true},
+					"setexpire":    {"email": true, "name": true, "expire": true},
+					"setlimit":     {"email": true, "name": true, "limit": true},
+					"syncstates":   {"dry-run": true, "email": true},
+					"userlist":     {"format": true},
+					"stats":        {"email": true, "name": true, "format": true},
+					"usersnapshot": {},
 				}
 				cmdAllowed := allowedFlags[cmdName]
 				args := []string{"--config", cfgFile, cmdName}

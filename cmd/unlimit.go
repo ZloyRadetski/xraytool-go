@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"xraytool/internal/generate"
 	"xraytool/internal/userdb"
@@ -150,9 +151,13 @@ func unlimitCmd() *cobra.Command {
 			if isActive {
 				if !legacy {
 					tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, email)
-					xrayapi.New(cfg.Xray.APIAddr).RemoveUser(email, tags) //nolint:errcheck
+					if err := xrayapi.New(cfg.Xray.APIAddr).RemoveUser(email, tags); err != nil {
+						fmt.Fprintf(os.Stderr, "[WARN] unlimit: hot-remove failed for %s: %v\n", email, err)
+					}
 				}
-				xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email) //nolint:errcheck
+				if err := xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email); err != nil {
+					p.Errorf("removing old user config: %v", err)
+				}
 			}
 
 			payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
@@ -174,7 +179,9 @@ func unlimitCmd() *cobra.Command {
 			}
 
 			// Remove from limited DB.
-			db.Remove(email) //nolint:errcheck
+			if err := db.Remove(email); err != nil {
+				fmt.Fprintf(os.Stderr, "[WARN] unlimit: failed to remove %s from limited DB: %v\n", email, err)
+			}
 
 			if legacy {
 				systemctlRestart("xray")
@@ -328,9 +335,15 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	if isActive {
 		if !legacy {
 			tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, email)
-			xrayapi.New(cfg.Xray.APIAddr).RemoveUser(email, tags) //nolint:errcheck
+			if err := xrayapi.New(cfg.Xray.APIAddr).RemoveUser(email, tags); err != nil {
+				// Non-fatal: log and continue. A failed hot-remove before hot-add
+				// may cause a duplicate in xray, but config will be written correctly.
+				fmt.Fprintf(os.Stderr, "[WARN] unlimit: hot-remove failed for %s: %v\n", email, err)
+			}
 		}
-		xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email) //nolint:errcheck
+		if err := xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] unlimit db repair: failed to remove %s from config: %v\n", email, err)
+		}
 	}
 
 	clientsPayload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
@@ -351,7 +364,9 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("writing xray config: %v", err)
 	}
 
-	db.Remove(email) //nolint:errcheck
+	if err := db.Remove(email); err != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] unlimit db repair: failed to remove %s from limited DB: %v\n", email, err)
+	}
 
 	if legacy {
 		systemctlRestart("xray")

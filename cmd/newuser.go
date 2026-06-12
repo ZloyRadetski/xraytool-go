@@ -57,7 +57,11 @@ func newUserCmd() *cobra.Command {
 			if err != nil {
 				p.Errorf("reading xray config: %v", err)
 			}
-			if exists, _ := xrayconfig.UserExists(xrayCfg, email); exists {
+			exists, existsErr := xrayconfig.UserExists(xrayCfg, email)
+			if existsErr != nil {
+				p.Errorf("checking user existence: %v", existsErr)
+			}
+			if exists {
 				p.Error("user already exists")
 			}
 
@@ -115,17 +119,18 @@ func newUserCmd() *cobra.Command {
 				p.Errorf("updating xray config: %v", err)
 			}
 
+			// Write config atomically FIRST — so disk state is consistent even
+			// if the subsequent hot-add fails (xray will pick it up on restart).
+			if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
+				p.Errorf("writing xray config: %v", err)
+			}
+
 			// Hot-add via xray API.
 			if !legacy {
 				apiClient := xrayapi.New(cfg.Xray.APIAddr)
 				if err := apiClient.AddUser(payload, cfg.Paths.XrayConfig); err != nil {
 					p.Errorf("xray API hot-add failed: %v\n\nUse --legacy flag to restart xray instead.", err)
 				}
-			}
-
-			// Write config atomically.
-			if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-				p.Errorf("writing xray config: %v", err)
 			}
 
 			if legacy {
@@ -224,7 +229,11 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading xray config: %v", err)
 	}
-	if exists, _ := xrayconfig.UserExists(xrayCfg, email); exists {
+	exists, existsErr := xrayconfig.UserExists(xrayCfg, email)
+	if existsErr != nil {
+		return "", fmt.Errorf("checking user existence: %v", existsErr)
+	}
+	if exists {
 		return "", fmt.Errorf("user already exists")
 	}
 
@@ -275,17 +284,17 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("updating xray config: %v", err)
 	}
 
+	// Write config atomically FIRST — disk state is consistent even if hot-add fails.
+	if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
+		return "", fmt.Errorf("writing xray config: %v", err)
+	}
+
 	// Hot-add via xray API
 	if !legacy {
 		apiClient := xrayapi.New(cfg.Xray.APIAddr)
 		if err := apiClient.AddUser(clientsPayload, cfg.Paths.XrayConfig); err != nil {
 			return "", fmt.Errorf("xray API hot-add failed: %v", err)
 		}
-	}
-
-	// Write config atomically
-	if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-		return "", fmt.Errorf("writing xray config: %v", err)
 	}
 	if legacy {
 		systemctlRestart("xray")

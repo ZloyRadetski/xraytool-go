@@ -109,14 +109,17 @@ func rmOrLimitCmd(action string) *cobra.Command {
 
 			// Hot-remove via xray API.
 			if !legacy {
-				tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, email)
+				tags, tagsErr := xrayconfig.InboundTagsForUser(xrayCfg, email)
+				if tagsErr != nil {
+					p.Errorf("getting inbound tags for %s: %v", email, tagsErr)
+				}
 				apiClient := xrayapi.New(cfg.Xray.APIAddr)
 				if err := apiClient.RemoveUser(email, tags); err != nil {
 					p.Errorf("xray API hot-remove failed: %v\n\nUse --legacy flag to restart xray instead.", err)
 				}
 			}
 
-			// Remove from config.
+			// Remove from config then write atomically FIRST.
 			if err := xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email); err != nil {
 				p.Errorf("removing from xray config: %v", err)
 			}

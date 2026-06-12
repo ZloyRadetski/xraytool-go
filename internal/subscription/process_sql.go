@@ -10,6 +10,7 @@ import (
 	"xraytool/internal/convert"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
+	"xraytool/internal/logger"
 
 	"gorm.io/gorm"
 )
@@ -51,7 +52,9 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 	// 3. Load Subscription and User from Database
 	var sub database.Subscription
-	if err := db.Where("xray_uuid = ?", clientId).First(&sub).Error; err != nil {
+	// Backward compatibility: match new ID, old XrayUUID, or old subfile in metadata
+	if err := db.Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?", 
+		clientId, clientId, clientId, clientId+".txt").First(&sub).Error; err != nil {
 		return failResponse(404, "Subscription not found")
 	}
 
@@ -127,15 +130,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 		deviceOs := pickRequestValue(req, []string{"device_os", "os", "platform"}, []string{"Device-Os", "X-Device-Os", "X-Platform"})
 		verOs := pickRequestValue(req, []string{"ver_os", "os_version", "osVersion"}, []string{"Ver-Os", "X-Os-Version", "Os-Version"})
 
-		// Check if whitelisted but missing HWID
-		hasAccounting := true
-		for _, agent := range uaNoAccounting {
-			if agent == matchedAgent {
-				hasAccounting = false
-				break
-			}
-		}
-		if hwid == "" && hasAccounting {
+		if hwid == "" {
 			unsupportedClient = true
 		}
 
@@ -184,7 +179,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 			})
 
 			if err != nil {
-				fmt.Printf("SQL Error in device check: %v\n", err)
+				logger.Errorf("[ProcessSQL] SQL error in device check for subscription %s: %v", sub.ID, err)
 				return failResponse(500, fmt.Sprintf("database error: %v", err))
 			}
 

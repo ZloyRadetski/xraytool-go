@@ -150,6 +150,8 @@ func Errorf(format string, args ...interface{}) {
 }
 
 func LevelEnabled(level Level) bool {
+	defaultLogger.mu.Lock()
+	defer defaultLogger.mu.Unlock()
 	return level >= defaultLogger.level
 }
 

@@ -25,6 +25,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&database.Device{},
 		&database.Payment{},
 		&database.ReferralReward{},
+		&database.SubscriptionNotification{}, // kept in sync with database.Init()
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
@@ -149,8 +150,8 @@ func TestDevice_TrackingAndCount(t *testing.T) {
 
 func TestPayment_CreateAndFilter(t *testing.T) {
 	db := newTestDB(t)
-	db.Create(&database.Payment{UserID: "u1", Amount: 100, Status: "pending_card", PaymentType: "t", ExternalID: "e1"})
-	db.Create(&database.Payment{UserID: "u1", Amount: 200, Status: "completed", PaymentType: "t", ExternalID: "e2"})
+	db.Create(&database.Payment{UserID: "u1", Amount: 100, Status: "pending_card", PaymentType: "t", ExternalID: strPtr("e1")})
+	db.Create(&database.Payment{UserID: "u1", Amount: 200, Status: "completed", PaymentType: "t", ExternalID: strPtr("e2")})
 
 	var count int64
 	db.Model(&database.Payment{}).Where("status = ?", "pending_card").Count(&count)
@@ -166,7 +167,7 @@ func TestPayment_CreateAndFilter(t *testing.T) {
 
 func TestPayment_AtomicStatusUpdate(t *testing.T) {
 	db := newTestDB(t)
-	db.Create(&database.Payment{ID: 1, UserID: "u1", Amount: 100, Status: "pending_card", PaymentType: "t", ExternalID: "e1"})
+	db.Create(&database.Payment{ID: 1, UserID: "u1", Amount: 100, Status: "pending_card", PaymentType: "t", ExternalID: strPtr("e1")})
 
 	res := db.Model(&database.Payment{}).Where("id = ? AND status IN ?", 1, []string{"pending_card"}).Update("status", "completed")
 	if res.RowsAffected != 1 {
@@ -179,16 +180,32 @@ func TestPayment_AtomicStatusUpdate(t *testing.T) {
 	}
 }
 
+func strPtr(s string) *string { return &s }
+
 func TestPayment_ExternalIDUnique(t *testing.T) {
 	db := newTestDB(t)
-	p1 := database.Payment{UserID: "u1", Amount: 100, Status: "p", PaymentType: "t", ExternalID: "ext1"}
-	p2 := database.Payment{UserID: "u2", Amount: 100, Status: "p", PaymentType: "t", ExternalID: "ext1"}
+	p1 := database.Payment{UserID: "u1", Amount: 100, Status: "p", PaymentType: "t", ExternalID: strPtr("ext1")}
+	p2 := database.Payment{UserID: "u2", Amount: 100, Status: "p", PaymentType: "t", ExternalID: strPtr("ext1")}
 
 	if err := db.Create(&p1).Error; err != nil {
 		t.Fatalf("failed to create p1: %v", err)
 	}
 	if err := db.Create(&p2).Error; err == nil {
 		t.Fatal("expected unique constraint error for external_id, got nil")
+	}
+}
+
+func TestPayment_NullExternalIDAllowsMultiple(t *testing.T) {
+	db := newTestDB(t)
+	// Multiple manual payments (nil ExternalID) must NOT violate the unique index.
+	p1 := database.Payment{UserID: "u1", Amount: 100, Status: "p", PaymentType: "t", ExternalID: nil}
+	p2 := database.Payment{UserID: "u2", Amount: 200, Status: "p", PaymentType: "t", ExternalID: nil}
+
+	if err := db.Create(&p1).Error; err != nil {
+		t.Fatalf("failed to create p1 with nil ExternalID: %v", err)
+	}
+	if err := db.Create(&p2).Error; err != nil {
+		t.Fatalf("failed to create p2 with nil ExternalID (NULL uniqueness violation): %v", err)
 	}
 }
 

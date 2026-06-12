@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"xraytool/internal/convert"
@@ -197,15 +198,7 @@ func Process(cm *CacheManager, req *Request) *Response {
 		deviceOs := pickRequestValue(req, []string{"device_os", "os", "platform"}, []string{"Device-Os", "X-Device-Os", "X-Platform"})
 		verOs := pickRequestValue(req, []string{"ver_os", "os_version", "osVersion"}, []string{"Ver-Os", "X-Os-Version", "Os-Version"})
 
-		// Check if whitelisted but missing HWID
-		hasAccounting := true
-		for _, agent := range uaNoAccounting {
-			if agent == matchedAgent {
-				hasAccounting = false
-				break
-			}
-		}
-		if hwid == "" && hasAccounting {
+		if hwid == "" {
 			unsupportedClient = true
 		}
 
@@ -784,14 +777,41 @@ func firstRealitySNI(cfg xrayconfig.RawConfig) string {
 	return "google.com"
 }
 
+var (
+	pubKeyCache   = make(map[string]string)
+	pubKeyCacheMu sync.RWMutex
+)
+
 func derivePublicKey(privateKey string) string {
 	privateKey = strings.TrimSpace(privateKey)
 	if privateKey == "" {
 		return ""
 	}
+
+	pubKeyCacheMu.RLock()
+	pub, ok := pubKeyCache[privateKey]
+	pubKeyCacheMu.RUnlock()
+	if ok {
+		return pub
+	}
+
+	pubKeyCacheMu.Lock()
+	defer pubKeyCacheMu.Unlock()
+	
+	if pub, ok := pubKeyCache[privateKey]; ok {
+		return pub
+	}
+
+	// Validate to prevent any command injection vectors
+	if !regexp.MustCompile(`^[A-Za-z0-9\-_=]+$`).MatchString(privateKey) {
+		pubKeyCache[privateKey] = ""
+		return ""
+	}
+
 	cmd := exec.Command("xray", "x25519", "-i", privateKey)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		pubKeyCache[privateKey] = ""
 		return ""
 	}
 	lines := strings.Split(string(out), "\n")
@@ -799,10 +819,13 @@ func derivePublicKey(privateKey string) string {
 		if strings.HasPrefix(strings.ToLower(line), "public key:") {
 			parts := strings.Split(line, ":")
 			if len(parts) >= 2 {
-				return strings.TrimSpace(parts[1])
+				pub := strings.TrimSpace(parts[1])
+				pubKeyCache[privateKey] = pub
+				return pub
 			}
 		}
 	}
+	pubKeyCache[privateKey] = ""
 	return ""
 }
 

@@ -23,10 +23,17 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 		perm = fi.Mode().Perm()
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create tmp: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("write tmp: %w", err)
 	}
+	f.Close()
 
 	// Make sure permissions match exactly (os.WriteFile applies umask, so we must chmod)
 	if err := os.Chmod(tmp, perm); err != nil {
