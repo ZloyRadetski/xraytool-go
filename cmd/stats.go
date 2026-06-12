@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"xraytool/internal/slave"
@@ -234,7 +235,16 @@ func collectSlaveTotals() ([]slaveUserTotal, slaveReportJSON) {
 					ClusterTotal *int64 `json:"cluster_total"`
 				} `json:"users"`
 			}
-			if json.Unmarshal([]byte(out), &parsed) != nil {
+			
+			firstBrace := strings.Index(out, "{")
+			lastBrace := strings.LastIndex(out, "}")
+			if firstBrace == -1 || lastBrace == -1 || firstBrace > lastBrace {
+				jobs <- job{server: name}
+				return
+			}
+			jsonStr := out[firstBrace : lastBrace+1]
+			
+			if json.Unmarshal([]byte(jsonStr), &parsed) != nil {
 				jobs <- job{server: name}
 				return
 			}

@@ -52,7 +52,7 @@ func TestBuildClient(t *testing.T) {
 			protocol:  "hysteria2",
 			streamSec: "",
 			params:    ClientParams{Email: "test@test", UUID: "123"}, // no auth provided
-			want:      map[string]string{"email": "test@test", "auth": "123123"}, // 123 duplicated twice to 32 chars (logic in code)
+			want:      map[string]string{"email": "test@test", "auth": "aecfb6182c8734da6f1218ca7ff28607d2f721be2340ba120133a109a88b871f"}, // SHA256 of 123
 			wantErr:   false,
 		},
 		{

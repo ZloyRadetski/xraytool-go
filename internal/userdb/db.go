@@ -81,6 +81,10 @@ func (db *DB) Upsert(entry Entry) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if strings.ContainsAny(entry.Email, "|\n") || strings.ContainsAny(entry.Subfile, "|\n") {
+		return fmt.Errorf("invalid characters in userdb entry")
+	}
+
 	entries, err := db.read()
 	if err != nil {
 		return err
@@ -144,11 +148,11 @@ func (db *DB) UpdateLimit(email string, limit *float64) error {
 // ---------------------------------------------------------------------------
 
 func (db *DB) read() ([]Entry, error) {
-	if _, err := os.Stat(db.path); os.IsNotExist(err) {
-		return nil, nil
-	}
 	f, err := os.Open(db.path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("opening limited db: %w", err)
 	}
 	defer f.Close()

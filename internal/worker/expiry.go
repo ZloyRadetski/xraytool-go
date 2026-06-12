@@ -138,7 +138,9 @@ func (w *ExpiryWorker) ProcessOnce() {
 			var oldestDevices []database.Device
 			if err := w.db.Where("subscription_id = ?", sub.ID).Order("last_seen asc").Limit(excess).Find(&oldestDevices).Error; err == nil {
 				for _, d := range oldestDevices {
-					w.db.Delete(&d)
+					if err := w.db.Delete(&d).Error; err != nil {
+						w.log.Warn("Failed to delete excess device", "subscription_id", sub.ID, "hwid", d.HWID, "error", err)
+					}
 				}
 			}
 		}
@@ -190,12 +192,19 @@ func (w *ExpiryWorker) handleExpired(sub database.Subscription) {
 	}
 
 	// 3. Update DB Status
-	if err := w.db.Model(&sub).Updates(map[string]interface{}{
+	res := w.db.Model(&sub).Where("status = ?", "active").Updates(map[string]interface{}{
 		"status":     "expired",
 		"updated_at": time.Now(),
-	}).Error; err != nil {
-		w.log.Error("Failed to update subscription status", "email", sub.Email, "error", err)
-		// We already removed from Xray, so it's a partial failure. But it's better than keeping active in Xray.
+	})
+	if res.Error != nil {
+		w.log.Error("Failed to update subscription status", "email", sub.Email, "error", res.Error)
+		// We already removed from Xray, so it's a partial failure.
+		// Return to allow the worker to retry this user next time, and avoid spamming webhooks.
+		return
+	}
+	if res.RowsAffected == 0 {
+		w.log.Info("Subscription already processed concurrently", "email", sub.Email)
+		return
 	}
 
 	// 4. Fire webhook

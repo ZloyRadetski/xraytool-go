@@ -131,7 +131,9 @@ func updateLimitCmd() *cobra.Command {
 			db := userdb.New(cfg.Paths.LimitedDB)
 			updatedLimited := false
 			if entry, _ := db.Get(email); entry != nil {
-				db.UpdateLimit(email, limitPtr) //nolint:errcheck
+				if err := db.UpdateLimit(email, limitPtr); err != nil {
+					p.Errorf("failed to update limit in db: %v", err)
+				}
 				updatedLimited = true
 			}
 
@@ -255,7 +257,9 @@ func ExecUpdateLimit(payload map[string]interface{}) (string, error) {
 	db := userdb.New(cfg.Paths.LimitedDB)
 	updatedLimited := false
 	if entry, _ := db.Get(email); entry != nil {
-		db.UpdateLimit(email, limitPtr) //nolint:errcheck
+		if err := db.UpdateLimit(email, limitPtr); err != nil {
+			return "", fmt.Errorf("updating limit in db: %v", err)
+		}
 		updatedLimited = true
 	}
 

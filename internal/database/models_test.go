@@ -59,7 +59,7 @@ func TestSubscription_DefaultMaxDevices(t *testing.T) {
 
 func TestPayment_DefaultTimestamp(t *testing.T) {
 	db := newTestDB(t)
-	db.Create(&database.Payment{UserID: "u1", Amount: 100, Status: "p", PaymentType: "t", ExternalID: "e"})
+	db.Create(&database.Payment{UserID: "u1", Amount: 100, Status: "p", PaymentType: "t", ExternalID: strPtr("e")})
 
 	var p database.Payment
 	db.First(&p, "user_id = ?", "u1")

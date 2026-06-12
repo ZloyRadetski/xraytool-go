@@ -77,8 +77,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // registerRoutes wires all routes to their handlers.
 func (r *Router) registerRoutes() {
 	// ── Public routes (no API key required) ──────────────────────────────────
-	r.mux.Handle("GET /client", http.HandlerFunc(r.handleSubscription))
-	r.mux.Handle("GET /api/v1/sub", http.HandlerFunc(r.handleSubscription))
+	r.mux.Handle("GET /client", http.HandlerFunc(r.handleSubscriptionV2))
+	r.mux.Handle("GET /api/v1/sub", http.HandlerFunc(r.handleSubscriptionV2))
 
 	// New subscription format path
 	r.mux.Handle("GET /api/v2/sub", http.HandlerFunc(r.handleSubscriptionV2))
@@ -93,6 +93,7 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("GET /api/v1/users/telegram/{id}", protected(r.handleGetUserByTelegram))
 	r.mux.Handle("GET /api/v1/users/telegram/{id}/devices", protected(r.handleGetDevices))
 	r.mux.Handle("DELETE /api/v1/users/telegram/{id}/devices/{device_id}", protected(r.handleDeleteDevice))
+	r.mux.Handle("GET /api/v1/users/uuid/{id}", protected(r.handleGetUserByUUID))
 	r.mux.Handle("GET /api/v1/users/ref/{code}", protected(r.handleGetUserByRef))
 	r.mux.Handle("POST /api/v1/users/telegram/{id}/balance", protected(r.handleAdjustBalance))
 	r.mux.Handle("POST /api/v1/users/telegram/{id}/max-devices", protected(r.handleSetMaxDevices))
@@ -110,9 +111,13 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/payments/platega/callback", http.HandlerFunc(r.handlePlatgaCallback))
 
 	// Admin
+	r.mux.Handle("GET /api/v1/admin/users", protected(r.handleAdminListUsers))
+	r.mux.Handle("GET /api/v1/admin/payments/stats", protected(r.handleAdminPaymentsStats))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/block", protected(r.handleAdminBlockUser))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/unblock", protected(r.handleAdminUnblockUser))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/set-expire", protected(r.handleAdminSetExpire))
+	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-ban", protected(r.handleAdminGlobalBan))
+	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-unban", protected(r.handleAdminGlobalUnban))
 
 	// ── Catch-all ─────────────────────────────────────────────────────────────
 	r.mux.HandleFunc("/", r.handleNotFound)

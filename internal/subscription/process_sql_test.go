@@ -71,7 +71,7 @@ func TestProcessSQL_Normal(t *testing.T) {
 	req := &Request{
 		RemoteAddr: "1.1.1.1",
 		UserAgent:  "happ/1000",
-		Query:      map[string]string{"id": "xray-uuid-1"},
+		Query:      map[string]string{"id": "sub-uuid-1"},
 		Headers: map[string]string{
 			"Host":   "sub.example.com",
 			"X-Hwid": "device1",
@@ -113,7 +113,7 @@ func TestProcessSQL_DeviceLimit(t *testing.T) {
 	req := &Request{
 		RemoteAddr: "1.1.1.1",
 		UserAgent:  "happ/1000",
-		Query:      map[string]string{"id": "xray-uuid-1"},
+		Query:      map[string]string{"id": "sub-uuid-1"},
 		Headers: map[string]string{
 			"Host":   "sub.example.com",
 			"X-Hwid": "device-new-4",

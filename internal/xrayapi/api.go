@@ -9,11 +9,13 @@ package xrayapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"xraytool/internal/xrayconfig"
 )
@@ -52,10 +54,18 @@ func (c *Client) AddUser(payload []xrayconfig.TaggedClient, configPath string) e
 		return fmt.Errorf("creating temp file: %w", err)
 	}
 	defer os.Remove(f.Name())
-	f.Write(data)
-	f.Close()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("writing to temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing temp file: %w", err)
+	}
 
-	cmd := exec.Command("xray", "api", "adu", "-s", c.addr, f.Name())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "xray", "api", "adu", "-s", c.addr, f.Name())
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -72,22 +82,37 @@ func (c *Client) AddUser(payload []xrayconfig.TaggedClient, configPath string) e
 			continue
 		}
 
-		sf, err := os.CreateTemp("", "xray-api-adu-single-*")
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		sf.Write(singleData)
-		sf.Close()
+		func() {
+			sf, err := os.CreateTemp("", "xray-api-adu-single-*")
+			if err != nil {
+				lastErr = err
+				return
+			}
+			defer os.Remove(sf.Name())
+			
+			if _, err := sf.Write(singleData); err != nil {
+				sf.Close()
+				lastErr = err
+				return
+			}
+			if err := sf.Close(); err != nil {
+				lastErr = err
+				return
+			}
 
-		singleCmd := exec.Command("xray", "api", "adu", "-s", c.addr, sf.Name())
-		singleOut, err := singleCmd.CombinedOutput()
-		os.Remove(sf.Name())
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			singleCmd := exec.CommandContext(ctx, "xray", "api", "adu", "-s", c.addr, sf.Name())
+			singleOut, err := singleCmd.CombinedOutput()
 
-		if err != nil {
-			lastErr = fmt.Errorf("tag=%s: %v (output: %s)", aib.Tag, err, strings.TrimSpace(string(singleOut)))
-			fmt.Fprintf(os.Stderr, "[ERROR] xray api adu failed for tag=%s: %v\n", aib.Tag, lastErr)
-		}
+			if err != nil {
+				lastErr = fmt.Errorf("tag=%s: %v", aib.Tag, err)
+				if len(singleOut) > 0 {
+					lastErr = fmt.Errorf("%w (output: %s)", lastErr, strings.TrimSpace(string(singleOut)))
+				}
+				fmt.Fprintf(os.Stderr, "[ERROR] xray api adu failed for tag=%s: %v\n", aib.Tag, lastErr)
+			}
+		}()
 	}
 	return lastErr
 }
@@ -104,7 +129,9 @@ func (c *Client) RemoveUser(email string, tags []string) error {
 	}
 	var errs []string
 	for _, tag := range tags {
-		cmd := exec.Command("xray", "api", "rmu", "-s", c.addr,
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "xray", "api", "rmu", "-s", c.addr,
 			fmt.Sprintf("-tag=%s", tag), email)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -130,11 +157,13 @@ type UserStat struct {
 
 // QueryStats queries the xray API for per-user traffic counters.
 func (c *Client) QueryStats() ([]UserStat, error) {
-	cmd := exec.Command("xray", "api", "statsquery",
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "xray", "api", "statsquery",
 		fmt.Sprintf("--server=%s", c.addr))
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("xray api statsquery: %w", err)
+		return nil, fmt.Errorf("xray api statsquery: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	return parseStats(out)
 }

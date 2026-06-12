@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
@@ -19,6 +21,7 @@ import (
 
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
+	"xraytool/internal/slave"
 	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
@@ -100,8 +103,8 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 
 	// Build the subscription link.
 	link := ""
-	if r.cfg != nil && r.cfg.Server.Domain != "" && sub.XrayUUID != "" {
-		link = fmt.Sprintf("https://%s/client?id=%s", r.cfg.Server.Domain, sub.XrayUUID)
+	if r.cfg != nil && r.cfg.Server.Domain != "" && sub.ID != "" {
+		link = fmt.Sprintf("https://%s/client?id=%s", r.cfg.Server.Domain, sub.ID)
 	}
 
 	// email field the bot uses: "bot_client_<tgID>"
@@ -118,12 +121,19 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 		return t.UTC().Format(time.RFC3339)
 	}
 
+	var activeDevices int64
+	if sub.ID != "" {
+		db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&activeDevices)
+	}
+
 	resp := map[string]interface{}{
 		"id":                     user.ID,
 		"username":               user.Username,
 		"balance":                user.Balance,
 		"is_admin":               user.IsAdmin,
+		"is_blocked":             user.IsBlocked,
 		"max_devices":            sub.MaxDevices,
+		"active_devices":         activeDevices,
 		"ref_code":               user.RefCode,
 		"referred_by":            user.ReferredBy,
 		"sub_status":             sub.Status,
@@ -184,6 +194,7 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 		TelegramID       int64  `json:"telegram_id"`
 		Username         string `json:"username"`
 		TelegramUsername string `json:"telegram_username"`
+		ReferredByCode   string `json:"referred_by_code"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -206,12 +217,23 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 	userID := uuid.New().String()
 	refCode := generateRefCode(db)
 
+	var referredByID *string
+	if body.ReferredByCode != "" {
+		var referrer database.User
+		if err := db.Where("ref_code = ?", body.ReferredByCode).First(&referrer).Error; err == nil {
+			referredByID = &referrer.ID
+		} else {
+			r.log.Warn("register user: invalid ref code provided", "code", body.ReferredByCode)
+		}
+	}
+
 	user := database.User{
-		ID:       userID,
-		Username: body.Username,
-		Balance:  0,
-		IsAdmin:  false,
-		RefCode:  refCode,
+		ID:         userID,
+		Username:   body.Username,
+		Balance:    0,
+		IsAdmin:    false,
+		RefCode:    refCode,
+		ReferredBy: referredByID,
 		Metadata: database.Metadata{
 			"telegram_id":       body.TelegramID,
 			"telegram_username": body.TelegramUsername,
@@ -372,6 +394,10 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	if user.IsBlocked {
+		writeError(w, http.StatusForbidden, "user is globally blocked")
+		return
+	}
 
 	// Atomic update using raw query
 	query := "UPDATE users SET balance = CASE WHEN balance + ? < 0 THEN 0 ELSE balance + ? END WHERE id = ?"
@@ -416,6 +442,10 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	if user.IsBlocked {
+		writeError(w, http.StatusForbidden, "user is globally blocked")
+		return
+	}
 
 	if result := db.Model(&database.Subscription{}).
 		Where("user_id = ?", user.ID).
@@ -452,6 +482,10 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 	user, err := findUserByTelegramID(db, tgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if user.IsBlocked {
+		writeError(w, http.StatusForbidden, "user is globally blocked")
 		return
 	}
 
@@ -500,20 +534,20 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	newEndsAt, err := time.Parse(time.RFC3339, body.NewEndsAt)
+	newEndsAt, err := parseExpiryDate(body.NewEndsAt)
 	if err != nil {
-		// Try other common formats.
-		newEndsAt, err = time.Parse("2006-01-02T15:04:05Z", body.NewEndsAt)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid new_ends_at format, expected RFC3339")
-			return
-		}
+		writeError(w, http.StatusBadRequest, "invalid new_ends_at format")
+		return
 	}
 
 	db := database.DB()
 	user, err := findUserByTelegramID(db, tgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if user.IsBlocked {
+		writeError(w, http.StatusForbidden, "user is globally blocked")
 		return
 	}
 
@@ -595,6 +629,10 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	if user.IsBlocked {
+		writeError(w, http.StatusForbidden, "user is globally blocked")
+		return
+	}
 
 	// Merge into existing metadata map.
 	if user.Metadata == nil {
@@ -614,6 +652,74 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin handlers
 // ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/v1/admin/users
+func (r *Router) handleAdminListUsers(w http.ResponseWriter, req *http.Request) {
+	pageStr := req.URL.Query().Get("page")
+	limitStr := req.URL.Query().Get("limit")
+	search := req.URL.Query().Get("search")
+
+	page := 1
+	limit := 50
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+		limit = l
+	}
+
+	db := database.DB()
+	query := db.Model(&database.User{})
+
+	if search != "" {
+		if db.Dialector.Name() == "postgres" {
+			likeQ := "%" + search + "%"
+			query = query.Where("username ILIKE ? OR metadata::text ILIKE ?", likeQ, likeQ)
+		} else {
+			searchLower := strings.ToLower(search)
+			searchUpper := strings.ToUpper(search)
+			
+			searchTitle := ""
+			if r, n := utf8.DecodeRuneInString(searchLower); n > 0 {
+				searchTitle = strings.ToUpper(string(r)) + searchLower[n:]
+			}
+			
+			likeLower := "%" + searchLower + "%"
+			likeUpper := "%" + searchUpper + "%"
+			likeTitle := "%" + searchTitle + "%"
+			likeOrig := "%" + search + "%"
+			
+			query = query.Where(
+				"username LIKE ? OR username LIKE ? OR username LIKE ? OR username LIKE ? OR "+
+				"metadata LIKE ? OR metadata LIKE ? OR metadata LIKE ? OR metadata LIKE ?",
+				likeLower, likeUpper, likeTitle, likeOrig,
+				likeLower, likeUpper, likeTitle, likeOrig,
+			)
+		}
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var users []database.User
+	if err := query.Offset((page - 1) * limit).Limit(limit).Find(&users).Error; err != nil {
+		r.log.Error("admin list users: db query error", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to query users")
+		return
+	}
+
+	var out []map[string]interface{}
+	for _, u := range users {
+		out = append(out, r.buildUserResponse(db, &u))
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"users": out,
+	})
+}
 
 // POST /api/v1/admin/users/{email}/block  →  {"ok":true}
 func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) {
@@ -672,7 +778,19 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		"updated_at": time.Now(),
 	}); result.Error != nil {
 		r.log.Error("admin block user: db status update failed", "err", result.Error)
-		// We still return 200 because Xray was updated successfully
+		writeError(w, http.StatusInternalServerError, "failed to update db status")
+		return
+	}
+
+	// 4. Propagate to slaves
+	if r.cfg.IsMaster() {
+		client := slave.NewClient(
+			r.cfg.SlaveAPI.ConnectTimeout,
+			r.cfg.SlaveAPI.RequestTimeout,
+			r.cfg.SlaveAPI.RemotePath,
+		)
+		reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+		go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 	}
 
 	r.log.Warn("admin action", "action", "block", "email", email, "caller_ip", getClientIP(req))
@@ -721,6 +839,13 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 		return
 	}
 
+	// Reload sub from DB so unbanUserInXray receives fresh max_devices / status.
+	if err := db.Where("email = ?", email).First(&sub).Error; err != nil {
+		r.log.Error("admin unblock user: reload subscription", "err", err)
+		writeError(w, http.StatusInternalServerError, "db reload error")
+		return
+	}
+
 	// 2. Put user back into Xray config & API memory
 	r.unbanUserInXray(sub)
 
@@ -748,17 +873,9 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Accept RFC3339 or plain date.
-	var expireTime time.Time
-	var err error
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"} {
-		expireTime, err = time.Parse(layout, body.Expire)
-		if err == nil {
-			break
-		}
-	}
+	expireTime, err := parseExpiryDate(body.Expire)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid expire format, expected RFC3339 or YYYY-MM-DD")
+		writeError(w, http.StatusBadRequest, "invalid expire format")
 		return
 	}
 
@@ -777,6 +894,13 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	}); result.Error != nil {
 		r.log.Error("admin set expire", "err", result.Error)
 		writeError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Reload sub from DB so unbanUserInXray receives the updated ends_at / status.
+	if err := db.Where("email = ?", email).First(&sub).Error; err != nil {
+		r.log.Error("admin set expire: reload subscription", "err", err)
+		writeError(w, http.StatusInternalServerError, "db reload error")
 		return
 	}
 
@@ -916,4 +1040,167 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 	if err := apiClient.AddUser(payload, r.cfg.Paths.XrayConfig); err != nil {
 		r.log.Error("hot-add failed", "email", sub.Email, "err", err)
 	}
+
+	// Propagate to slaves
+	if r.cfg.IsMaster() {
+		client := slave.NewClient(
+			r.cfg.SlaveAPI.ConnectTimeout,
+			r.cfg.SlaveAPI.RequestTimeout,
+			r.cfg.SlaveAPI.RemotePath,
+		)
+		reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+
+		slaveParams := map[string]string{
+			"email":   sub.Email,
+			"uuid":    sub.XrayUUID,
+			"subfile": subfile,
+			"expire":  expireVal,
+			"auth":    "",
+			"limit":   fmt.Sprintf("%.0f", limitF),
+		}
+
+		go func() {
+			results := reg.PropagateAll("newuser", slaveParams)
+			for _, res := range results {
+				if res.Err != nil {
+					r.log.Error("slave propagate newuser failed", "server", res.Server, "err", res.Err)
+				}
+			}
+		}()
+	}
+}
+
+// GET /api/v1/users/uuid/{id}
+func (r *Router) handleGetUserByUUID(w http.ResponseWriter, req *http.Request) {
+	id := req.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "uuid path parameter is required")
+		return
+	}
+
+	db := database.DB()
+	var existing database.User
+	if err := db.Where("id = ?", id).First(&existing).Error; err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, r.buildUserResponse(db, &existing))
+}
+
+// POST /api/v1/admin/users/telegram/{id}/global-ban
+func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) {
+	idStr := req.PathValue("id")
+	tgID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || tgID == 0 {
+		writeError(w, http.StatusBadRequest, "invalid telegram id")
+		return
+	}
+
+	db := database.DB()
+	user, err := findUserByTelegramID(db, tgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	// Set IsBlocked to true
+	if result := db.Model(user).Update("is_blocked", true); result.Error != nil {
+		r.log.Error("admin global ban user: update db failed", "err", result.Error)
+		writeError(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
+
+	// Find the user's subscription to remove them from Xray
+	var sub database.Subscription
+	if err := db.Where("user_id = ?", user.ID).First(&sub).Error; err == nil && sub.Email != "" {
+		// Remove from Xray config
+		var tags []string
+		modErr := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
+			t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
+			tags = t
+			return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
+		})
+		if modErr == nil && len(tags) > 0 {
+			apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+			_ = apiClient.RemoveUser(sub.Email, tags)
+		}
+		
+		// Optional: propagate to slaves
+		if r.cfg.IsMaster() {
+			client := slave.NewClient(
+				r.cfg.SlaveAPI.ConnectTimeout,
+				r.cfg.SlaveAPI.RequestTimeout,
+				r.cfg.SlaveAPI.RemotePath,
+			)
+			reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+			go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
+		}
+	}
+
+	r.log.Warn("admin action", "action", "global-ban", "telegram_id", tgID, "caller_ip", getClientIP(req))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/v1/admin/users/telegram/{id}/global-unban
+func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request) {
+	idStr := req.PathValue("id")
+	tgID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || tgID == 0 {
+		writeError(w, http.StatusBadRequest, "invalid telegram id")
+		return
+	}
+
+	db := database.DB()
+	user, err := findUserByTelegramID(db, tgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	// Set IsBlocked to false
+	if result := db.Model(user).Update("is_blocked", false); result.Error != nil {
+		r.log.Error("admin global unban user: update db failed", "err", result.Error)
+		writeError(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
+
+	// If the subscription is active, re-add to Xray
+	var sub database.Subscription
+	if err := db.Where("user_id = ?", user.ID).First(&sub).Error; err == nil && sub.Email != "" && sub.Status == "active" {
+		r.unbanUserInXray(sub)
+	}
+
+	r.log.Warn("admin action", "action", "global-unban", "telegram_id", tgID, "caller_ip", getClientIP(req))
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// parseExpiryDate parses human-readable dates from the admin bot.
+// Supports: "DD.MM.YYYY HH:MM", "DD.MM.YYYY" (defaults to 15:00 MSK), and RFC3339.
+func parseExpiryDate(dateStr string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05Z", dateStr); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+		return t, nil
+	}
+
+	mskLoc, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		mskLoc = time.FixedZone("MSK", 3*3600)
+	}
+
+	if t, err := time.ParseInLocation("02.01.2006 15:04", dateStr, mskLoc); err == nil {
+		return t.UTC(), nil
+	}
+
+	if t, err := time.ParseInLocation("02.01.2006", dateStr, mskLoc); err == nil {
+		t = time.Date(t.Year(), t.Month(), t.Day(), 15, 0, 0, 0, mskLoc)
+		return t.UTC(), nil
+	}
+
+	return time.Time{}, fmt.Errorf("invalid date format")
 }

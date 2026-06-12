@@ -1,9 +1,11 @@
 package xrayconfig
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"xraytool/internal/safeio"
 )
@@ -16,10 +18,21 @@ func lockFilePath(configPath string) string {
 	return configPath + ".lock"
 }
 
-// Read reads and parses the xray config.json, acquiring a shared (read) lock.
 func Read(path string) (RawConfig, error) {
 	processLock.RLock()
 	defer processLock.RUnlock()
+
+	lf, lockErr := openLockFile(lockFilePath(path))
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] xrayconfig Read: не удалось открыть lock-файл: %v\n", lockErr)
+	} else {
+		acquireFileLock(lf)
+		defer func() {
+			releaseFileLock(lf)
+			lf.Close()
+		}()
+	}
+
 	return readRaw(path)
 }
 
@@ -51,10 +64,21 @@ func Modify(path string, fn func(RawConfig) error) error {
 	return writeRaw(path, cfg)
 }
 
-// Write atomically writes the config. Prefer Modify when possible.
 func Write(path string, cfg RawConfig) error {
 	processLock.Lock()
 	defer processLock.Unlock()
+
+	lf, lockErr := openLockFile(lockFilePath(path))
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] xrayconfig Write: не удалось открыть lock-файл: %v\n", lockErr)
+	} else {
+		acquireFileLock(lf)
+		defer func() {
+			releaseFileLock(lf)
+			lf.Close()
+		}()
+	}
+
 	return writeRaw(path, cfg)
 }
 
@@ -89,8 +113,10 @@ func writeRaw(path string, cfg RawConfig) error {
 func openLockFile(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		// Fallback to /tmp.
-		return os.OpenFile("/tmp/xraytool_config.lock", os.O_CREATE|os.O_RDWR, 0o644)
+		// Fallback to os.TempDir(). Use a hash of the path to avoid cross-config lock contention
+		h := sha256.Sum256([]byte(path))
+		fallbackName := fmt.Sprintf("xraytool_config_%x.lock", h[:8])
+		return os.OpenFile(filepath.Join(os.TempDir(), fallbackName), os.O_CREATE|os.O_RDWR, 0o644)
 	}
 	return f, nil
 }

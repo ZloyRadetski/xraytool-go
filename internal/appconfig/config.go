@@ -481,6 +481,10 @@ func Load(path string) (*Config, error) {
 		cfg.Subscription.DummyConfigs.UnsupportedClient = defs.Subscription.DummyConfigs.UnsupportedClient
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	return cfg, nil
 }
 
@@ -492,4 +496,17 @@ func (c *Config) IsMaster() bool {
 // DetailedRetentionSeconds returns the retention window in seconds.
 func (c *Config) DetailedRetentionSeconds() int64 {
 	return int64(c.Stats.DetailedRetentionDays) * 24 * 60 * 60
+}
+
+// Validate ensures critical configuration fields are present.
+func (c *Config) Validate() error {
+	if c.IsMaster() {
+		if c.Server.Domain == "" {
+			return fmt.Errorf("server.domain is required for master nodes")
+		}
+		if c.Database.DSN == "" && c.Database.Driver != "sqlite" {
+			return fmt.Errorf("database.dsn is required for master nodes when not using sqlite")
+		}
+	}
+	return nil
 }

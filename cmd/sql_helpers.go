@@ -8,7 +8,8 @@ import (
 )
 
 func sqlSetStatus(email, status string) {
-	if db := database.DB(); db != nil {
+	if database.IsReady() {
+		db := database.DB()
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err == nil {
 			db.Model(&sub).Updates(map[string]interface{}{
@@ -20,7 +21,8 @@ func sqlSetStatus(email, status string) {
 }
 
 func sqlSetExpire(email string, expireVal string) {
-	if db := database.DB(); db != nil {
+	if database.IsReady() {
+		db := database.DB()
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err == nil {
 			updates := map[string]interface{}{
@@ -35,7 +37,8 @@ func sqlSetExpire(email string, expireVal string) {
 }
 
 func sqlSetLimit(email string, limit int) {
-	if db := database.DB(); db != nil {
+	if database.IsReady() {
+		db := database.DB()
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err == nil {
 			db.Model(&sub).Updates(map[string]interface{}{
@@ -47,7 +50,8 @@ func sqlSetLimit(email string, limit int) {
 }
 
 func sqlCreateUserIfNotExist(email, xrayUUID, expire string, limit int, subfile string) {
-	if db := database.DB(); db != nil {
+	if database.IsReady() {
+		db := database.DB()
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).First(&sub).Error; err != nil {
 			// user not found, create
@@ -83,6 +87,24 @@ func sqlCreateUserIfNotExist(email, xrayUUID, expire string, limit int, subfile 
 				CreatedAt:  time.Now(),
 				UpdatedAt:  time.Now(),
 			})
+		} else {
+			// User exists (probably from migrate_db). 
+			// We must merge the REAL XrayUUID and subfile from config.json.
+			updated := false
+			if sub.Metadata == nil {
+				sub.Metadata = make(map[string]interface{})
+			}
+			if sub.XrayUUID != xrayUUID {
+				sub.XrayUUID = xrayUUID
+				updated = true
+			}
+			if sub.Metadata["subfile"] != subfile {
+				sub.Metadata["subfile"] = subfile
+				updated = true
+			}
+			if updated {
+				db.Save(&sub)
+			}
 		}
 	}
 }
