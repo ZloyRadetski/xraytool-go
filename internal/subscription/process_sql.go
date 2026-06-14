@@ -356,6 +356,8 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 		res.Headers["Content-Disposition"] = `attachment; filename="configs.txt"`
 		res.Headers["Content-Type"] = "text/plain; charset=utf-8"
+		res.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+		res.Headers["Pragma"] = "no-cache"
 		res.StatusCode = 200
 		res.Body = shareLinks
 		return res

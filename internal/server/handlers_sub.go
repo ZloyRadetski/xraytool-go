@@ -53,6 +53,8 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 	subRes := subscription.ProcessSQL(database.DB(), r.cm, r.dispatcher, subReq)
 
 	// 6. Send headers and write body
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
 	for k, v := range subRes.Headers {
 		w.Header().Set(k, v)
 	}

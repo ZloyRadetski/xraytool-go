@@ -109,7 +109,7 @@ type ReferralReward struct {
 	// ReferredID is the UUID of the user who was referred.
 	ReferredID string `gorm:"type:text;not null;index"`
 	// PaymentID is the triggering payment's ID.
-	PaymentID int64 `gorm:"not null;index"`
+	PaymentID int64 `gorm:"not null;uniqueIndex"`
 	// Amount is the reward value credited to ReferrerID.
 	Amount int `gorm:"not null"`
 	// Date of actual issuance/award.

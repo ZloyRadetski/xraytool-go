@@ -72,7 +72,7 @@ func findUserByTelegramID(db *gorm.DB, tgID int64) (*database.User, error) {
 func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]interface{} {
 	// Load the subscription for this user (there should be one; tolerate absence).
 	var sub database.Subscription
-	db.Where("user_id = ?", user.ID).First(&sub)
+	db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub)
 
 	// Count referral rows where this user is the referrer.
 	var referralCount int64
@@ -517,6 +517,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		PlanTotalPrice int    `json:"plan_total_price"`
 		NewEndsAt      string `json:"new_ends_at"`
+		MaxDevices     int    `json:"max_devices"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -532,6 +533,9 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	if body.PlanTotalPrice <= 0 {
 		writeError(w, http.StatusBadRequest, "plan_total_price must be positive")
 		return
+	}
+	if body.MaxDevices == 0 {
+		body.MaxDevices = 3
 	}
 
 	newEndsAt, err := parseExpiryDate(body.NewEndsAt)
@@ -570,10 +574,11 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		return tx.Model(&database.Subscription{}).
 			Where("user_id = ?", user.ID).
 			Updates(map[string]interface{}{
-				"status":     "active",
-				"ends_at":    newEndsAt,
-				"starts_at":  now,
-				"updated_at": now,
+				"status":      "active",
+				"ends_at":     newEndsAt,
+				"max_devices": body.MaxDevices,
+				"starts_at":   now,
+				"updated_at":  now,
 			}).Error
 	})
 
@@ -590,6 +595,9 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	// Fetch the updated subscription and ensure user is unbanned in Xray config
 	var updatedSub database.Subscription
 	if err := db.Where("user_id = ?", user.ID).First(&updatedSub).Error; err == nil {
+		// Delete any sent notification flags so they can be re-triggered when this sub nears expiration
+		db.Where("subscription_id = ?", updatedSub.ID).Delete(&database.SubscriptionNotification{})
+		
 		r.unbanUserInXray(updatedSub)
 	} else {
 		r.log.Error("failed to find subscription after auto-renew for unban", "user_id", user.ID, "err", err)
@@ -733,7 +741,7 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 
 	// Find subscription by email.
 	var sub database.Subscription
-	if result := db.Where("email = ?", email).First(&sub); result.Error != nil {
+	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
@@ -820,7 +828,7 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	db := database.DB()
 
 	var sub database.Subscription
-	if result := db.Where("email = ?", email).First(&sub); result.Error != nil {
+	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
@@ -840,7 +848,7 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	}
 
 	// Reload sub from DB so unbanUserInXray receives fresh max_devices / status.
-	if err := db.Where("email = ?", email).First(&sub).Error; err != nil {
+	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
 		r.log.Error("admin unblock user: reload subscription", "err", err)
 		writeError(w, http.StatusInternalServerError, "db reload error")
 		return
@@ -882,7 +890,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	db := database.DB()
 
 	var sub database.Subscription
-	if result := db.Where("email = ?", email).First(&sub); result.Error != nil {
+	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
@@ -898,11 +906,14 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Reload sub from DB so unbanUserInXray receives the updated ends_at / status.
-	if err := db.Where("email = ?", email).First(&sub).Error; err != nil {
+	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
 		r.log.Error("admin set expire: reload subscription", "err", err)
 		writeError(w, http.StatusInternalServerError, "db reload error")
 		return
 	}
+
+	// Delete any sent notification flags so they can be re-triggered
+	db.Where("subscription_id = ?", sub.ID).Delete(&database.SubscriptionNotification{})
 
 	r.unbanUserInXray(sub)
 
@@ -1113,7 +1124,7 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 
 	// Find the user's subscription to remove them from Xray
 	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).First(&sub).Error; err == nil && sub.Email != "" {
+	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err == nil && sub.Email != "" {
 		// Remove from Xray config
 		var tags []string
 		modErr := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
@@ -1167,7 +1178,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 
 	// If the subscription is active, re-add to Xray
 	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).First(&sub).Error; err == nil && sub.Email != "" && sub.Status == "active" {
+	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err == nil && sub.Email != "" && sub.Status == "active" {
 		r.unbanUserInXray(sub)
 	}
 

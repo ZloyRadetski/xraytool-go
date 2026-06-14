@@ -236,6 +236,9 @@ func (w *ExpiryWorker) handleExpired(sub database.Subscription) {
 }
 
 func (w *ExpiryWorker) handleWarnings(sub database.Subscription, timeLeft time.Duration) {
+	var triggeredWarnStr string
+	var minTriggeredDur time.Duration
+
 	for _, warnStr := range w.cfg.Worker.ExpirationWarnings {
 		warnDur, err := time.ParseDuration(warnStr)
 		if err != nil {
@@ -259,26 +262,32 @@ func (w *ExpiryWorker) handleWarnings(sub database.Subscription, timeLeft time.D
 			}
 
 			if res.RowsAffected > 0 {
-				// We actually inserted it, so trigger webhook
-				w.log.Info("Sending expiration warning", "email", sub.Email, "level", warnStr)
-
-				payload := map[string]interface{}{
-					"user_id":         sub.UserID,
-					"subscription_id": sub.ID,
-					"email":           sub.Email,
-					"warning_level":   warnStr,
-					"time_left_sec":   timeLeft.Seconds(),
-					"ends_at":         sub.EndsAt.Format(time.RFC3339),
-				}
-				var userMetadata map[string]interface{}
-				var user database.User
-				if err := w.db.Where("id = ?", sub.UserID).First(&user).Error; err == nil && user.Metadata != nil {
-					userMetadata = user.Metadata
-				}
-				if w.dispatcher != nil {
-					w.dispatcher.Dispatch("subscription.expiring", payload, userMetadata)
+				if triggeredWarnStr == "" || warnDur < minTriggeredDur {
+					triggeredWarnStr = warnStr
+					minTriggeredDur = warnDur
 				}
 			}
+		}
+	}
+
+	if triggeredWarnStr != "" {
+		w.log.Info("Sending expiration warning", "email", sub.Email, "level", triggeredWarnStr)
+
+		payload := map[string]interface{}{
+			"user_id":         sub.UserID,
+			"subscription_id": sub.ID,
+			"email":           sub.Email,
+			"warning_level":   triggeredWarnStr,
+			"time_left_sec":   timeLeft.Seconds(),
+			"ends_at":         sub.EndsAt.Format(time.RFC3339),
+		}
+		var userMetadata map[string]interface{}
+		var user database.User
+		if err := w.db.Where("id = ?", sub.UserID).First(&user).Error; err == nil && user.Metadata != nil {
+			userMetadata = user.Metadata
+		}
+		if w.dispatcher != nil {
+			w.dispatcher.Dispatch("subscription.expiring", payload, userMetadata)
 		}
 	}
 }

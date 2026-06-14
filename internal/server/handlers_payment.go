@@ -277,6 +277,15 @@ func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Pa
 
 	// Credit the referrer's balance atomically and record the reward inside a transaction.
 	txErr := db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&database.ReferralReward{}).Where("payment_id = ?", payment.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			// Reward already processed for this payment.
+			return nil
+		}
+
 		if result := tx.Model(&database.User{}).
 			Where("id = ?", referrerID).
 			Update("balance", gorm.Expr("balance + ?", reward)); result.Error != nil {
