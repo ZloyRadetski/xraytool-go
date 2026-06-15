@@ -145,6 +145,27 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		} else {
 			finalAmount = promoPrice
 		}
+	} else if body.PromoCode != "" {
+		var promo database.PromoCode
+		code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
+		if err := db.Where("code = ?", code).First(&promo).Error; err == nil {
+			if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
+				platform := strings.ToLower(strings.TrimSpace(body.Platform))
+				if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
+					if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
+						writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+						return
+					}
+					var count int64
+					db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
+					if count > 0 {
+						writeError(w, http.StatusBadRequest, "promo code already used by this user")
+						return
+					}
+					promoCodeID = &promo.ID
+				}
+			}
+		}
 	}
 
 	payment := database.Payment{
