@@ -124,6 +124,14 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 							writeError(w, http.StatusBadRequest, "promo code usage limit reached")
 							return
 						}
+						
+						var count int64
+						db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
+						if count > 0 {
+							writeError(w, http.StatusBadRequest, "promo code already used by this user")
+							return
+						}
+						
 						promoPrice = plan.BasePrice - (plan.BasePrice * promo.DiscountPercent / 100)
 						promoCodeID = &promo.ID
 					}

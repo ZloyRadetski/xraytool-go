@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     image: ghcr.io/${GITHUB_USER_OR_ORG}/xraytool-go:latest

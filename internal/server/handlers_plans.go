@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +83,21 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 	if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
 		writeError(w, http.StatusBadRequest, "promo code usage limit reached")
 		return
+	}
+
+	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
+	if telegramIDStr != "" {
+		if tgID, err := strconv.ParseInt(telegramIDStr, 10, 64); err == nil {
+			var user database.User
+			if err := db.Where("telegram_id = ?", tgID).First(&user).Error; err == nil {
+				var count int64
+				db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
+				if count > 0 {
+					writeError(w, http.StatusBadRequest, "promo code already used by this user")
+					return
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
