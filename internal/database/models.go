@@ -97,7 +97,35 @@ type Payment struct {
 	ExternalID *string `gorm:"type:text;uniqueIndex"`
 	// CustomData stores provider-specific response fields.
 	CustomData Metadata `gorm:"serializer:json"`
+	// PlanID is the ID of the plan purchased (if any).
+	PlanID *int64 `gorm:"index"`
+	// PromoCodeID is the ID of the promo code used (if any).
+	PromoCodeID *int64 `gorm:"index"`
 	CreatedAt  time.Time
+}
+
+// Plan represents a subscription plan.
+type Plan struct {
+	ID                    int64     `gorm:"primaryKey;autoIncrement"`
+	Months                int       `gorm:"uniqueIndex;not null"`
+	BasePrice             int       `gorm:"not null"`
+	GlobalDiscountPercent int       `gorm:"default:0;not null"`
+	IsActive              bool      `gorm:"default:true;not null"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+// PromoCode represents a discount code that can be used by users.
+type PromoCode struct {
+	ID              int64      `gorm:"primaryKey;autoIncrement"`
+	Code            string     `gorm:"type:text;uniqueIndex;not null"`
+	DiscountPercent int        `gorm:"not null"`
+	MaxUses         int        `gorm:"default:0;not null"` // 0 = unlimited
+	TargetPlatform  string     `gorm:"type:text;not null;default:'all'"` // 'all', 'bot', 'web'
+	ExpiresAt       *time.Time `gorm:"index"`
+	IsActive        bool       `gorm:"default:true;not null"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // ReferralReward records a credit award granted to a referrer when a referred user pays.

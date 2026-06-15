@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -60,6 +61,9 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		PaymentType string `json:"payment_type"`
 		Method      string `json:"method"`
 		ExternalID  string `json:"external_id"`
+		PlanID      *int64 `json:"plan_id"`
+		PromoCode   string `json:"promo_code"`
+		Platform    string `json:"platform"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -68,8 +72,8 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "telegram_id is required")
 		return
 	}
-	if body.Amount <= 0 {
-		writeError(w, http.StatusBadRequest, "amount must be positive")
+	if body.PlanID == nil && body.Amount <= 0 {
+		writeError(w, http.StatusBadRequest, "amount must be positive if plan_id is missing")
 		return
 	}
 	if body.PaymentType == "" {
@@ -93,13 +97,65 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		externalIDPtr = &body.ExternalID
 	}
 
+	finalAmount := body.Amount
+	var promoCodeID *int64
+
+	if body.PlanID != nil {
+		var plan database.Plan
+		if err := db.First(&plan, *body.PlanID).Error; err != nil {
+			writeError(w, http.StatusBadRequest, "invalid plan_id")
+			return
+		}
+		
+		globalPrice := plan.BasePrice
+		if plan.GlobalDiscountPercent > 0 {
+			globalPrice = plan.BasePrice - (plan.BasePrice * plan.GlobalDiscountPercent / 100)
+		}
+
+		promoPrice := plan.BasePrice
+		if body.PromoCode != "" {
+			var promo database.PromoCode
+			code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
+			if err := db.Where("code = ?", code).First(&promo).Error; err == nil {
+				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
+					platform := strings.ToLower(strings.TrimSpace(body.Platform))
+					if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
+						limitOk := true
+						if promo.MaxUses > 0 {
+							var count int64
+							db.Model(&database.Payment{}).
+								Where("promo_code_id = ? AND status IN ?", promo.ID, []string{"completed", "pending_card"}).
+								Count(&count)
+							if int(count) >= promo.MaxUses {
+								limitOk = false
+							}
+						}
+						if limitOk {
+							promoPrice = plan.BasePrice - (plan.BasePrice * promo.DiscountPercent / 100)
+							promoCodeID = &promo.ID
+						}
+					}
+				}
+			}
+		}
+
+		if globalPrice < promoPrice {
+			finalAmount = globalPrice
+			promoCodeID = nil // Global discount was better, promo code is not applied
+		} else {
+			finalAmount = promoPrice
+		}
+	}
+
 	payment := database.Payment{
 		UserID:      user.ID,
-		Amount:      body.Amount,
+		Amount:      finalAmount,
 		Status:      "pending_card",
 		PaymentType: body.PaymentType,
 		Method:      body.Method,
 		ExternalID:  externalIDPtr,
+		PlanID:      body.PlanID,
+		PromoCodeID: promoCodeID,
 		CustomData: database.Metadata{
 			"telegram_id": body.TelegramID,
 		},

@@ -523,3 +523,41 @@ X-API-Key: secret
   "ok": true
 }
 ```
+
+---
+## 💳 Тарифы и Промокоды (Protected)
+
+### `GET /api/v1/plans`
+Получение списка активных тарифных планов. Бэкенд автоматически применяет глобальные скидки.
+* **Ответ (200 OK):**
+```json
+[
+  {
+    "id": 1,
+    "months": 1,
+    "base_price": 159,
+    "discount_percent": 10,
+    "final_price": 143
+  }
+]
+```
+
+### `GET /api/v1/promocodes/validate`
+Проверка актуальности промокода для конкретной платформы.
+* **Query параметры:**
+  * `code` (строка, обязательно) - Сам промокод (например SUMMER20).
+  * `platform` (строка, обязательно) - Платформа (bot или web).
+* **Ответ (200 OK):**
+```json
+{
+  "valid": true,
+  "discount_percent": 20,
+  "id": 1
+}
+```
+* **Ответ при ошибке (400 Bad Request):**
+```json
+{
+  "error": "promo code usage limit reached"
+}
+```

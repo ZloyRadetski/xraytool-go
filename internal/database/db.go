@@ -99,6 +99,8 @@ func Init(cfg Config) error {
 		&Payment{},
 		&ReferralReward{},
 		&SubscriptionNotification{},
+		&Plan{},
+		&PromoCode{},
 	); err != nil {
 		initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
 		return initErr
@@ -106,6 +108,19 @@ func Init(cfg Config) error {
 
 	db = conn
 	initErr = nil
+
+	// Seed default plans if the table is empty
+	var count int64
+	if err := db.Model(&Plan{}).Count(&count).Error; err == nil && count == 0 {
+		defaultPlans := []Plan{
+			{Months: 1, BasePrice: 159},
+			{Months: 3, BasePrice: 429},
+			{Months: 6, BasePrice: 799},
+			{Months: 12, BasePrice: 1399},
+		}
+		db.Create(&defaultPlans)
+	}
+
 	return nil
 }
 

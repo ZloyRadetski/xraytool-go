@@ -68,3 +68,81 @@ func TestPayment_DefaultTimestamp(t *testing.T) {
 		t.Error("expected CreatedAt to be set")
 	}
 }
+
+func TestPlan_DefaultValues(t *testing.T) {
+	db := newTestDB(t)
+	
+	plan := database.Plan{Months: 24, BasePrice: 3000}
+	err := db.Create(&plan).Error
+	if err != nil {
+		t.Fatalf("failed to create plan: %v", err)
+	}
+
+	var p database.Plan
+	db.First(&p, "id = ?", plan.ID)
+
+	if p.GlobalDiscountPercent != 0 {
+		t.Errorf("expected GlobalDiscountPercent=0, got %d", p.GlobalDiscountPercent)
+	}
+	if !p.IsActive {
+		t.Errorf("expected IsActive=true")
+	}
+}
+
+func TestPromoCode_DefaultValues(t *testing.T) {
+	db := newTestDB(t)
+	
+	promo := database.PromoCode{Code: "TESTCODE", DiscountPercent: 10}
+	err := db.Create(&promo).Error
+	if err != nil {
+		t.Fatalf("failed to create promo code: %v", err)
+	}
+
+	var pc database.PromoCode
+	db.First(&pc, "id = ?", promo.ID)
+
+	if pc.MaxUses != 0 {
+		t.Errorf("expected MaxUses=0, got %d", pc.MaxUses)
+	}
+	if pc.TargetPlatform != "all" {
+		t.Errorf("expected TargetPlatform='all', got %q", pc.TargetPlatform)
+	}
+	if !pc.IsActive {
+		t.Errorf("expected IsActive=true")
+	}
+}
+
+func TestPayment_WithPlanAndPromoCode(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create user
+	user := database.User{ID: "u_pay_test", Username: "pay_test"}
+	db.Create(&user)
+
+	planID := int64(1)
+	promoID := int64(1)
+	
+	payment := database.Payment{
+		UserID: user.ID,
+		Amount: 100,
+		Status: "completed",
+		PaymentType: "subscription",
+		PlanID: &planID,
+		PromoCodeID: &promoID,
+	}
+
+	err := db.Create(&payment).Error
+	if err != nil {
+		t.Fatalf("failed to create payment: %v", err)
+	}
+
+	var p database.Payment
+	db.First(&p, "id = ?", payment.ID)
+
+	if p.PlanID == nil || *p.PlanID != planID {
+		t.Errorf("expected PlanID=%d", planID)
+	}
+	if p.PromoCodeID == nil || *p.PromoCodeID != promoID {
+		t.Errorf("expected PromoCodeID=%d", promoID)
+	}
+}

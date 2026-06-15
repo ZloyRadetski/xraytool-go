@@ -101,6 +101,10 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/users/telegram/{id}/auto-renew", protected(r.handleAutoRenew))
 	r.mux.Handle("POST /api/v1/users/telegram/{id}/metadata", protected(r.handleSetMetadata))
 
+	// Plans & Promocodes
+	r.mux.Handle("GET /api/v1/plans", protected(r.handleGetPlans))
+	r.mux.Handle("GET /api/v1/promocodes/validate", protected(r.handleValidatePromoCode))
+
 	// Payments
 	r.mux.Handle("POST /api/v1/payments/create", protected(r.handleCreatePayment))
 	r.mux.Handle("GET /api/v1/payments", protected(r.handleListPayments))

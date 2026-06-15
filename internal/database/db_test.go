@@ -26,6 +26,8 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&database.Payment{},
 		&database.ReferralReward{},
 		&database.SubscriptionNotification{}, // kept in sync with database.Init()
+		&database.Plan{},
+		&database.PromoCode{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
