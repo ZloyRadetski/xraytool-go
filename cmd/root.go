@@ -27,7 +27,6 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 	SilenceUsage:  true,
 	Run: func(cmd *cobra.Command, args []string) {
-		checkAndReportPermissions()
 		cmd.Help()
 	},
 }
