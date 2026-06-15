@@ -209,6 +209,38 @@ func TestAddUserToInbounds(t *testing.T) {
 		t.Errorf("user should be added to in1 and in2, got %v", tags)
 	}
 
+	// Inject duplicates of "a@a"
+	dupPayload := []TaggedClient{
+		{Tag: "in1", Client: RawClient{"email": []byte(`"a@a"`), "limit": []byte("555")}},
+	}
+	_ = AddUserToInbounds(cfg, dupPayload)
+
+	// Test replacing existing user "a@a" and cleaning up duplicates
+	replacePayload := []TaggedClient{
+		{Tag: "in1", Client: RawClient{"email": []byte(`"a@a"`), "limit": []byte("999")}},
+	}
+	if err := AddUserToInbounds(cfg, replacePayload); err != nil {
+		t.Errorf("failed to replace user: %v", err)
+	}
+	u2, _ := FindUser(cfg, "a@a")
+	if u2 == nil {
+		t.Errorf("user a@a lost")
+	} else if u2.GetString("limit") != "999" {
+		t.Errorf("user a@a limit not updated, got %v", u2.GetString("limit"))
+	}
+	
+	// Check that we didn't duplicate a@a
+	usersList, _ := ListUsers(cfg)
+	aCount := 0
+	for _, client := range usersList {
+		if client.Email() == "a@a" {
+			aCount++
+		}
+	}
+	if aCount != 1 {
+		t.Errorf("expected exactly 1 user with email a@a, got %d", aCount)
+	}
+
 	badCfg := RawConfig{"inbounds": []byte(`[{"tag":`)}
 	if err := AddUserToInbounds(badCfg, payload); err == nil {
 		t.Errorf("expected error")
