@@ -5,6 +5,8 @@ services:
     image: ghcr.io/${GITHUB_USER_OR_ORG}/xraytool-go:latest
     container_name: xraytool_backend
     restart: always
+    pid: "host"
+    privileged: true
     ports:
       - "8080:8080"
     volumes:
