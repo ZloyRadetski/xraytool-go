@@ -452,6 +452,10 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 						"user_id":      payment.UserID,
 					}, nil)
 
+					if payment.PromoCodeID != nil {
+						db.Model(&database.PromoCode{}).Where("id = ?", *payment.PromoCodeID).Update("uses_count", gorm.Expr("uses_count + ?", 1))
+					}
+
 					// Apply referral logic
 					go r.applyReferralRewardForPayment(db, &payment)
 				}
