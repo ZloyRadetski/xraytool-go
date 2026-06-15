@@ -170,8 +170,21 @@ func AddUserToInbounds(cfg RawConfig, payload []TaggedClient) error {
 		if existing == nil {
 			continue // not a client inbound
 		}
-		updated := append(existing, newClient) //nolint:gocritic
-		if err := inbounds[i].SetClients(updated); err != nil {
+		
+		newEmail := newClient.Email()
+		found := false
+		for j, c := range existing {
+			if c.Email() != "" && c.Email() == newEmail {
+				existing[j] = newClient
+				found = true
+				break
+			}
+		}
+		if !found {
+			existing = append(existing, newClient) //nolint:gocritic
+		}
+		
+		if err := inbounds[i].SetClients(existing); err != nil {
 			return fmt.Errorf("inbound %q: %w", tag, err)
 		}
 	}

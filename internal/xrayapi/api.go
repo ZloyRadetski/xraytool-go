@@ -41,6 +41,16 @@ func (c *Client) AddUser(payload []xrayconfig.TaggedClient, configPath string) e
 	if len(payload) == 0 {
 		return nil
 	}
+	
+	// Hot-remove user from memory before adding to seamlessly support updates.
+	email := payload[0].Client.Email()
+	if email != "" {
+		var tags []string
+		for _, tc := range payload {
+			tags = append(tags, tc.Tag)
+		}
+		_ = c.RemoveUser(email, tags)
+	}
 
 	apiPld := buildAddPayload(payload, configPath)
 	data, err := json.Marshal(apiPld)
