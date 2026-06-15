@@ -17,7 +17,7 @@ COPY . .
 
 # Build the binary with optimizations (-s -w strips debug info)
 # CGO_ENABLED=0 ensures a static binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o xraytool cmd/xraytool/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o xraytool main.go
 
 # Stage 2: Create a minimal production image
 FROM alpine:latest
