@@ -36,10 +36,13 @@ COPY --from=builder /app/xraytool .
 # Expose the default API port
 EXPOSE 8080
 
-# Create a wrapper for systemctl to allow the container to restart host services
+# Create wrappers for systemctl and xray to allow the container to execute them on the host
 RUN echo '#!/bin/sh' > /usr/local/bin/systemctl && \
     echo 'nsenter -t 1 -m -u -n -i systemctl "$@"' >> /usr/local/bin/systemctl && \
-    chmod +x /usr/local/bin/systemctl
+    chmod +x /usr/local/bin/systemctl && \
+    echo '#!/bin/sh' > /usr/local/bin/xray && \
+    echo 'nsenter -t 1 -m -u -n -i xray "$@"' >> /usr/local/bin/xray && \
+    chmod +x /usr/local/bin/xray
 
 # Run the binary
 ENTRYPOINT ["./xraytool"]
