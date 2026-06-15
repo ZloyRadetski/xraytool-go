@@ -122,6 +122,11 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/admin/users/{email}/set-expire", protected(r.handleAdminSetExpire))
 	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-ban", protected(r.handleAdminGlobalBan))
 	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-unban", protected(r.handleAdminGlobalUnban))
+	
+	// Admin Promocodes
+	r.mux.Handle("POST /api/v1/admin/promocodes", protected(r.handleAdminCreatePromoCode))
+	r.mux.Handle("GET /api/v1/admin/promocodes", protected(r.handleAdminListPromoCodes))
+	r.mux.Handle("DELETE /api/v1/admin/promocodes/{id}", protected(r.handleAdminDeletePromoCode))
 
 	// ── Catch-all ─────────────────────────────────────────────────────────────
 	r.mux.HandleFunc("/", r.handleNotFound)
