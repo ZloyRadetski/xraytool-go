@@ -45,4 +45,4 @@ RUN echo '#!/bin/sh' > /usr/local/bin/systemctl && \
     chmod +x /usr/local/bin/xray
 
 # Run the binary
-ENTRYPOINT ["./xraytool"]
+ENTRYPOINT ["./xraytool", "server"]
