@@ -1,0 +1,10 @@
+.git
+.idea
+.vscode
+.DS_Store
+*.db
+*.log
+data/
+tests/
+fix_*.py
+fix_*.go

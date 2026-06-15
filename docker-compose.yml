@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ghcr.io/${GITHUB_USER_OR_ORG}/xraytool-go:latest
+    container_name: xraytool_backend
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/config.yaml:/etc/xraytool/config.yaml
+      - ./data/xraytool.db:/var/lib/xraytool/xraytool.db
+      - ./data/xray_config.json:/usr/local/etc/xray/config.json
+    # Uncomment and adjust if using Postgres instead of SQLite
+    # environment:
+    #   - XRAYTOOL_DB_DSN=postgres://user:pass@postgres:5432/xraytool
+    # depends_on:
+    #   - postgres
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: xraytool_watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup xraytool_backend
