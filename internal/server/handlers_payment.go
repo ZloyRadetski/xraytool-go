@@ -315,7 +315,7 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 	if body.Status == "completed" {
 		var payment database.Payment
 		if err := db.First(&payment, paymentID).Error; err == nil && payment.PromoCodeID != nil {
-			db.Model(&database.PromoCode{}).Where("id = ?", *payment.PromoCodeID).Update("uses_count", gorm.Expr("uses_count + ?", 1))
+			db.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *payment.PromoCodeID)
 		}
 		
 		if db.First(&payment, paymentID).Error == nil {
@@ -474,7 +474,7 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 					}, nil)
 
 					if payment.PromoCodeID != nil {
-						db.Model(&database.PromoCode{}).Where("id = ?", *payment.PromoCodeID).Update("uses_count", gorm.Expr("uses_count + ?", 1))
+						db.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *payment.PromoCodeID)
 					}
 
 					// Apply referral logic

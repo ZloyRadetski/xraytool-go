@@ -149,8 +149,12 @@ func TestAdminSetExpire_Success(t *testing.T) {
 
 func TestRegisterUser_DBError(t *testing.T) {
 	db := database.DB()
+	db.Migrator().DropTable(&database.Subscription{})
 	db.Migrator().DropTable(&database.User{})
-	defer db.AutoMigrate(&database.User{})
+	defer func() {
+		db.AutoMigrate(&database.User{})
+		db.AutoMigrate(&database.Subscription{})
+	}()
 
 	r := newTestRouter(t)
 	w := doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1234,"username":"Crash"}`)
@@ -161,8 +165,12 @@ func TestRegisterUser_DBError(t *testing.T) {
 
 func TestListUsers_DBError(t *testing.T) {
 	db := database.DB()
+	db.Migrator().DropTable(&database.Subscription{})
 	db.Migrator().DropTable(&database.User{})
-	defer db.AutoMigrate(&database.User{})
+	defer func() {
+		db.AutoMigrate(&database.User{})
+		db.AutoMigrate(&database.Subscription{})
+	}()
 
 	r := newTestRouter(t)
 	w := doAuth(r, "GET", "/api/v1/users", "")

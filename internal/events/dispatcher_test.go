@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,23 +97,81 @@ func TestDispatcherRetry(t *testing.T) {
 
 func TestDispatcher_Dispatch_Async(t *testing.T) {
 	var requestCount int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&requestCount, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
+	var receivedEvent Event
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	cfg := &appconfig.Config{Webhooks: []string{ts.URL}}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		defer wg.Done()
+		atomic.AddInt32(&requestCount, 1)
+
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("Expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &receivedEvent); err != nil {
+			t.Errorf("Failed to parse event: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+
+	ts1 := httptest.NewServer(http.HandlerFunc(handler))
+	defer ts1.Close()
+
+	ts2 := httptest.NewServer(http.HandlerFunc(handler))
+	defer ts2.Close()
+
+	cfg := &appconfig.Config{Webhooks: []string{ts1.URL, ts2.URL}}
 	d := NewDispatcher(cfg)
 
-	// async publish
-	d.Dispatch("async.event", nil, nil)
+	data := map[string]interface{}{"info": "test_data"}
+	metadata := map[string]interface{}{"user_id": "123"}
 
-	// Wait a bit
-	time.Sleep(100 * time.Millisecond)
-	if atomic.LoadInt32(&requestCount) == 0 {
-		t.Errorf("Expected async event to reach webhook")
+	// async publish
+	d.Dispatch("async.event", data, metadata)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Timeout waiting for webhooks to be called")
 	}
+
+	if atomic.LoadInt32(&requestCount) != 2 {
+		t.Errorf("Expected 2 requests, got %d", requestCount)
+	}
+
+	if receivedEvent.EventType != "async.event" {
+		t.Errorf("Expected EventType 'async.event', got '%s'", receivedEvent.EventType)
+	}
+	if receivedEvent.EventID == "" {
+		t.Errorf("Expected non-empty EventID")
+	}
+	if receivedEvent.Timestamp == "" {
+		t.Errorf("Expected non-empty Timestamp")
+	}
+	if val, ok := receivedEvent.Data["info"]; !ok || val != "test_data" {
+		t.Errorf("Expected data['info']='test_data', got %v", receivedEvent.Data)
+	}
+	if val, ok := receivedEvent.UserMetadata["user_id"]; !ok || val != "123" {
+		t.Errorf("Expected UserMetadata['user_id']='123', got %v", receivedEvent.UserMetadata)
+	}
+}
+
+func TestDispatcher_NilConfig(t *testing.T) {
+	d := NewDispatcher(nil)
+	d.Dispatch("test", nil, nil)
+	d.DispatchSync("test", nil, nil)
+	// Should not panic
 }
 
 func TestDispatcher_DeadWebhook_Fallback(t *testing.T) {

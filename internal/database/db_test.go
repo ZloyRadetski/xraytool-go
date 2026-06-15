@@ -281,3 +281,184 @@ func TestSubscription_NullableTimes(t *testing.T) {
 		t.Errorf("expected ends_at %v, got %v", now, fetched.EndsAt)
 	}
 }
+
+func TestUser_CRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create
+	user := database.User{
+		ID:       "crud-u1",
+		Username: "crud_user",
+		Balance:  100,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	// Read
+	var readUser database.User
+	if err := db.First(&readUser, "id = ?", "crud-u1").Error; err != nil {
+		t.Fatalf("failed to read user: %v", err)
+	}
+	if readUser.Username != "crud_user" || readUser.Balance != 100 {
+		t.Errorf("unexpected user data: %+v", readUser)
+	}
+
+	// Update
+	if err := db.Model(&database.User{}).Where("id = ?", "crud-u1").Updates(map[string]interface{}{"username": "updated_user", "balance": 200}).Error; err != nil {
+		t.Fatalf("failed to update user: %v", err)
+	}
+
+	var updatedUser database.User
+	db.First(&updatedUser, "id = ?", "crud-u1")
+	if updatedUser.Username != "updated_user" || updatedUser.Balance != 200 {
+		t.Errorf("expected updated user data, got: %+v", updatedUser)
+	}
+
+	// Delete
+	if err := db.Delete(&database.User{}, "id = ?", "crud-u1").Error; err != nil {
+		t.Fatalf("failed to delete user: %v", err)
+	}
+
+	// Ensure deleted
+	if err := db.First(&database.User{}, "id = ?", "crud-u1").Error; err == nil {
+		t.Fatal("expected error reading deleted user, got nil")
+	}
+}
+
+func TestPayment_CRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create User for FK constraint (even though SQLite memory might not enforce by default, good practice)
+	db.Create(&database.User{ID: "crud-u2", Username: "user2"})
+
+	// Create
+	payment := database.Payment{
+		UserID:      "crud-u2",
+		Amount:      500,
+		Status:      "pending",
+		PaymentType: "sub",
+	}
+	if err := db.Create(&payment).Error; err != nil {
+		t.Fatalf("failed to create payment: %v", err)
+	}
+
+	// Read
+	var readPayment database.Payment
+	if err := db.First(&readPayment, "id = ?", payment.ID).Error; err != nil {
+		t.Fatalf("failed to read payment: %v", err)
+	}
+	if readPayment.Amount != 500 || readPayment.Status != "pending" {
+		t.Errorf("unexpected payment data: %+v", readPayment)
+	}
+
+	// Update
+	if err := db.Model(&database.Payment{}).Where("id = ?", payment.ID).Update("status", "completed").Error; err != nil {
+		t.Fatalf("failed to update payment: %v", err)
+	}
+
+	var updatedPayment database.Payment
+	db.First(&updatedPayment, "id = ?", payment.ID)
+	if updatedPayment.Status != "completed" {
+		t.Errorf("expected updated status, got: %s", updatedPayment.Status)
+	}
+
+	// Delete
+	if err := db.Delete(&database.Payment{}, "id = ?", payment.ID).Error; err != nil {
+		t.Fatalf("failed to delete payment: %v", err)
+	}
+
+	// Ensure deleted
+	if err := db.First(&database.Payment{}, "id = ?", payment.ID).Error; err == nil {
+		t.Fatal("expected error reading deleted payment, got nil")
+	}
+}
+
+func TestPlan_CRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create
+	plan := database.Plan{
+		Months:    1,
+		BasePrice: 100,
+		IsActive:  true,
+	}
+	if err := db.Create(&plan).Error; err != nil {
+		t.Fatalf("failed to create plan: %v", err)
+	}
+
+	// Read
+	var readPlan database.Plan
+	if err := db.First(&readPlan, "id = ?", plan.ID).Error; err != nil {
+		t.Fatalf("failed to read plan: %v", err)
+	}
+	if readPlan.Months != 1 || readPlan.BasePrice != 100 {
+		t.Errorf("unexpected plan data: %+v", readPlan)
+	}
+
+	// Update
+	if err := db.Model(&database.Plan{}).Where("id = ?", plan.ID).Updates(map[string]interface{}{"months": 2, "base_price": 150}).Error; err != nil {
+		t.Fatalf("failed to update plan: %v", err)
+	}
+
+	var updatedPlan database.Plan
+	db.First(&updatedPlan, "id = ?", plan.ID)
+	if updatedPlan.Months != 2 || updatedPlan.BasePrice != 150 {
+		t.Errorf("expected updated plan data, got: %+v", updatedPlan)
+	}
+
+	// Delete
+	if err := db.Delete(&database.Plan{}, "id = ?", plan.ID).Error; err != nil {
+		t.Fatalf("failed to delete plan: %v", err)
+	}
+
+	// Ensure deleted
+	if err := db.First(&database.Plan{}, "id = ?", plan.ID).Error; err == nil {
+		t.Fatal("expected error reading deleted plan, got nil")
+	}
+}
+
+func TestPromoCode_CRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create
+	promo := database.PromoCode{
+		Code:            "CRUD10",
+		DiscountPercent: 10,
+		MaxUses:         100,
+		TargetPlatform:  "all",
+	}
+	if err := db.Create(&promo).Error; err != nil {
+		t.Fatalf("failed to create promo code: %v", err)
+	}
+
+	// Read
+	var readPromo database.PromoCode
+	if err := db.First(&readPromo, "id = ?", promo.ID).Error; err != nil {
+		t.Fatalf("failed to read promo code: %v", err)
+	}
+	if readPromo.Code != "CRUD10" || readPromo.DiscountPercent != 10 {
+		t.Errorf("unexpected promo code data: %+v", readPromo)
+	}
+
+	// Update
+	if err := db.Model(&database.PromoCode{}).Where("id = ?", promo.ID).Updates(map[string]interface{}{"discount_percent": 20, "max_uses": 50}).Error; err != nil {
+		t.Fatalf("failed to update promo code: %v", err)
+	}
+
+	var updatedPromo database.PromoCode
+	db.First(&updatedPromo, "id = ?", promo.ID)
+	if updatedPromo.DiscountPercent != 20 || updatedPromo.MaxUses != 50 {
+		t.Errorf("expected updated promo data, got: %+v", updatedPromo)
+	}
+
+	// Delete
+	if err := db.Delete(&database.PromoCode{}, "id = ?", promo.ID).Error; err != nil {
+		t.Fatalf("failed to delete promo code: %v", err)
+	}
+
+	// Ensure deleted
+	if err := db.First(&database.PromoCode{}, "id = ?", promo.ID).Error; err == nil {
+		t.Fatal("expected error reading deleted promo code, got nil")
+	}
+}

@@ -88,8 +88,8 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
 	if telegramIDStr != "" {
 		if tgID, err := strconv.ParseInt(telegramIDStr, 10, 64); err == nil {
-			var user database.User
-			if err := db.Where("telegram_id = ?", tgID).First(&user).Error; err == nil {
+			user, err := findUserByTelegramID(db, tgID)
+			if err == nil {
 				var count int64
 				db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
 				if count > 0 {
