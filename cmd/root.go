@@ -94,7 +94,7 @@ func loadConfig() {
 	}
 
 	isServerOrMigrate := false
-	if len(os.Args) > 1 && (os.Args[1] == "server" || os.Args[1] == "migrate") {
+	if len(os.Args) > 1 && (os.Args[1] == "start-server" || os.Args[1] == "migrate") {
 		isServerOrMigrate = true
 	}
 
