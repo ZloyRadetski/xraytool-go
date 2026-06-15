@@ -126,6 +126,7 @@ func (r *Router) registerRoutes() {
 	// Admin Promocodes
 	r.mux.Handle("POST /api/v1/admin/promocodes", protected(r.handleAdminCreatePromoCode))
 	r.mux.Handle("GET /api/v1/admin/promocodes", protected(r.handleAdminListPromoCodes))
+	r.mux.Handle("PUT /api/v1/admin/promocodes/{id}", protected(r.handleAdminEditPromoCode))
 	r.mux.Handle("DELETE /api/v1/admin/promocodes/{id}", protected(r.handleAdminDeletePromoCode))
 
 	// ── Catch-all ─────────────────────────────────────────────────────────────
