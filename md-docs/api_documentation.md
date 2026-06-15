@@ -323,10 +323,13 @@ X-API-Key: secret
   "amount": 159,
   "payment_type": "subscription",
   "method": "platega",
-  "external_id": "ext_invoice_998877"
+  "external_id": "ext_invoice_998877",
+  "plan_id": 1,
+  "promo_code": "SUMMER20",
+  "platform": "bot"
 }
 ```
-*(Если `external_id` пустой, будет сгенерирован автоматически).*
+*(Если `external_id` пустой, будет сгенерирован автоматически. Если передан `plan_id`, поле `amount` будет проигнорировано и итоговая сумма будет рассчитана на сервере с учетом промокода и глобальной скидки. `promo_code` и `platform` опциональны).*
 
 **Пример ответа (201 Created):**
 ```json
