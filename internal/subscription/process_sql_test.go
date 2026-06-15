@@ -89,7 +89,7 @@ func TestProcessSQL_Normal(t *testing.T) {
 	}
 
 	var count int64
-	db.Model(&database.Device{}).Where("hwid = ?", "device1").Count(&count)
+	db.Model(&database.Device{}).Where("hw_id = ?", "device1").Count(&count)
 	if count != 1 {
 		t.Errorf("Expected 1 device, got %d", count)
 	}

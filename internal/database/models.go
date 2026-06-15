@@ -65,7 +65,7 @@ type Device struct {
 	// SubscriptionID links this device to a Subscription.
 	SubscriptionID string `gorm:"type:text;not null;index"`
 	// HWID is a hardware fingerprint hash supplied by the client.
-	HWID        string `gorm:"column:hwid;type:text;not null;index"`
+	HWID        string `gorm:"type:text;not null;index"`
 	DeviceModel string `gorm:"type:text"`
 	DeviceOS    string `gorm:"type:text"`
 	// VerOS is the OS version string.

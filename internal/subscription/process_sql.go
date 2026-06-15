@@ -141,7 +141,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 			err := db.Transaction(func(tx *gorm.DB) error {
 				var device database.Device
-				err := tx.Where("subscription_id = ? AND hwid = ?", sub.ID, hwid).First(&device).Error
+				err := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).First(&device).Error
 
 				if err == gorm.ErrRecordNotFound {
 					// Check device limit before inserting
