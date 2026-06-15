@@ -10,9 +10,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data/config.yaml:/etc/xraytool/config.yaml
-      - ./data/xraytool.db:/var/lib/xraytool/xraytool.db
-      - ./data/xray_config.json:/usr/local/etc/xray/config.json
+      - ./data:/etc/xraytool
+      - /usr/local/etc/xray/config.json:/usr/local/etc/xray/config.json
     # Uncomment and adjust if using Postgres instead of SQLite
     # environment:
     #   - XRAYTOOL_DB_DSN=postgres://user:pass@postgres:5432/xraytool
