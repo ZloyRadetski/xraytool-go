@@ -17,6 +17,7 @@ import (
 // and parsing overhead during subscription delivery.
 type CacheManager struct {
 	mu sync.RWMutex
+	refreshMu sync.Mutex
 
 	cfg *appconfig.Config
 
@@ -62,8 +63,9 @@ func NewCacheManager(cfg *appconfig.Config) *CacheManager {
 // Refresh checks all cached files and reloads them if their Modification Time changed.
 // This allows hot-reloading without restarting the server.
 func (c *CacheManager) Refresh() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// Prevent concurrent refresh operations
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 
 	c.refreshXrayConfig()
 	c.refreshLimitedDB()
@@ -84,7 +86,11 @@ func (c *CacheManager) refreshXrayConfig() {
 	if err != nil {
 		return
 	}
-	if info.ModTime().Equal(c.xrayConfigModTime) {
+	c.mu.RLock()
+	modTime := c.xrayConfigModTime
+	c.mu.RUnlock()
+
+	if info.ModTime().Equal(modTime) {
 		return // No changes
 	}
 
@@ -162,9 +168,12 @@ func (c *CacheManager) refreshXrayConfig() {
 		}
 	}
 
+	c.mu.Lock()
 	c.xrayConfig = cfg
 	c.activeUsers = newActiveUsers
 	c.xrayConfigModTime = info.ModTime()
+	c.mu.Unlock()
+	
 	logger.Infof("[Cache] Индекс Xray обновлен. Загружено %d пользователей.", len(newActiveUsers))
 }
 
@@ -174,7 +183,11 @@ func (c *CacheManager) refreshLimitedDB() {
 	if err != nil {
 		return
 	}
-	if info.ModTime().Equal(c.limitedDBModTime) {
+	c.mu.RLock()
+	modTime := c.limitedDBModTime
+	c.mu.RUnlock()
+
+	if info.ModTime().Equal(modTime) {
 		return
 	}
 
@@ -207,8 +220,10 @@ func (c *CacheManager) refreshLimitedDB() {
 		}
 	}
 
+	c.mu.Lock()
 	c.limitedUsers = newLimitedUsers
 	c.limitedDBModTime = info.ModTime()
+	c.mu.Unlock()
 }
 
 func (c *CacheManager) refreshTemplates() {
@@ -221,10 +236,16 @@ func (c *CacheManager) refreshTemplates() {
 		"/var/www/TorvaldsVPN/xraytool/configs.txt",
 		"./configs.txt",
 	)
-	if info, err := os.Stat(subTmplPath); err == nil && !info.ModTime().Equal(c.subTemplateModTime) {
+	c.mu.RLock()
+	tmplModTime := c.subTemplateModTime
+	c.mu.RUnlock()
+
+	if info, err := os.Stat(subTmplPath); err == nil && !info.ModTime().Equal(tmplModTime) {
 		if data, err := os.ReadFile(subTmplPath); err == nil {
+			c.mu.Lock()
 			c.subTemplate = string(data)
 			c.subTemplateModTime = info.ModTime()
+			c.mu.Unlock()
 			logger.Infof("[Cache] Шаблон подписок обновлен.")
 		}
 	}
@@ -238,10 +259,16 @@ func (c *CacheManager) refreshTemplates() {
 		"/var/www/TorvaldsVPN/xraytool/routing.json",
 		"./routing.json",
 	)
-	if info, err := os.Stat(routingPath); err == nil && !info.ModTime().Equal(c.routeGlobalModTime) {
+	c.mu.RLock()
+	rgModTime := c.routeGlobalModTime
+	c.mu.RUnlock()
+
+	if info, err := os.Stat(routingPath); err == nil && !info.ModTime().Equal(rgModTime) {
 		if data, err := os.ReadFile(routingPath); err == nil {
+			c.mu.Lock()
 			c.routeGlobal = strings.TrimSpace(string(data))
 			c.routeGlobalModTime = info.ModTime()
+			c.mu.Unlock()
 			logger.Infof("[Cache] Глобальный роутинг обновлен.")
 		}
 	}
@@ -255,10 +282,16 @@ func (c *CacheManager) refreshTemplates() {
 		"/var/www/TorvaldsVPN/xraytool/routing_ALL_RU.json",
 		"./routing_ALL_RU.json",
 	)
-	if info, err := os.Stat(routingRUPath); err == nil && !info.ModTime().Equal(c.routeRUModTime) {
+	c.mu.RLock()
+	ruModTime := c.routeRUModTime
+	c.mu.RUnlock()
+
+	if info, err := os.Stat(routingRUPath); err == nil && !info.ModTime().Equal(ruModTime) {
 		if data, err := os.ReadFile(routingRUPath); err == nil {
+			c.mu.Lock()
 			c.routeRU = strings.TrimSpace(string(data))
 			c.routeRUModTime = info.ModTime()
+			c.mu.Unlock()
 			logger.Infof("[Cache] RU роутинг обновлен.")
 		}
 	}
