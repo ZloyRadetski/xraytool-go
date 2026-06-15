@@ -285,6 +285,10 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 	// Dispatch event for completed payments so webhooks (e.g. the Python bot) are notified.
 	if body.Status == "completed" {
 		var payment database.Payment
+		if err := db.First(&payment, paymentID).Error; err == nil && payment.PromoCodeID != nil {
+			db.Model(&database.PromoCode{}).Where("id = ?", *payment.PromoCodeID).Update("uses_count", gorm.Expr("uses_count + ?", 1))
+		}
+		
 		if db.First(&payment, paymentID).Error == nil {
 			r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
 				"payment_id":   payment.ID,
