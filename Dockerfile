@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o xraytool main.go
 # Stage 2: Create a minimal production image
 FROM alpine:latest
 
-# Add ca-certificates for HTTPS (required for Platega webhooks/API calls)
-RUN apk --no-cache add ca-certificates tzdata
+# Add ca-certificates for HTTPS and util-linux for full nsenter support
+RUN apk --no-cache add ca-certificates tzdata util-linux
 
 WORKDIR /app
 
@@ -38,10 +38,10 @@ EXPOSE 8080
 
 # Create wrappers for systemctl and xray to allow the container to execute them on the host
 RUN echo '#!/bin/sh' > /usr/local/bin/systemctl && \
-    echo 'nsenter -t 1 -m -u -n -i systemctl "$@"' >> /usr/local/bin/systemctl && \
+    echo 'nsenter -t 1 -m -u -i -n -p systemctl "$@"' >> /usr/local/bin/systemctl && \
     chmod +x /usr/local/bin/systemctl && \
     echo '#!/bin/sh' > /usr/local/bin/xray && \
-    echo 'nsenter -t 1 -m -u -n -i xray "$@"' >> /usr/local/bin/xray && \
+    echo 'nsenter -t 1 -m -u -i -n -p xray "$@"' >> /usr/local/bin/xray && \
     chmod +x /usr/local/bin/xray
 
 # Run the binary
