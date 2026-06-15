@@ -137,6 +137,10 @@ func TestLoadEmptyConfigDefaults(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "empty.yaml")
 	// Explicitly set empty/zero values so the fallbacks trigger
 	customYAML := `
+server:
+  domain: "test.com"
+database:
+  driver: "sqlite"
 paths:
   xray_config: ""
   limited_db: ""

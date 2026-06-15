@@ -130,6 +130,9 @@ type LoggingConf struct {
 func defaults() *Config {
 	return &Config{
 		Mode: "master",
+		Server: ServerConf{
+			Domain: "yourdomain.tld",
+		},
 		Paths: PathsConf{
 			XrayConfig:               "/usr/local/etc/xray/config.json",
 			LimitedDB:                "/etc/xraytool/limited_users.db",
@@ -214,6 +217,10 @@ server:
   ip: "1.2.3.4"
   # Domain for subscription links: https://<domain>/client?id=<subfile>
   domain: "yourdomain.tld"
+
+database:
+  driver: "sqlite"
+  dsn: "/etc/xraytool/database.db"
 
 paths:
   # Xray-core main config

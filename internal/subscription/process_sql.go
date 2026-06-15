@@ -140,6 +140,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 			now := time.Now()
 
 			err := db.Transaction(func(tx *gorm.DB) error {
+				var device database.Device
 				err := tx.Where("subscription_id = ? AND hwid = ?", sub.ID, hwid).First(&device).Error
 
 				if err == gorm.ErrRecordNotFound {
