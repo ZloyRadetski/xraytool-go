@@ -108,7 +108,7 @@ func TestValidatePromoCode_Limits(t *testing.T) {
 	db.Exec("DELETE FROM promo_codes")
 	db.Exec("DELETE FROM payments")
 
-	promo := database.PromoCode{Code: "LIMIT", DiscountPercent: 50, MaxUses: 1, IsActive: true}
+	promo := database.PromoCode{Code: "LIMIT", DiscountPercent: 50, MaxUses: 1, UsesCount: 1, IsActive: true}
 	db.Create(&promo)
 
 	// Use the promo code once

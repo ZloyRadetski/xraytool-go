@@ -121,6 +121,7 @@ type PromoCode struct {
 	Code            string     `gorm:"type:text;uniqueIndex;not null"`
 	DiscountPercent int        `gorm:"not null"`
 	MaxUses         int        `gorm:"default:0;not null"` // 0 = unlimited
+	UsesCount       int        `gorm:"default:0;not null"`
 	TargetPlatform  string     `gorm:"type:text;not null;default:'all'"` // 'all', 'bot', 'web'
 	ExpiresAt       *time.Time `gorm:"index"`
 	IsActive        bool       `gorm:"default:true;not null"`

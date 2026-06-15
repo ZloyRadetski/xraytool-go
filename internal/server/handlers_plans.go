@@ -79,18 +79,9 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	if promo.MaxUses > 0 {
-		var count int64
-		if err := db.Model(&database.Payment{}).
-			Where("promo_code_id = ? AND status IN ?", promo.ID, []string{"completed", "pending_card"}).
-			Count(&count).Error; err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to check promo code limits")
-			return
-		}
-		if int(count) >= promo.MaxUses {
-			writeError(w, http.StatusBadRequest, "promo code usage limit reached")
-			return
-		}
+	if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
+		writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

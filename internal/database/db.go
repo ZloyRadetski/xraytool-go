@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -109,17 +110,14 @@ func Init(cfg Config) error {
 	db = conn
 	initErr = nil
 
-	// Seed default plans if the table is empty
-	var count int64
-	if err := db.Model(&Plan{}).Count(&count).Error; err == nil && count == 0 {
-		defaultPlans := []Plan{
-			{Months: 1, BasePrice: 159},
-			{Months: 3, BasePrice: 429},
-			{Months: 6, BasePrice: 799},
-			{Months: 12, BasePrice: 1399},
-		}
-		db.Create(&defaultPlans)
+	// Seed default plans atomically
+	defaultPlans := []Plan{
+		{Months: 1, BasePrice: 159},
+		{Months: 3, BasePrice: 429},
+		{Months: 6, BasePrice: 799},
+		{Months: 12, BasePrice: 1399},
 	}
+	db.Clauses(clause.OnConflict{DoNothing: true}).Create(&defaultPlans)
 
 	return nil
 }

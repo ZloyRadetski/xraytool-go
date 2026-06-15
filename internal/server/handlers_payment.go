@@ -120,20 +120,12 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
 					platform := strings.ToLower(strings.TrimSpace(body.Platform))
 					if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
-						limitOk := true
-						if promo.MaxUses > 0 {
-							var count int64
-							db.Model(&database.Payment{}).
-								Where("promo_code_id = ? AND status IN ?", promo.ID, []string{"completed", "pending_card"}).
-								Count(&count)
-							if int(count) >= promo.MaxUses {
-								limitOk = false
-							}
+						if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
+							writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+							return
 						}
-						if limitOk {
-							promoPrice = plan.BasePrice - (plan.BasePrice * promo.DiscountPercent / 100)
-							promoCodeID = &promo.ID
-						}
+						promoPrice = plan.BasePrice - (plan.BasePrice * promo.DiscountPercent / 100)
+						promoCodeID = &promo.ID
 					}
 				}
 			}
@@ -431,7 +423,11 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 		var payment database.Payment
 		if err := db.Where("external_id = ?", extID).First(&payment).Error; err == nil {
 			if payment.Status != mappedStatus && payment.Status != "completed" {
-				db.Model(&payment).Update("status", mappedStatus)
+				if err := db.Model(&payment).Update("status", mappedStatus).Error; err != nil {
+			r.log.Error("failed to update payment status", "err", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
 				r.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
 
 				if mappedStatus == "completed" {
