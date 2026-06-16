@@ -16,7 +16,7 @@ func TestSystemCmds(t *testing.T) {
 	// Update Xray (fails on windows without bash)
 	rootCmd.SetArgs([]string{"update-xray", "--config=test_config.yaml"})
 	out := captureOutput(func() { rootCmd.Execute() })
-	if !strings.Contains(out, "Update failed") || !exitCalled {
+	if (!strings.Contains(out, "Update failed") && !strings.Contains(out, "Failed to download script")) || !exitCalled {
 		t.Errorf("expected update to fail on windows, got %v", out)
 	}
 

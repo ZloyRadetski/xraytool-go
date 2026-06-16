@@ -14,7 +14,7 @@ import (
 func TestMigrateData_InMemory(t *testing.T) {
 	// 1. Create source in-memory DB
 	srcDB, _ := gorm.Open(sqlite.Open("file:mem1?mode=memory&cache=shared"), &gorm.Config{})
-	srcDB.AutoMigrate(&legacyUser{}, &legacySubscription{})
+	srcDB.AutoMigrate(&legacyUser{}, &legacySubscription{}, &legacyServer{}, &legacyPayment{})
 
 	// Add some data
 	srcDB.Create(&legacyUser{TgID: 100, Name: "A", Username: "a", Balance: 50, MaxDevices: 2})
