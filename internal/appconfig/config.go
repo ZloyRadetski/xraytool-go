@@ -174,7 +174,7 @@ func defaults() *Config {
 			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
 		},
 		Database: DatabaseConf{
-			Driver:     "postgres",
+			Driver:     "sqlite",
 			SQLitePath: "/etc/xraytool/xraytool.db",
 		},
 		Subscription: SubscriptionConf{
@@ -217,10 +217,6 @@ server:
   ip: "1.2.3.4"
   # Domain for subscription links: https://<domain>/client?id=<subfile>
   domain: "yourdomain.tld"
-
-database:
-  driver: "sqlite"
-  dsn: "/etc/xraytool/database.db"
 
 paths:
   # Xray-core main config
@@ -291,8 +287,8 @@ webhooks:
   # - "http://127.0.0.1:8081/api/v1/notify"
 
 database:
-  # Database driver: "postgres" (production) or "sqlite" (lightweight/fallback)
-  driver: "postgres"
+  # Database driver: "sqlite" (production) or "sqlite" (lightweight/fallback)
+  driver: "sqlite"
   # Full Postgres DSN (used when driver=postgres)
   # dsn: "postgres://user:pass@localhost:5432/xraytool?sslmode=disable"
   dsn: ""
@@ -517,3 +513,6 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
+
+
+

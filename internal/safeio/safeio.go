@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 )
 
+var osRename = os.Rename
+
 // WriteToFile atomically writes data to a file at path, preserving its permissions
 // and ownership if it already exists. If it does not exist, it creates it with
 // defaultPerm.
@@ -48,7 +50,7 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 		}
 	}
 
-	if err := os.Rename(tmp, path); err != nil {
+	if err := osRename(tmp, path); err != nil {
 		// Fallback for Docker bind mounts or situations where rename fails (e.g. device or resource busy)
 		if writeErr := os.WriteFile(path, data, perm); writeErr != nil {
 			os.Remove(tmp)
