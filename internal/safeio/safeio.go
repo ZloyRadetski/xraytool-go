@@ -49,9 +49,13 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 	}
 
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
+		// Fallback for Docker bind mounts or situations where rename fails (e.g. device or resource busy)
+		if writeErr := os.WriteFile(path, data, perm); writeErr != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("rename failed (%v) and fallback write failed: %w", err, writeErr)
+		}
 	}
+	os.Remove(tmp)
 
 	return nil
 }
