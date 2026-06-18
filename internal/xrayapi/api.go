@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -137,16 +138,22 @@ func (c *Client) RemoveUser(email string, tags []string) error {
 	if len(tags) == 0 {
 		return nil
 	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9_@.\-]+$`).MatchString(email) || strings.HasPrefix(email, "-") {
+		return fmt.Errorf("invalid email format")
+	}
+
 	var errs []string
 	for _, tag := range tags {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "xray", "api", "rmu", "-s", c.addr,
-			fmt.Sprintf("-tag=%s", tag), email)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("tag=%s: %v (output: %s)", tag, err, strings.TrimSpace(string(out))))
-		}
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "xray", "api", "rmu", "-s", c.addr,
+				fmt.Sprintf("-tag=%s", tag), email)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("tag=%s: %v (output: %s)", tag, err, strings.TrimSpace(string(out))))
+			}
+		}()
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("xray api rmu errors: %s", strings.Join(errs, "; "))

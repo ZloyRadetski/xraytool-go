@@ -35,6 +35,11 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 		os.Remove(tmp)
 		return fmt.Errorf("write tmp: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync tmp: %w", err)
+	}
 	f.Close()
 
 	// Make sure permissions match exactly (os.WriteFile applies umask, so we must chmod)
@@ -52,10 +57,23 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 
 	if err := osRename(tmp, path); err != nil {
 		// Fallback for Docker bind mounts or situations where rename fails (e.g. device or resource busy)
-		if writeErr := os.WriteFile(path, data, perm); writeErr != nil {
+		// This fallback is NOT atomic, but it's the only way to write to a bind-mounted file.
+		outf, writeErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, perm)
+		if writeErr != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("rename failed (%v) and fallback open failed: %w", err, writeErr)
+		}
+		if _, writeErr := outf.Write(data); writeErr != nil {
+			outf.Close()
 			os.Remove(tmp)
 			return fmt.Errorf("rename failed (%v) and fallback write failed: %w", err, writeErr)
 		}
+		if syncErr := outf.Sync(); syncErr != nil {
+			outf.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("rename failed (%v) and fallback sync failed: %w", err, syncErr)
+		}
+		outf.Close()
 	}
 	os.Remove(tmp)
 

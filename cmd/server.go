@@ -86,6 +86,7 @@ func isPathAllowed(path string) bool {
 
 func startServerCmd() *cobra.Command {
 	var port int
+	var runMigrations bool
 
 	cmd := &cobra.Command{
 		Use:   "start-server",
@@ -138,9 +139,10 @@ func startServerCmd() *cobra.Command {
 			dbReady := false
 			if cfg != nil {
 				dbErr := database.Init(database.Config{
-					Driver:     cfg.Database.Driver,
-					DSN:        cfg.Database.DSN,
-					SQLitePath: cfg.Database.SQLitePath,
+					Driver:      cfg.Database.Driver,
+					DSN:         cfg.Database.DSN,
+					SQLitePath:  cfg.Database.SQLitePath,
+					AutoMigrate: runMigrations,
 				})
 				if dbErr != nil {
 					// Non-fatal: server continues without DB (legacy routes still work).
@@ -589,5 +591,6 @@ func startServerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
+	cmd.Flags().BoolVar(&runMigrations, "run-migrations", false, "Run database AutoMigrate on startup")
 	return cmd
 }

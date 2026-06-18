@@ -168,12 +168,19 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // getClientIP parses X-Real-IP safely.
-func getClientIP(req *http.Request) string {
-	ip := req.Header.Get("X-Real-IP")
-	if ip != "" && net.ParseIP(ip) != nil {
-		return ip
+func getClientIP(r *http.Request) string {
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteIP = r.RemoteAddr
 	}
-	return req.RemoteAddr
+
+	if remoteIP == "127.0.0.1" || remoteIP == "::1" || remoteIP == "localhost" {
+		ip := r.Header.Get("X-Real-IP")
+		if ip != "" && net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return remoteIP
 }
 
 // logIntruder logs a security warning and dumps the request.

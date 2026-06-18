@@ -44,6 +44,8 @@ type Config struct {
 	SQLitePath string
 	// Silent disables GORM logging. Useful for CLI tools.
 	Silent bool
+	// AutoMigrate enables GORM AutoMigrate on initialization.
+	AutoMigrate bool
 }
 
 // Init opens the database connection and runs AutoMigrate for all models.
@@ -93,18 +95,20 @@ func Init(cfg Config) error {
 
 	// AutoMigrate creates or updates tables to match the current model structs.
 	// It is intentionally non-destructive: it never drops columns or indexes.
-	if err := conn.AutoMigrate(
-		&User{},
-		&Subscription{},
-		&Device{},
-		&Payment{},
-		&ReferralReward{},
-		&SubscriptionNotification{},
-		&Plan{},
-		&PromoCode{},
-	); err != nil {
-		initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
-		return initErr
+	if cfg.AutoMigrate {
+		if err := conn.AutoMigrate(
+			&User{},
+			&Subscription{},
+			&Device{},
+			&Payment{},
+			&ReferralReward{},
+			&SubscriptionNotification{},
+			&Plan{},
+			&PromoCode{},
+		); err != nil {
+			initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
+			return initErr
+		}
 	}
 
 	db = conn

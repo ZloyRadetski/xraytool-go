@@ -13,6 +13,7 @@ import (
 	"xraytool/internal/logger"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -159,6 +160,12 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 				if err == gorm.ErrRecordNotFound {
 					// Check device limit before inserting
+					// Lock the parent subscription row to prevent concurrent inserts from exceeding the limit
+					var dummy database.Subscription
+					if db.Dialector.Name() == "postgres" {
+						tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", sub.ID).First(&dummy)
+					}
+
 					var currentCount int64
 					tx.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&currentCount)
 
@@ -194,7 +201,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 			if err != nil {
 				logger.Errorf("[ProcessSQL] SQL error in device check for subscription %s: %v", sub.ID, err)
-				return failResponse(500, fmt.Sprintf("database error: %v", err))
+				return failResponse(500, "database error")
 			}
 
 			if deviceLimitReached {
@@ -359,7 +366,8 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	// Validate JSON payload
 	var temp interface{}
 	if err := json.Unmarshal([]byte(jsonPayload), &temp); err != nil {
-		return failResponse(404, "Invalid template config JSON: "+err.Error())
+		logger.Errorf("[ProcessSQL] Invalid template config JSON for sub %s: %v", sub.ID, err)
+		return failResponse(404, "Invalid template config JSON")
 	}
 
 	if isVlessFormat {

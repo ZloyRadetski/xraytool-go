@@ -521,6 +521,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		PlanTotalPrice int    `json:"plan_total_price"`
 		NewEndsAt      string `json:"new_ends_at"`
 		MaxDevices     int    `json:"max_devices"`
+		PlanID         *int64 `json:"plan_id"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -529,22 +530,16 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid plan total price")
 		return
 	}
-	if body.NewEndsAt == "" {
-		writeError(w, http.StatusBadRequest, "new_ends_at is required")
+	if body.PlanID == nil && body.NewEndsAt == "" {
+		writeError(w, http.StatusBadRequest, "new_ends_at is required if plan_id is missing")
 		return
 	}
-	if body.PlanTotalPrice <= 0 {
-		writeError(w, http.StatusBadRequest, "plan_total_price must be positive")
+	if body.PlanID == nil && body.PlanTotalPrice <= 0 {
+		writeError(w, http.StatusBadRequest, "plan_total_price must be positive if plan_id is missing")
 		return
 	}
 	if body.MaxDevices == 0 {
 		body.MaxDevices = 3
-	}
-
-	newEndsAt, err := parseExpiryDate(body.NewEndsAt)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid new_ends_at format")
-		return
 	}
 
 	db := database.DB()
@@ -552,6 +547,35 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
+	}
+
+	var newEndsAt time.Time
+	if body.PlanID != nil {
+		var plan database.Plan
+		if err := db.First(&plan, *body.PlanID).Error; err != nil {
+			writeError(w, http.StatusBadRequest, "invalid plan_id")
+			return
+		}
+		
+		body.PlanTotalPrice = plan.BasePrice
+		if plan.GlobalDiscountPercent > 0 {
+			body.PlanTotalPrice = plan.BasePrice - (plan.BasePrice * plan.GlobalDiscountPercent / 100)
+		}
+
+		var sub database.Subscription
+		db.Where("user_id = ?", user.ID).First(&sub)
+		
+		baseTime := time.Now()
+		if sub.EndsAt != nil && sub.EndsAt.After(time.Now()) {
+			baseTime = *sub.EndsAt
+		}
+		newEndsAt = baseTime.AddDate(0, plan.Months, 0)
+	} else {
+		newEndsAt, err = parseExpiryDate(body.NewEndsAt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid new_ends_at format")
+			return
+		}
 	}
 	if user.IsBlocked {
 		writeError(w, http.StatusForbidden, "user is globally blocked")
@@ -601,7 +625,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		// Delete any sent notification flags so they can be re-triggered when this sub nears expiration
 		db.Where("subscription_id = ?", updatedSub.ID).Delete(&database.SubscriptionNotification{})
 		
-		r.unbanUserInXray(updatedSub)
+		go r.unbanUserInXray(updatedSub)
 	} else {
 		r.log.Error("failed to find subscription after auto-renew for unban", "user_id", user.ID, "err", err)
 	}
@@ -858,7 +882,7 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	}
 
 	// 2. Put user back into Xray config & API memory
-	r.unbanUserInXray(sub)
+	go r.unbanUserInXray(sub)
 
 	r.log.Warn("admin action", "action", "unblock", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -918,7 +942,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	// Delete any sent notification flags so they can be re-triggered
 	db.Where("subscription_id = ?", sub.ID).Delete(&database.SubscriptionNotification{})
 
-	r.unbanUserInXray(sub)
+	go r.unbanUserInXray(sub)
 
 	r.log.Warn("admin action", "action", "set-expire", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1000,7 +1024,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	if count <= int64(sub.MaxDevices) && sub.Status == "blocked" {
 		if sub.EndsAt == nil || sub.EndsAt.After(time.Now()) {
 			db.Model(&sub).Update("status", "active")
-			r.unbanUserInXray(sub)
+			go r.unbanUserInXray(sub)
 			r.log.Info("auto-unblocked user after device deletion", "email", sub.Email)
 		}
 	}
@@ -1182,7 +1206,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 	// If the subscription is active, re-add to Xray
 	var sub database.Subscription
 	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err == nil && sub.Email != "" && sub.Status == "active" {
-		r.unbanUserInXray(sub)
+		go r.unbanUserInXray(sub)
 	}
 
 	r.log.Warn("admin action", "action", "global-unban", "telegram_id", tgID, "caller_ip", getClientIP(req))

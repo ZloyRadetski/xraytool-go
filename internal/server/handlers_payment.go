@@ -11,6 +11,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -182,8 +183,30 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		},
 	}
 
-	if result := db.Create(&payment); result.Error != nil {
-		r.log.Error("create payment", "err", result.Error)
+	txErr := db.Transaction(func(tx *gorm.DB) error {
+		if promoCodeID != nil {
+			var promo database.PromoCode
+			if err := tx.First(&promo, *promoCodeID).Error; err != nil {
+				return err
+			}
+			if promo.MaxUses > 0 {
+				res := tx.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ? AND uses_count < max_uses", *promoCodeID)
+				if res.RowsAffected == 0 {
+					return fmt.Errorf("promo limit")
+				}
+			} else {
+				tx.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *promoCodeID)
+			}
+		}
+		return tx.Create(&payment).Error
+	})
+
+	if txErr != nil {
+		if txErr.Error() == "promo limit" {
+			writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+			return
+		}
+		r.log.Error("create payment", "err", txErr)
 		writeError(w, http.StatusInternalServerError, "failed to create payment")
 		return
 	}
@@ -299,6 +322,8 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 	query := db.Model(&database.Payment{}).Where("id = ?", paymentID)
 	if len(body.ExpectedStatuses) > 0 {
 		query = query.Where("status IN ?", body.ExpectedStatuses)
+	} else if body.Status == "completed" {
+		query = query.Where("status != 'completed'")
 	}
 	result := query.Update("status", body.Status)
 	if result.Error != nil {
@@ -314,11 +339,7 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 	// Dispatch event for completed payments so webhooks (e.g. the Python bot) are notified.
 	if body.Status == "completed" {
 		var payment database.Payment
-		if err := db.First(&payment, paymentID).Error; err == nil && payment.PromoCodeID != nil {
-			db.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *payment.PromoCodeID)
-		}
-		
-		if db.First(&payment, paymentID).Error == nil {
+		if err := db.First(&payment, paymentID).Error; err == nil {
 			r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
 				"payment_id":   payment.ID,
 				"amount":       payment.Amount,
@@ -456,29 +477,28 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 		var payment database.Payment
 		if err := db.Where("external_id = ?", extID).First(&payment).Error; err == nil {
 			if payment.Status != mappedStatus && payment.Status != "completed" {
-				if err := db.Model(&payment).Update("status", mappedStatus).Error; err != nil {
-			r.log.Error("failed to update payment status", "err", err)
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-				r.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
+				res := db.Model(&payment).Where("status != ? AND status != 'completed'", mappedStatus).Update("status", mappedStatus)
+				if res.Error != nil {
+					r.log.Error("failed to update payment status", "err", res.Error)
+					writeError(w, http.StatusInternalServerError, "database error")
+					return
+				}
+				if res.RowsAffected > 0 {
+					r.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
 
-				if mappedStatus == "completed" {
-					// Dispatch payment.completed so external systems can process the renewal/balance update
-					r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
-						"payment_id":   payment.ID,
-						"amount":       payment.Amount,
-						"payment_type": payment.PaymentType,
-						"method":       payment.Method,
-						"user_id":      payment.UserID,
-					}, nil)
+					if mappedStatus == "completed" {
+						// Dispatch payment.completed so external systems can process the renewal/balance update
+						r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
+							"payment_id":   payment.ID,
+							"amount":       payment.Amount,
+							"payment_type": payment.PaymentType,
+							"method":       payment.Method,
+							"user_id":      payment.UserID,
+						}, nil)
 
-					if payment.PromoCodeID != nil {
-						db.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *payment.PromoCodeID)
+						// Apply referral logic
+						go r.applyReferralRewardForPayment(db, &payment)
 					}
-
-					// Apply referral logic
-					go r.applyReferralRewardForPayment(db, &payment)
 				}
 			}
 		} else {
