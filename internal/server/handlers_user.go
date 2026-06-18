@@ -35,7 +35,7 @@ import (
 // "telegram_id":<tgID>. Works for both SQLite (TEXT JSON) and Postgres (JSONB
 // serialised as text by GORM).
 func findUserByTelegramID(db *gorm.DB, tgID int64) (*database.User, error) {
-	var user database.User
+	var users []database.User
 	tgIDStr := strconv.FormatInt(tgID, 10)
 
 	var query *gorm.DB
@@ -60,11 +60,14 @@ func findUserByTelegramID(db *gorm.DB, tgID int64) (*database.User, error) {
 		)
 	}
 
-	result := query.First(&user)
+	result := query.Limit(1).Find(&users)
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	return &user, nil
+	if len(users) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &users[0], nil
 }
 
 // buildUserResponse assembles the full user JSON object the Python bot expects.

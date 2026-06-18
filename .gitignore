@@ -17,6 +17,7 @@ devices_state.json
 *.db-shm
 *.db-wal
 build.ps1
+*.ps1
 
 # Go workspace
 go.work

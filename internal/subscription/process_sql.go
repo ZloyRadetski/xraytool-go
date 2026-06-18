@@ -53,10 +53,24 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	// 3. Load Subscription and User from Database
 	var sub database.Subscription
 	// Backward compatibility: match new ID, old XrayUUID, or old subfile in metadata
-	if err := db.Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?", 
-		clientId, clientId, clientId, clientId+".txt").First(&sub).Error; err != nil {
-		return failResponse(404, "Subscription not found")
+	var subs []database.Subscription
+	var query *gorm.DB
+	if db.Dialector.Name() == "postgres" {
+		query = db.Where("id = ? OR xray_uuid = ? OR metadata::jsonb ->> 'subfile' = ? OR metadata::jsonb ->> 'subfile' = ?",
+			clientId, clientId, clientId, clientId+".txt")
+	} else {
+		query = db.Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?",
+			clientId, clientId, clientId, clientId+".txt")
 	}
+
+	if err := query.Limit(1).Find(&subs).Error; err != nil {
+		return failResponse(500, "Database error")
+	}
+	if len(subs) == 0 {
+		// Fallback to legacy file-based subscription logic
+		return Process(cm, req)
+	}
+	sub = subs[0]
 
 	var user database.User
 	if err := db.Where("id = ?", sub.UserID).First(&user).Error; err != nil {
