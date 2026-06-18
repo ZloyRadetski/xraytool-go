@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o xraytool main.go
 # Stage 2: Create a minimal production image
 FROM alpine:latest
 
-# Add ca-certificates for HTTPS and util-linux for full nsenter support
-RUN apk --no-cache add ca-certificates tzdata util-linux
+# Add ca-certificates for HTTPS, util-linux for full nsenter support, and curl for downloads
+RUN apk --no-cache add ca-certificates tzdata util-linux curl
 
 WORKDIR /app
 
