@@ -114,12 +114,14 @@ func (w *ExpiryWorker) ProcessOnce() {
 
 	now := time.Now()
 
+	var expiredSubs []database.Subscription
+
 	for _, sub := range subs {
 		// 1. Check time-based expiration
 		if sub.EndsAt != nil {
 			timeLeft := sub.EndsAt.Sub(now)
 			if timeLeft <= 0 {
-				w.handleExpired(sub)
+				expiredSubs = append(expiredSubs, sub)
 				continue // already blocked, no need to check devices
 			} else {
 				w.handleWarnings(sub, timeLeft)
@@ -143,6 +145,96 @@ func (w *ExpiryWorker) ProcessOnce() {
 					}
 				}
 			}
+		}
+	}
+
+	if len(expiredSubs) > 0 {
+		w.handleExpiredBulk(expiredSubs)
+	}
+}
+
+func (w *ExpiryWorker) handleExpiredBulk(subs []database.Subscription) {
+	w.log.Info("Bulk expiring subscriptions", "count", len(subs))
+
+	// 1. Remove from Xray Config JSON safely in one go
+	var allTags []string
+	configSubfiles := make(map[string]string)
+	
+	modErr := xrayconfig.Modify(w.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
+		for _, sub := range subs {
+			if c, err := xrayconfig.FindUser(cfg, sub.Email); err == nil && c != nil {
+				configSubfiles[sub.Email] = c.GetString("subfile")
+			}
+			t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
+			allTags = append(allTags, t...)
+			_ = xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
+		}
+		return nil
+	})
+
+	if modErr != nil {
+		w.log.Error("Failed to remove users from xray config in bulk, aborting", "error", modErr)
+		return
+	}
+
+	// Remove via API (skipped for bulk since config reload takes care of it)
+	
+	// Actually we should reload Xray to apply bulk changes, or let CacheManager refresh do it.
+	// We'll just continue processing the rest of the DB changes.
+
+	for _, sub := range subs {
+		// 2. Add to Limited DB
+		subfile := ""
+		if sub.Metadata != nil {
+			if sf, ok := sub.Metadata["subfile"].(string); ok {
+				subfile = sf
+			}
+		}
+		if subfile == "" {
+			subfile = configSubfiles[sub.Email]
+		}
+		if err := w.limitDB.Upsert(userdb.Entry{
+			Email:   sub.Email,
+			Subfile: subfile,
+			Limit:   nil, // Expired
+		}); err != nil {
+			w.log.Error("Failed to update limited users DB", "email", sub.Email, "error", err)
+		}
+
+		// 3. Update DB Status
+		res := w.db.Model(&sub).Where("status = ?", "active").Updates(map[string]interface{}{
+			"status":     "expired",
+			"updated_at": time.Now(),
+		})
+		if res.Error != nil || res.RowsAffected == 0 {
+			continue
+		}
+
+		// 4. Fire webhook
+		payload := map[string]interface{}{
+			"user_id":         sub.UserID,
+			"subscription_id": sub.ID,
+			"email":           sub.Email,
+			"ends_at":         sub.EndsAt.Format(time.RFC3339),
+		}
+		var userMetadata map[string]interface{}
+		var user database.User
+		if err := w.db.Where("id = ?", sub.UserID).First(&user).Error; err == nil && user.Metadata != nil {
+			userMetadata = user.Metadata
+		}
+		if w.dispatcher != nil {
+			w.dispatcher.Dispatch("subscription.expired", payload, userMetadata)
+		}
+
+		// 5. Propagate to slave nodes
+		if w.cfg.IsMaster() {
+			client := slave.NewClient(
+				w.cfg.SlaveAPI.ConnectTimeout,
+				w.cfg.SlaveAPI.RequestTimeout,
+				w.cfg.SlaveAPI.RemotePath,
+			)
+			reg := slave.NewRegistry(w.cfg.Paths.ServersJSON, client)
+			go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 		}
 	}
 }

@@ -61,12 +61,29 @@ func NewCacheManager(cfg *appconfig.Config) *CacheManager {
 }
 
 // Refresh checks all cached files and reloads them if their Modification Time changed.
-// This allows hot-reloading without restarting the server.
+// This implements a Stale-While-Revalidate pattern using TryLock to avoid blocking
+// the hot path when the cache is already populated.
 func (c *CacheManager) Refresh() {
-	// Prevent concurrent refresh operations
-	c.refreshMu.Lock()
-	defer c.refreshMu.Unlock()
+	c.mu.RLock()
+	empty := c.xrayConfig == nil || c.subTemplate == ""
+	c.mu.RUnlock()
 
+	if empty {
+		// First load must be synchronous
+		c.refreshMu.Lock()
+		defer c.refreshMu.Unlock()
+		c.refreshAll()
+	} else {
+		// Subsequent loads can be asynchronous/non-blocking
+		if !c.refreshMu.TryLock() {
+			return // Use stale cache while another goroutine refreshes
+		}
+		defer c.refreshMu.Unlock()
+		c.refreshAll()
+	}
+}
+
+func (c *CacheManager) refreshAll() {
 	c.refreshXrayConfig()
 	c.refreshLimitedDB()
 	c.refreshTemplates()

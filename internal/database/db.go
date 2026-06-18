@@ -109,6 +109,13 @@ func Init(cfg Config) error {
 			initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
 			return initErr
 		}
+
+		// Create expression indexes for telegram_id in JSON metadata
+		if conn.Dialector.Name() == "postgres" {
+			conn.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users ((metadata->>'telegram_id'));")
+		} else if conn.Dialector.Name() == "sqlite" {
+			conn.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users (json_extract(metadata, '$.telegram_id'));")
+		}
 	}
 
 	db = conn

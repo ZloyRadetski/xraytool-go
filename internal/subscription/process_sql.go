@@ -221,7 +221,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 				if user.Metadata != nil {
 					userMetadata = user.Metadata
 				}
-				dispatcher.DispatchSync("device.limit_reached", eventData, userMetadata)
+				dispatcher.Dispatch("device.limit_reached", eventData, userMetadata)
 			}
 		}
 	}
@@ -346,22 +346,23 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 	// Render first template config
 	jsonPayload := templates[0]
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{HOST}", serverIp)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{PBK}", pbk)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{SID}", sid)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{SNI}", sni)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{UUID}", uuid)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{SS_AUTH}", mySsAuth)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{HY2_AUTH}", hy2Auth)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{HY2_OBFS}", hy2Obfs)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{HY2_OBFS_PASSWORD}", hy2Obfs)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{HYSTERIA2_AUTH}", hysteria2Auth)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{HYSTERIA2_OBFS}", hy2Obfs)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{EMAIL}", email)
-
-	// Load Global and RU routing templates from Cache
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{GLOBAL_ROUTING}", routeGlobalData)
-	jsonPayload = strings.ReplaceAll(jsonPayload, "{RU_ROUTING}", routeRUData)
+	replacer := strings.NewReplacer(
+		"{HOST}", serverIp,
+		"{PBK}", pbk,
+		"{SID}", sid,
+		"{SNI}", sni,
+		"{UUID}", uuid,
+		"{SS_AUTH}", mySsAuth,
+		"{HY2_AUTH}", hy2Auth,
+		"{HY2_OBFS}", hy2Obfs,
+		"{HY2_OBFS_PASSWORD}", hy2Obfs,
+		"{HYSTERIA2_AUTH}", hysteria2Auth,
+		"{HYSTERIA2_OBFS}", hy2Obfs,
+		"{EMAIL}", email,
+		"{GLOBAL_ROUTING}", routeGlobalData,
+		"{RU_ROUTING}", routeRUData,
+	)
+	jsonPayload = replacer.Replace(jsonPayload)
 
 	// Validate JSON payload
 	var temp interface{}

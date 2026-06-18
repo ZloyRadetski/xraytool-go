@@ -153,6 +153,131 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 	return resp
 }
 
+// buildUsersResponseBulk efficiently builds user responses for a batch of users using 4 queries total.
+func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []map[string]interface{} {
+	if len(users) == 0 {
+		return []map[string]interface{}{}
+	}
+
+	userIds := make([]string, len(users))
+	for i, u := range users {
+		userIds[i] = u.ID
+	}
+
+	// 1. Fetch latest subscription for each user
+	var subs []database.Subscription
+	db.Where("user_id IN ?", userIds).Order("created_at desc").Find(&subs)
+	
+	subByUser := make(map[string]database.Subscription)
+	subIds := make([]string, 0, len(subs))
+	for _, s := range subs {
+		// Only take the first (latest) we see since they are ordered by created_at desc
+		if _, ok := subByUser[s.UserID]; !ok {
+			subByUser[s.UserID] = s
+			subIds = append(subIds, s.ID)
+		}
+	}
+
+	// 2. Fetch referral counts and sums
+	type RefStats struct {
+		ReferrerID string
+		Count      int64
+		Total      int64
+	}
+	var refStats []RefStats
+	db.Model(&database.ReferralReward{}).
+		Where("referrer_id IN ?", userIds).
+		Select("referrer_id, count(*) as count, coalesce(sum(amount),0) as total").
+		Group("referrer_id").
+		Scan(&refStats)
+
+	refCountByUser := make(map[string]int64)
+	refSumByUser := make(map[string]int64)
+	for _, rs := range refStats {
+		refCountByUser[rs.ReferrerID] = rs.Count
+		refSumByUser[rs.ReferrerID] = rs.Total
+	}
+
+	// 3. Fetch active devices
+	type DevStats struct {
+		SubscriptionID string
+		Count          int64
+	}
+	var devStats []DevStats
+	if len(subIds) > 0 {
+		db.Model(&database.Device{}).
+			Where("subscription_id IN ?", subIds).
+			Select("subscription_id, count(*) as count").
+			Group("subscription_id").
+			Scan(&devStats)
+	}
+
+	devCountBySub := make(map[string]int64)
+	for _, ds := range devStats {
+		devCountBySub[ds.SubscriptionID] = ds.Count
+	}
+
+	fmtTime := func(t *time.Time) interface{} {
+		if t == nil || t.IsZero() {
+			return nil
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+
+	out := make([]map[string]interface{}, 0, len(users))
+	for _, user := range users {
+		sub := subByUser[user.ID]
+
+		var tgID int64
+		if user.Metadata != nil {
+			switch v := user.Metadata["telegram_id"].(type) {
+			case float64:
+				tgID = int64(v)
+			case int64:
+				tgID = v
+			case int:
+				tgID = int64(v)
+			case string:
+				parsed, _ := strconv.ParseInt(v, 10, 64)
+				tgID = parsed
+			}
+		}
+
+		link := ""
+		if r.cfg != nil && r.cfg.Server.Domain != "" && sub.ID != "" {
+			link = fmt.Sprintf("https://%s/client?id=%s", r.cfg.Server.Domain, sub.ID)
+		}
+
+		email := sub.Email
+		if email == "" && tgID != 0 {
+			email = fmt.Sprintf("bot_client_%d", tgID)
+		}
+
+		out = append(out, map[string]interface{}{
+			"id":                     user.ID,
+			"username":               user.Username,
+			"balance":                user.Balance,
+			"is_admin":               user.IsAdmin,
+			"is_blocked":             user.IsBlocked,
+			"max_devices":            sub.MaxDevices,
+			"active_devices":         devCountBySub[sub.ID],
+			"ref_code":               user.RefCode,
+			"referred_by":            user.ReferredBy,
+			"sub_status":             sub.Status,
+			"ends_at":                fmtTime(sub.EndsAt),
+			"starts_at":              fmtTime(sub.StartsAt),
+			"auto_renew":             sub.AutoRenew,
+			"referral_count":         refCountByUser[user.ID],
+			"referral_earned_amount": refSumByUser[user.ID],
+			"email":                  email,
+			"link":                   link,
+			"metadata":               user.Metadata,
+			"created_at":             user.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return out
+}
+
 // generateRefCode creates a unique referral code. It retries on collision.
 func generateRefCode(db *gorm.DB) string {
 	for {
@@ -287,10 +412,7 @@ func (r *Router) handleListUsers(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	out := make([]map[string]interface{}, 0, len(users))
-	for i := range users {
-		out = append(out, r.buildUserResponse(db, &users[i]))
-	}
+	out := r.buildUsersResponseBulk(db, users)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -743,10 +865,7 @@ func (r *Router) handleAdminListUsers(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	var out []map[string]interface{}
-	for _, u := range users {
-		out = append(out, r.buildUserResponse(db, &u))
-	}
+	out := r.buildUsersResponseBulk(db, users)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"total": total,
