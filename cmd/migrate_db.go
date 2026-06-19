@@ -39,9 +39,10 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 
 			// ── 2. Initialise target database ──────────────────────────────────
 			if err := database.Init(database.Config{
-				Driver:     cfg.Database.Driver,
-				DSN:        cfg.Database.DSN,
-				SQLitePath: cfg.Database.SQLitePath,
+				Driver:      cfg.Database.Driver,
+				DSN:         cfg.Database.DSN,
+				SQLitePath:  cfg.Database.SQLitePath,
+				AutoMigrate: true,
 			}); err != nil {
 				return fmt.Errorf("target db init: %w", err)
 			}
