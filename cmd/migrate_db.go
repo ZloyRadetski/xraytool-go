@@ -46,6 +46,20 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 			}); err != nil {
 				return fmt.Errorf("target db init: %w", err)
 			}
+			
+			// Force AutoMigrate regardless of global init state
+			if err := database.DB().AutoMigrate(
+				&database.User{},
+				&database.Subscription{},
+				&database.Device{},
+				&database.Payment{},
+				&database.ReferralReward{},
+				&database.SubscriptionNotification{},
+				&database.Plan{},
+				&database.PromoCode{},
+			); err != nil {
+				return fmt.Errorf("force auto-migrate failed: %w", err)
+			}
 
 			// ── 3. Open source (legacy) SQLite database ────────────────────────
 			// glebarez/sqlite registers the CGo-free "sqlite" driver automatically
