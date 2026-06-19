@@ -25,6 +25,7 @@ type Config struct {
 	Worker        WorkerConf       `yaml:"worker"`
 	Database      DatabaseConf     `yaml:"database"`
 	PlategaSecret string           `yaml:"platega_secret"`
+	WebhookSecret string           `yaml:"webhook_secret"`
 	Subscription  SubscriptionConf `yaml:"subscription"`
 }
 
@@ -294,6 +295,12 @@ database:
   dsn: ""
   # File path used when driver=sqlite
   sqlite_path: "/etc/xraytool/xraytool.db"
+
+# Secret used to verify Platega webhooks and API calls between backend and bot
+platega_secret: "your_secret_here"
+
+# Secret used to sign outgoing webhooks sent to clients-tg-go
+webhook_secret: "your_webhook_secret_here"
 
 subscription:
   # Allowed User-Agents to access the subscription

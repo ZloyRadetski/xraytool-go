@@ -3,6 +3,9 @@ package events
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -26,6 +29,7 @@ type Event struct {
 type Dispatcher struct {
 	webhooks []string
 	client   *http.Client
+	secret   string
 }
 
 // NewDispatcher creates a new event dispatcher with the given config.
@@ -43,6 +47,7 @@ func NewDispatcher(cfg *appconfig.Config) *Dispatcher {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		secret: cfg.WebhookSecret,
 	}
 }
 
@@ -120,6 +125,11 @@ func (d *Dispatcher) sendWithRetry(ctx context.Context, url, eventID string, pay
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if d.secret != "" {
+			mac := hmac.New(sha256.New, []byte(d.secret))
+			mac.Write(payload)
+			req.Header.Set("X-Webhook-Signature", hex.EncodeToString(mac.Sum(nil)))
+		}
 
 		resp, err := d.client.Do(req)
 		if err == nil {
