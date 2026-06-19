@@ -6,10 +6,7 @@ package server
 // (clients-bot/sqltools.py) expects.
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -427,29 +424,9 @@ func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Pa
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) {
-	signature := req.Header.Get("X-Platega-Signature")
-	if signature == "" {
-		writeError(w, http.StatusUnauthorized, "missing signature")
-		return
-	}
 	rawBody, err := io.ReadAll(http.MaxBytesReader(w, req.Body, 1<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-
-	if r.cfg.PlategaSecret == "" {
-		r.log.Error("platega webhook received but platega_secret is not configured")
-		writeError(w, http.StatusServiceUnavailable, "webhook not configured")
-		return
-	}
-
-	mac := hmac.New(sha256.New, []byte(r.cfg.PlategaSecret))
-	mac.Write(rawBody)
-	expectedMAC := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(signature), []byte(expectedMAC)) != 1 {
-		r.log.Warn("platega callback signature mismatch", "ip", getClientIP(req))
-		writeError(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}
 
@@ -459,7 +436,41 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	extID, _ := body["external_id"].(string)
+	secretHeader := req.Header.Get("X-Secret")
+	if secretHeader == "" {
+		// Try extracting from body if missing from headers
+		if s, ok := body["X-Secret"].(string); ok {
+			secretHeader = s
+		}
+	}
+
+	if secretHeader == "" {
+		r.log.Warn("platega callback missing X-Secret header and body field")
+		writeError(w, http.StatusUnauthorized, "missing secret")
+		return
+	}
+
+	if r.cfg.PlategaSecret == "" {
+		r.log.Error("platega webhook received but platega_secret is not configured")
+		writeError(w, http.StatusServiceUnavailable, "webhook not configured")
+		return
+	}
+
+	// Platega sends the secret in plain text
+	if subtle.ConstantTimeCompare([]byte(secretHeader), []byte(r.cfg.PlategaSecret)) != 1 {
+		r.log.Warn("platega callback secret mismatch", "ip", getClientIP(req), "expected_len", len(r.cfg.PlategaSecret))
+		writeError(w, http.StatusUnauthorized, "invalid secret")
+		return
+	}
+
+	// json is already unmarshaled into `body` above
+
+	// Platega sends "id" or "transactionId"
+	extID, _ := body["id"].(string)
+	if extID == "" {
+		extID, _ = body["transactionId"].(string)
+	}
+	
 	status, _ := body["status"].(string)
 	r.log.Info("platega callback received", "external_id", extID, "status", status)
 
@@ -469,7 +480,7 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 	// Automatically update the payment status if external_id and status are present
 	if extID != "" && status != "" {
 		mappedStatus := status
-		if status == "success" {
+		if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" {
 			mappedStatus = "completed"
 		}
 
