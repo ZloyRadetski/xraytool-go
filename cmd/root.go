@@ -68,6 +68,7 @@ func init() {
 		startServerCmd(),
 		convertCmd(),
 		migrateLegacyDBCmd(),
+		syncXrayCmd(),
 	)
 }
 
