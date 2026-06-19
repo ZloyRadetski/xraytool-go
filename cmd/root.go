@@ -69,6 +69,7 @@ func init() {
 		convertCmd(),
 		migrateLegacyDBCmd(),
 		syncXrayCmd(),
+		applyBatchCmd(),
 	)
 }
 
