@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"xraytool/internal/userdb"
+	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
@@ -42,6 +43,9 @@ func applyBatchCmd() *cobra.Command {
 				printJSON(map[string]interface{}{"ok": false, "error": fmt.Sprintf("reading config: %v", err)})
 				return
 			}
+			
+			// Keep a clean copy of original config for tag extraction during Hot-Remove
+			originalCfg, _ := xrayconfig.Read(cfg.Paths.XrayConfig)
 
 			// Apply Removes
 			for _, email := range payload.Remove {
@@ -87,7 +91,32 @@ func applyBatchCmd() *cobra.Command {
 				return
 			}
 
-			// Restart Xray (one single restart for all operations)
+			// Apply Hot-Reload using Xray API
+			apiClient := xrayapi.New(cfg.Xray.APIAddr)
+			
+			// 1. Hot-Remove
+			for _, email := range payload.Remove {
+				tags, _ := xrayconfig.InboundTagsForUser(originalCfg, email)
+				_ = apiClient.RemoveUser(email, tags)
+			}
+			
+			// 2. Hot-Add/Update
+			for _, u := range payload.Add {
+				params := xrayconfig.ClientParams{
+					Email:   u.Email,
+					UUID:    u.UUID,
+					Auth:    u.Auth,
+					Subfile: u.Subfile,
+					Expire:  u.Expire,
+					Limit:   u.Limit,
+				}
+				tagged, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
+				if err == nil && len(tagged) > 0 {
+					_ = apiClient.AddUser(tagged, cfg.Paths.XrayConfig)
+				}
+			}
+
+			// Systemctl restart for fallback/legacy systems (no-op in Docker)
 			systemctlRestart("xray")
 
 			printJSON(map[string]interface{}{

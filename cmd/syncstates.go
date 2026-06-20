@@ -78,6 +78,9 @@ func userSnapshotCmd() *cobra.Command {
 					continue
 				}
 				authVal := u.GetString("auth")
+				if authVal == "" {
+					authVal = u.GetString("password")
+				}
 				su := SnapshotUser{
 					Email:   u.Email(),
 					UUID:    u.GetString("id"),
@@ -327,15 +330,15 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 		if su.UUID != "" && mu.UUID != "" && su.UUID != mu.UUID {
 			needsUpdate = true
 		}
-		if su.Expire != mu.Expire && mu.Expire != "" {
+		if su.Expire != mu.Expire {
 			needsUpdate = true
 		}
+		if limitStr(mu.Limit) != limitStr(su.Limit) {
+			needsUpdate = true
+		}
+		
 		if needsUpdate {
 			batch.Add = append(batch.Add, mu)
-		}
-
-		if limitStr(mu.Limit) != limitStr(su.Limit) {
-			batch.Limit = append(batch.Limit, SnapshotLimited{Email: mu.Email, Subfile: mu.Subfile, Limit: mu.Limit})
 		}
 	}
 
