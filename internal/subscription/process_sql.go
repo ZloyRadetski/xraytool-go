@@ -156,9 +156,13 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 			err := db.Transaction(func(tx *gorm.DB) error {
 				var device database.Device
-				err := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).First(&device).Error
+				res := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).Limit(1).Find(&device)
 
-				if err == gorm.ErrRecordNotFound {
+				if res.Error != nil {
+					return res.Error
+				}
+
+				if res.RowsAffected == 0 {
 					// Check device limit before inserting
 					// Lock the parent subscription row to prevent concurrent inserts from exceeding the limit
 					var dummy database.Subscription
@@ -186,7 +190,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 						LastSeen:       now,
 					}
 					return tx.Create(&newDevice).Error
-				} else if err == nil {
+				} else {
 					return tx.Model(&device).Updates(map[string]interface{}{
 						"last_seen":     now,
 						"request_count": gorm.Expr("request_count + 1"),
@@ -196,7 +200,6 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 						"user_agent":    req.UserAgent,
 					}).Error
 				}
-				return err
 			})
 
 			if err != nil {
