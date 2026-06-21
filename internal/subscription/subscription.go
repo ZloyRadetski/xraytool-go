@@ -72,6 +72,7 @@ func generateDummyVless(lines []string) string {
 		return ""
 	}
 	var out []string
+	port := 443
 	for _, l := range lines {
 		if l == "" {
 			out = append(out, "")
@@ -81,7 +82,9 @@ func generateDummyVless(lines []string) string {
 		// It MUST be url-encoded, otherwise Xray clients will drop the string at the first space or corrupt it.
 		// Note: url.PathEscape uses %20 for spaces, which is preferred over %2B (+) by most clients.
 		encodedName := strings.ReplaceAll(url.QueryEscape(l), "+", "%20")
-		out = append(out, "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?type=tcp&security=none#"+encodedName)
+		// Use unique ports so the client doesn't deduplicate or overwrite nodes with the same address/UUID
+		out = append(out, fmt.Sprintf("vless://00000000-0000-0000-0000-000000000000@127.0.0.1:%d?type=tcp&security=none#%s", port, encodedName))
+		port++
 	}
 	return strings.Join(out, "\n")
 }
