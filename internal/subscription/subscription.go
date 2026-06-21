@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -76,7 +77,11 @@ func generateDummyVless(lines []string) string {
 			out = append(out, "")
 			continue
 		}
-		out = append(out, "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?type=tcp&security=none#"+l)
+		// The `#` fragment in VLESS links is the name/remark of the proxy node.
+		// It MUST be url-encoded, otherwise Xray clients will drop the string at the first space or corrupt it.
+		// Note: url.PathEscape uses %20 for spaces, which is preferred over %2B (+) by most clients.
+		encodedName := strings.ReplaceAll(url.QueryEscape(l), "+", "%20")
+		out = append(out, "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?type=tcp&security=none#"+encodedName)
 	}
 	return strings.Join(out, "\n")
 }
@@ -299,11 +304,11 @@ func Process(cm *CacheManager, req *Request) *Response {
 		res.StatusCode = 200
 
 		if deviceLimitReached {
-			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.DeviceLimit)
+			res.Body = base64.StdEncoding.EncodeToString([]byte(generateDummyVless(cm.cfg.Subscription.DummyConfigs.DeviceLimit)))
 		} else if unsupportedClient {
-			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.UnsupportedClient)
+			res.Body = base64.StdEncoding.EncodeToString([]byte(generateDummyVless(cm.cfg.Subscription.DummyConfigs.UnsupportedClient)))
 		} else { // isBlockedOrExpired
-			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.Expired)
+			res.Body = base64.StdEncoding.EncodeToString([]byte(generateDummyVless(cm.cfg.Subscription.DummyConfigs.Expired)))
 		}
 		return res
 	}
@@ -389,7 +394,7 @@ func Process(cm *CacheManager, req *Request) *Response {
 		res.Headers["Content-Disposition"] = `attachment; filename="configs.txt"`
 		res.Headers["Content-Type"] = "text/plain; charset=utf-8"
 		res.StatusCode = 200
-		res.Body = shareLinks
+		res.Body = base64.StdEncoding.EncodeToString([]byte(shareLinks))
 		return res
 	}
 
