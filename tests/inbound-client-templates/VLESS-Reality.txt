@@ -1,7 +1,0 @@
-{
-  "email": "",
-  "expire": "",
-  "flow": "",
-  "id": "",
-  "subfile": ""
-}
