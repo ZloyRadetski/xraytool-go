@@ -129,6 +129,9 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("PUT /api/v1/admin/promocodes/{id}", protected(r.handleAdminEditPromoCode))
 	r.mux.Handle("DELETE /api/v1/admin/promocodes/{id}", protected(r.handleAdminDeletePromoCode))
 
+	// Internal
+	r.mux.Handle("POST /api/v1/internal/xray/sync", protected(r.handleInternalXraySync))
+
 	// ── Catch-all ─────────────────────────────────────────────────────────────
 	r.mux.HandleFunc("/", r.handleNotFound)
 }

@@ -156,9 +156,9 @@ func defaults() *Config {
 			DetailedRetentionDays: 2,
 		},
 		SlaveAPI: SlaveAPIConf{
-			ConnectTimeout: 4 * time.Second,
-			RequestTimeout: 15 * time.Second,
-			RemotePath:     "/api/rest/xraytool",
+			ConnectTimeout: 5 * time.Second,
+			RequestTimeout: 30 * time.Second,
+			RemotePath:     "/api/v1/internal/xray/sync",
 		},
 		Ports: PortsConf{
 			APIServer: 8080,

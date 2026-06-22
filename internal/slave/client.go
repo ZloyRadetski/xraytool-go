@@ -117,7 +117,13 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 	if endpoint == "" {
 		return "", fmt.Errorf("cannot determine endpoint for slave server")
 	}
-	url := endpoint + "/" + cmd
+	url := endpoint
+
+	// Inject cmd as action
+	if params == nil {
+		params = make(map[string]string)
+	}
+	params["action"] = cmd
 
 	payload, err := json.Marshal(params)
 	if err != nil {

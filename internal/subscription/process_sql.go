@@ -64,23 +64,57 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 			clientId, clientId, clientId, clientId+".txt")
 	}
 
+	var user database.User
 	if err := query.Limit(1).Find(&subs).Error; err != nil {
 		return failResponse(500, "Database error")
-	}
-	if len(subs) == 0 {
-		return failResponse(404, "User not found")
-	}
-	sub = subs[0]
-
-	var user database.User
-	if err := db.Where("id = ?", sub.UserID).First(&user).Error; err != nil {
-		return failResponse(404, "User not found")
 	}
 
 	cm.Refresh() // Ensure templates and Xray config are loaded
 	xrayCfg := cm.GetRawConfig()
 	if xrayCfg == nil {
 		return failResponse(500, "xray config not loaded in cache")
+	}
+
+	if len(subs) == 0 {
+		// Fallback: Check if user exists in xray_config.json directly (e.g. admin)
+		var foundEmail string
+		inbounds, err := xrayCfg.GetInbounds()
+		if err == nil {
+			for _, ib := range inbounds {
+				if ib.HasClientList() {
+					clients, _ := ib.GetClients()
+					for _, c := range clients {
+						if c.GetString("id") == clientId {
+							foundEmail = c.Email()
+							break
+						}
+					}
+				}
+				if foundEmail != "" {
+					break
+				}
+			}
+		}
+
+		if foundEmail != "" {
+			// User exists only in config! Mock the sub and user objects
+			sub = database.Subscription{
+				ID:         clientId,
+				XrayUUID:   clientId,
+				Email:      foundEmail,
+				Status:     "active",
+				MaxDevices: 999, // admins have no device limit usually
+			}
+			// Skip device accounting and limits for admin fallback
+			skipChecksAgent = "admin-fallback"
+		} else {
+			return failResponse(404, "User not found")
+		}
+	} else {
+		sub = subs[0]
+		if err := db.Where("id = ?", sub.UserID).First(&user).Error; err != nil {
+			return failResponse(404, "User not found")
+		}
 	}
 
 	isBlockedUser := sub.Status == "expired" || sub.Status == "blocked" || sub.Status == "inactive"

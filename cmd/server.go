@@ -11,10 +11,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"xraytool/internal/database"
 	"xraytool/internal/events"
@@ -250,134 +248,6 @@ func startServerCmd() *cobra.Command {
 
 			mux.HandleFunc("/client", subHandler)
 			mux.HandleFunc("/api/v1/sub", subHandler)
-
-			mux.HandleFunc("/api/rest/xraytool/{command}", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					logIntruder(r, "Wrong HTTP Method")
-					http.NotFound(w, r)
-					return
-				}
-
-				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
-					logIntruder(r, "Invalid or Missing API Key")
-					http.NotFound(w, r)
-					return
-				}
-
-				cmdName := r.PathValue("command")
-
-				r.Body = http.MaxBytesReader(w, r.Body, 1048576)
-				var payload map[string]interface{}
-				body, err := io.ReadAll(r.Body)
-				if err == nil && len(body) > 0 {
-					if err := json.Unmarshal(body, &payload); err != nil {
-						logIntruder(r, fmt.Sprintf("Bad JSON format: %v", err))
-						http.NotFound(w, r)
-						return
-					}
-				}
-
-				// --- Direct Execution Mapping ---
-				// For graceful migration to in-memory commands
-				type commandFunc func(payload map[string]interface{}) (string, error)
-
-				directCommands := map[string]commandFunc{
-					"newuser":   ExecNewUser,
-					"unlimit":   ExecUnlimit,
-					"setexpire": ExecSetExpire,
-					"setlimit":  ExecUpdateLimit,
-				}
-
-				if handlerFn, ok := directCommands[cmdName]; ok {
-					// Found in mapping -> Execute directly in memory
-					logger.Infof("--> DIRECT EXEC: %s (от %s)", cmdName, getClientIP(r))
-					outStr, err := handlerFn(payload)
-
-					w.Header().Set("Content-Type", "application/json")
-					if err != nil {
-						logger.Errorf(" [X] DIRECT FAIL | %v", err)
-						w.WriteHeader(http.StatusInternalServerError)
-						json.NewEncoder(w).Encode(map[string]interface{}{
-							"status": "error",
-							"code":   err.Error(),
-							"output": outStr,
-						})
-						return
-					}
-					logger.Infof(" [V] DIRECT OK")
-					json.NewEncoder(w).Encode(map[string]string{
-						"status": "success",
-						"output": outStr,
-					})
-					return
-				}
-
-				// --- Fallback Mechanism ---
-				// If not found in mapping -> Execute via CLI (Legacy behavior)
-				// Allowlist of accepted flags per command
-				allowedFlags := map[string]map[string]bool{
-					"rmuser":       {"email": true, "name": true, "legacy": true},
-					"limit":        {"email": true, "name": true, "legacy": true},
-					"setexpire":    {"email": true, "name": true, "expire": true},
-					"setlimit":     {"email": true, "name": true, "limit": true},
-					"syncstates":   {"dry-run": true, "email": true},
-					"userlist":     {"format": true},
-					"stats":        {"email": true, "name": true, "format": true},
-					"usersnapshot": {},
-				}
-				cmdAllowed := allowedFlags[cmdName]
-				args := []string{"--config", cfgFile, cmdName}
-				for k, v := range payload {
-					if cmdAllowed != nil && !cmdAllowed[k] {
-						logger.Warnf("[API] Отклонён недопустимый флаг %q для команды %q", k, cmdName)
-						continue
-					}
-					flag := "--" + k
-					switch val := v.(type) {
-					case string:
-						if val != "" {
-							args = append(args, flag, val)
-						}
-					case bool:
-						if val {
-							args = append(args, flag)
-						}
-					case float64:
-						args = append(args, flag, fmt.Sprintf("%v", val))
-					}
-				}
-
-				logger.Infof("--> EXEC: %s %s (от %s)", xraytoolPath, strings.Join(args, " "), getClientIP(r))
-
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-
-				subCmd := exec.CommandContext(ctx, xraytoolPath, args...)
-				out, err := subCmd.CombinedOutput()
-
-				w.Header().Set("Content-Type", "application/json")
-				if err != nil {
-					logger.Errorf(" [X] FAIL | %v", err)
-					w.WriteHeader(http.StatusInternalServerError)
-					if err := json.NewEncoder(w).Encode(map[string]interface{}{
-						"status": "error",
-						"code":   err.Error(),
-						"output": string(out),
-					}); err != nil {
-						logger.Errorf(" [X] JSON Error: %v", err)
-					}
-					return
-				}
-
-				logger.Infof(" [V] OK")
-				if err := json.NewEncoder(w).Encode(map[string]string{
-					"status": "success",
-					"output": string(out),
-				}); err != nil {
-					logger.Errorf(" [X] JSON Error: %v", err)
-				}
-			})
 
 			mux.HandleFunc("/api/rest/update-links", func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost {

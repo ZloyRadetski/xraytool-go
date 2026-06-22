@@ -63,7 +63,6 @@ func init() {
 		migrateCmd(),
 		updateXrayCmd(),
 		updateGeoCmd(),
-		subCmd(),
 		genBalancerCmd(),
 		startServerCmd(),
 		convertCmd(),
