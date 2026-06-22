@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"os/exec"
 
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
@@ -22,7 +24,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" {
+	if body.Email == "" && body.Action != "usersnapshot" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
@@ -30,6 +32,17 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 	r.log.Info("received internal sync request", "action", body.Action, "email", body.Email)
 
 	switch body.Action {
+	case "usersnapshot":
+		out, err := exec.Command(os.Args[0], "usersnapshot").Output()
+		if err != nil {
+			r.log.Error("internal sync: failed to run usersnapshot", "err", err, "out", string(out))
+			writeError(w, http.StatusInternalServerError, "failed to build usersnapshot")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+		return
+
 	case "newuser":
 		if body.UUID == "" {
 			writeError(w, http.StatusBadRequest, "uuid is required for newuser sync")
