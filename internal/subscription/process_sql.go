@@ -81,6 +81,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 		source = "xray config"
 		// Fallback: Check if user exists in xray_config.json directly (e.g. admin)
 		var foundEmail string
+		var foundUUID string
 		inbounds, err := xrayCfg.GetInbounds()
 		if err == nil {
 			for _, ib := range inbounds {
@@ -89,6 +90,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 					for _, c := range clients {
 						if c.GetString("id") == clientId || c.GetString("password") == clientId || c.GetString("subfile") == clientId || c.GetString("subfile") == clientId+".txt" {
 							foundEmail = c.Email()
+							foundUUID = c.GetString("id")
 							break
 						}
 					}
@@ -103,7 +105,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 			// User exists only in config! Mock the sub and user objects
 			sub = database.Subscription{
 				ID:         clientId,
-				XrayUUID:   clientId,
+				XrayUUID:   foundUUID,
 				Email:      foundEmail,
 				Status:     "active",
 				MaxDevices: 999, // admins have no device limit usually
@@ -312,7 +314,12 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	res.Headers["X-Is-User-Blocked"] = fmt.Sprintf("%t", isBlockedUser)
 	res.Headers["X-Sub-Source"] = source
 
-	expireTs := parseDateToTimestamp(expireVal)
+	var expireTs int64
+	if sub.EndsAt != nil {
+		expireTs = sub.EndsAt.Unix()
+	} else {
+		expireTs = parseDateToTimestamp(expireVal)
+	}
 
 	isBlockedOrExpired := isBlockedUser || expireTs <= time.Now().Unix()
 
