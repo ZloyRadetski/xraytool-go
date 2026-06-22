@@ -140,7 +140,7 @@ func slaveRegistry(cfg *appconfig.Config) *slave.Registry {
 // ---------------------------------------------------------------------------
 
 // systemctlRestart restarts a systemd service. Non-fatal on failure.
-func systemctlRestart(service string) {
+var systemctlRestart = func(service string) {
 	exec.Command("systemctl", "restart", service).Run() //nolint:errcheck
 }
 

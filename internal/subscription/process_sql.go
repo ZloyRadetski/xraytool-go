@@ -84,7 +84,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 				if ib.HasClientList() {
 					clients, _ := ib.GetClients()
 					for _, c := range clients {
-						if c.GetString("id") == clientId {
+						if c.GetString("id") == clientId || c.GetString("password") == clientId || c.GetString("subfile") == clientId || c.GetString("subfile") == clientId+".txt" {
 							foundEmail = c.Email()
 							break
 						}

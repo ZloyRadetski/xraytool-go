@@ -26,6 +26,7 @@ func setupTest(t *testing.T) {
 	testingExitCode = 0
 	currentGOOS = "linux"
 	geteuid = func() int { return 0 }
+	systemctlRestart = func(service string) {} // Mock systemctl for tests
 
 	// Create a dummy config
 	cfg = &appconfig.Config{

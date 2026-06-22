@@ -19,6 +19,7 @@ devices_state.json
 *.db-wal
 build.ps1
 *.ps1
+*test*.yaml
 
 # Go workspace
 go.work
