@@ -2,9 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
-	"xraytool/internal/userdb"
+	"xraytool/internal/convert"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
@@ -35,8 +34,8 @@ func setExpireCmd() *cobra.Command {
 			if !validEmail(email) {
 				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
 			}
-			if _, err := time.Parse("02-01-2006", expireVal); err != nil {
-				p.Errorf("invalid expire date format, expected DD-MM-YYYY: %v", err)
+			if _, err := convert.ParseExpiryDate(expireVal); err != nil {
+				p.Errorf("invalid expire date format (supports DD.MM.YYYY, RFC3339, etc): %v", err)
 			}
 
 			updatedActive := false
@@ -54,10 +53,8 @@ func setExpireCmd() *cobra.Command {
 				p.Errorf("updating expire: %v", err)
 			}
 
-			db := userdb.New(cfg.Paths.LimitedDB)
-			entry, _ := db.Get(email)
-			if !updatedActive && entry == nil {
-				p.Errorf("user %q not found in active or blocked lists", email)
+			if !updatedActive {
+				p.Errorf("user %q not found in xray config", email)
 			}
 
 			sqlSetExpire(email, expireVal)
@@ -127,18 +124,8 @@ func updateLimitCmd() *cobra.Command {
 				p.Errorf("updating active config: %v", err)
 			}
 
-			// Update in limited DB.
-			db := userdb.New(cfg.Paths.LimitedDB)
-			updatedLimited := false
-			if entry, _ := db.Get(email); entry != nil {
-				if err := db.UpdateLimit(email, limitPtr); err != nil {
-					p.Errorf("failed to update limit in db: %v", err)
-				}
-				updatedLimited = true
-			}
-
-			if !updatedActive && !updatedLimited {
-				p.Errorf("user %q not found in active or blocked lists", email)
+			if !updatedActive {
+				p.Errorf("user %q not found in xray config", email)
 			}
 
 			sqlSetLimit(email, int(*limitPtr))
@@ -178,8 +165,8 @@ func ExecSetExpire(payload map[string]interface{}) (string, error) {
 	if !validEmail(email) {
 		return "", fmt.Errorf("invalid characters in email")
 	}
-	if _, err := time.Parse("02-01-2006", expireVal); err != nil {
-		return "", fmt.Errorf("invalid expire date format, expected DD-MM-YYYY: %v", err)
+	if _, err := convert.ParseExpiryDate(expireVal); err != nil {
+		return "", fmt.Errorf("invalid expire date format: %v", err)
 	}
 
 	updatedActive := false
@@ -197,10 +184,8 @@ func ExecSetExpire(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("updating expire: %v", err)
 	}
 
-	db := userdb.New(cfg.Paths.LimitedDB)
-	entry, _ := db.Get(email)
-	if !updatedActive && entry == nil {
-		return "", fmt.Errorf("user %q not found in active or blocked lists", email)
+	if !updatedActive {
+		return "", fmt.Errorf("user %q not found in xray config", email)
 	}
 
 	sqlSetExpire(email, expireVal)
@@ -254,17 +239,8 @@ func ExecUpdateLimit(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("updating active config: %v", err)
 	}
 
-	db := userdb.New(cfg.Paths.LimitedDB)
-	updatedLimited := false
-	if entry, _ := db.Get(email); entry != nil {
-		if err := db.UpdateLimit(email, limitPtr); err != nil {
-			return "", fmt.Errorf("updating limit in db: %v", err)
-		}
-		updatedLimited = true
-	}
-
-	if !updatedActive && !updatedLimited {
-		return "", fmt.Errorf("user %q not found in active or blocked lists", email)
+	if !updatedActive {
+		return "", fmt.Errorf("user %q not found in xray config", email)
 	}
 
 	sqlSetLimit(email, int(*limitPtr))

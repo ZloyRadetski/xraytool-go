@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-
+	
+	"xraytool/internal/database"
+	"xraytool/internal/events"
 	"xraytool/internal/subscription"
 
 	"github.com/spf13/cobra"
@@ -31,10 +33,22 @@ func subCmd() *cobra.Command {
 				return
 			}
 
-			// Process the subscription
 			cm := subscription.NewCacheManager(cfg)
 			cm.Refresh() // Single refresh for CLI usage
-			resp := subscription.Process(cm, &req)
+			
+			// Init DB since we need it for ProcessSQL
+			if err := database.Init(database.Config{
+				Driver:     cfg.Database.Driver,
+				DSN:        cfg.Database.DSN,
+				SQLitePath: cfg.Database.SQLitePath,
+			}); err != nil {
+				printResponse(failResponse(500, "database error"))
+				return
+			}
+			defer database.Close()
+			
+			dispatcher := events.NewDispatcher(cfg)
+			resp := subscription.ProcessSQL(database.DB(), cm, dispatcher, &req)
 			printResponse(resp)
 		},
 	}

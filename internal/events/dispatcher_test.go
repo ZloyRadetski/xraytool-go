@@ -97,6 +97,7 @@ func TestDispatcherRetry(t *testing.T) {
 
 func TestDispatcher_Dispatch_Async(t *testing.T) {
 	var requestCount int32
+	var mu sync.Mutex
 	var receivedEvent Event
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -110,11 +111,15 @@ func TestDispatcher_Dispatch_Async(t *testing.T) {
 		}
 
 		body, _ := io.ReadAll(r.Body)
-		if err := json.Unmarshal(body, &receivedEvent); err != nil {
+		var evt Event
+		if err := json.Unmarshal(body, &evt); err != nil {
 			t.Errorf("Failed to parse event: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		mu.Lock()
+		receivedEvent = evt
+		mu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
 	}

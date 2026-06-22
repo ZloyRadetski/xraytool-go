@@ -68,8 +68,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 		return failResponse(500, "Database error")
 	}
 	if len(subs) == 0 {
-		// Fallback to legacy file-based subscription logic
-		return Process(cm, req)
+		return failResponse(404, "User not found")
 	}
 	sub = subs[0]
 
@@ -168,6 +167,9 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 					var dummy database.Subscription
 					if db.Dialector.Name() == "postgres" {
 						tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", sub.ID).First(&dummy)
+					} else if db.Dialector.Name() == "sqlite" {
+						// Force a write lock in SQLite by touching the subscription record
+						tx.Exec("UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", sub.ID)
 					}
 
 					var currentCount int64
@@ -258,12 +260,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 	// Fetch traffic download bytes
 	downloadBytes := int64(0)
-	if !isBlockedUser {
-		downloadBytes = getDownloadBytes(cfg.Paths.InferredStats, email)
-		if downloadBytes == 0 {
-			downloadBytes = getDownloadBytes(cfg.Paths.StatsState, email)
-		}
-	}
+	downloadBytes = getDownloadBytes(cfg.Paths.StatsState, email)
 
 	isVlessFormat := req.Query["format"] == "vless"
 

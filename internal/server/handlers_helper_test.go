@@ -21,8 +21,9 @@ func TestMain(m *testing.M) {
 	defer os.Remove(f.Name())
 
 	if err := database.Init(database.Config{
-		Driver:     "sqlite",
-		SQLitePath: f.Name(),
+		Driver:      "sqlite",
+		SQLitePath:  f.Name(),
+		AutoMigrate: true,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "db init failed: %v\n", err)
 		os.Exit(1)

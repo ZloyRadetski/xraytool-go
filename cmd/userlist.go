@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"xraytool/internal/userdb"
+	"xraytool/internal/database"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
@@ -35,9 +35,27 @@ func userListCmd() *cobra.Command {
 				return users[i].Email() < users[j].Email()
 			})
 
-			db := userdb.New(cfg.Paths.LimitedDB)
-			limited, _ := db.All()
-
+			db := database.DB()
+			type BlockedUser struct {
+				Email   string
+				Subfile string
+				Limit   *float64
+			}
+			var limited []BlockedUser
+			if db != nil {
+				var subs []database.Subscription
+				db.Where("status = ?", "blocked").Find(&subs)
+				for _, sub := range subs {
+					subfile := ""
+					if sub.Metadata != nil {
+						if sf, ok := sub.Metadata["subfile"].(string); ok {
+							subfile = sf
+						}
+					}
+					lv := float64(sub.MaxDevices)
+					limited = append(limited, BlockedUser{Email: sub.Email, Subfile: subfile, Limit: &lv})
+				}
+			}
 			if batchMode {
 				// Machine-readable output.
 				for _, u := range users {
@@ -147,18 +165,25 @@ func shareLinkCmd() *cobra.Command {
 				}
 			}
 
-			// Try limited DB.
-			db := userdb.New(cfg.Paths.LimitedDB)
-			entry, _ := db.Get(email)
-			if entry != nil {
-				link := fmt.Sprintf("https://%s/client?id=%s", cfg.Server.Domain, subfileID(entry.Subfile))
-				if isBatch {
-					fmt.Printf("SUCCESS|LINK|%s|(LIMITED)\n", link)
-				} else {
-					p.Warn("User is blocked.")
-					fmt.Printf("Link: %s\n", link)
+			// Try SQL DB for legacy behavior fallback
+			db := database.DB()
+			if db != nil {
+				var sub database.Subscription
+				if err := db.Where("email = ?", email).First(&sub).Error; err == nil && sub.Metadata != nil {
+					if sf, ok := sub.Metadata["subfile"].(string); ok && sf != "" {
+						link := fmt.Sprintf("https://%s/client?id=%s", cfg.Server.Domain, subfileID(sf))
+						status := sub.Status
+						if isBatch {
+							fmt.Printf("SUCCESS|LINK|%s|(%s)\n", link, status)
+						} else {
+							if status == "blocked" {
+								p.Warn("User is blocked.")
+							}
+							fmt.Printf("Link: %s\n", link)
+						}
+						return
+					}
 				}
-				return
 			}
 
 			p.Error("user not found")

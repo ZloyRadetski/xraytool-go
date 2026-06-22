@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"xraytool/internal/generate"
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
@@ -38,27 +37,10 @@ func unlimitCmd() *cobra.Command {
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			db := userdb.New(cfg.Paths.LimitedDB)
-
-			// Interactive: show blocked users.
+			// Interactive: just prompt for email.
 			if email == "" {
-				all, err := db.All()
-				if err != nil || len(all) == 0 {
-					p.Error("no blocked users found")
-				}
-				fmt.Println("\033[0;36m--- Blocked Users ---\033[0m")
-				for i, e := range all {
-					fmt.Printf("\033[0;31m%d.\033[0m %s\n", i+1, e.Email)
-				}
-				fmt.Println()
-				var choice string
-				fmt.Print("Number to unblock: ")
-				fmt.Scanln(&choice)
-				var idx int
-				if _, err := fmt.Sscanf(choice, "%d", &idx); err != nil || idx < 1 || idx > len(all) {
-					p.Error("invalid selection")
-				}
-				email = all[idx-1].Email
+				fmt.Print("Enter name (email) to unblock: ")
+				fmt.Scanln(&email)
 			}
 			if email == "" {
 				p.Error("email is required")
@@ -75,11 +57,11 @@ func unlimitCmd() *cobra.Command {
 			// Check if already active.
 			isActive, _ := xrayconfig.UserExists(xrayCfg, email)
 
-			// Load from limited DB.
-			dbEntry, _ := db.Get(email)
-
-			if !isActive && dbEntry == nil {
-				p.Errorf("user %q not found in active or blocked lists", email)
+			if !isActive {
+				// The user is not in active xray config.
+				// We can still try to recreate them if enough parameters are provided,
+				// or if they exist in SQL DB we could pull from there, but for now we
+				// just warn if they don't have enough args.
 			}
 
 			// --- Determine values to restore ---
@@ -111,15 +93,6 @@ func unlimitCmd() *cobra.Command {
 				}
 			}
 
-			if uuid == "" && dbEntry != nil {
-				// Nothing in active config; try limited DB.
-				if dbEntry.Limit != nil && limitPtr == nil {
-					limitPtr = dbEntry.Limit
-				}
-				if subfile == "" {
-					subfile = dbEntry.Subfile
-				}
-			}
 
 			// Generate anything still missing.
 			if uuid == "" {
@@ -178,10 +151,6 @@ func unlimitCmd() *cobra.Command {
 				p.Errorf("writing xray config: %v", err)
 			}
 
-			// Remove from limited DB.
-			if err := db.Remove(email); err != nil {
-				fmt.Fprintf(os.Stderr, "[WARN] unlimit: failed to remove %s from limited DB: %v\n", email, err)
-			}
 
 			if legacy {
 				systemctlRestart("xray")
@@ -257,7 +226,6 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 
 	legacy, _ := payload["legacy"].(bool)
 
-	db := userdb.New(cfg.Paths.LimitedDB)
 
 	xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
 	if err != nil {
@@ -265,10 +233,8 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	}
 
 	isActive, _ := xrayconfig.UserExists(xrayCfg, email)
-	dbEntry, _ := db.Get(email)
-
-	if !isActive && dbEntry == nil {
-		return "", fmt.Errorf("user %q not found in active or blocked lists", email)
+	if !isActive {
+		// Just proceed to re-add.
 	}
 
 	uuid := forcedUUID
@@ -297,14 +263,6 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		}
 	}
 
-	if uuid == "" && dbEntry != nil {
-		if dbEntry.Limit != nil && limitPtr == nil {
-			limitPtr = dbEntry.Limit
-		}
-		if subfile == "" {
-			subfile = dbEntry.Subfile
-		}
-	}
 
 	if uuid == "" {
 		if uuid, err = generate.UUID(); err != nil {
@@ -364,9 +322,6 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("writing xray config: %v", err)
 	}
 
-	if err := db.Remove(email); err != nil {
-		fmt.Fprintf(os.Stderr, "[WARN] unlimit db repair: failed to remove %s from limited DB: %v\n", email, err)
-	}
 
 	if legacy {
 		systemctlRestart("xray")

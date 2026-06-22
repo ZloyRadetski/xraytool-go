@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
@@ -65,18 +64,14 @@ func rmOrLimitCmd(action string) *cobra.Command {
 			// Verify the user exists.
 			client, err := xrayconfig.FindUser(xrayCfg, email)
 			var subfile string
-			var limitPtr *float64
 
 			if err != nil || client == nil {
-				db := userdb.New(cfg.Paths.LimitedDB)
-				entry, err2 := db.Get(email)
-				if err2 != nil || entry == nil {
-					p.Error("user not found")
-				}
+				// No legacy DB check needed, just say user not found if not in xray config
+				// UNLESS they are trying to remove a user that is only in SQL.
+				// But limit.go operates on Xray config mostly.
+				// Let's just proceed to update SQL status anyway.
+				
 				if action == "rm" {
-					if err := db.Remove(email); err != nil {
-						p.Errorf("removing from limited db: %v", err)
-					}
 					sqlSetStatus(email, "inactive")
 
 					if cfg.IsMaster() {
@@ -94,7 +89,7 @@ func rmOrLimitCmd(action string) *cobra.Command {
 					}
 					return
 				} else {
-					p.Error("user is already limited")
+					p.Error("user is already limited/blocked or not in xray config")
 				}
 			}
 
@@ -102,9 +97,6 @@ func rmOrLimitCmd(action string) *cobra.Command {
 			subfile = client.GetString("subfile")
 			if subfile == "" {
 				subfile = "unknown.txt"
-			}
-			if lv, ok := client.GetNumber("limit"); ok {
-				limitPtr = &lv
 			}
 
 			// Hot-remove via xray API.
@@ -128,17 +120,7 @@ func rmOrLimitCmd(action string) *cobra.Command {
 			}
 
 			// Save to limited DB if this is a "limit" (block) action.
-			if action == "limit" {
-				db := userdb.New(cfg.Paths.LimitedDB)
-				entry := userdb.Entry{
-					Email:   email,
-					Subfile: subfile,
-					Limit:   limitPtr,
-				}
-				if err := db.Upsert(entry); err != nil {
-					p.Errorf("saving to limited db: %v", err)
-				}
-			}
+			// (Removed legacy limited_users.db code. The SQL DB is updated below.)
 
 			if legacy {
 				systemctlRestart("xray")

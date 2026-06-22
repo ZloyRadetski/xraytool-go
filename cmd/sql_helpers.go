@@ -3,6 +3,7 @@ package cmd
 import (
 	"time"
 
+	"xraytool/internal/convert"
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
 )
@@ -28,7 +29,7 @@ func sqlSetExpire(email string, expireVal string) {
 			updates := map[string]interface{}{
 				"updated_at": time.Now(),
 			}
-			if t, err := time.Parse("02-01-2006", expireVal); err == nil {
+			if t, err := convert.ParseExpiryDate(expireVal); err == nil {
 				updates["ends_at"] = t
 			}
 			db.Model(&sub).Updates(updates)

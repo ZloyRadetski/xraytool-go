@@ -1,7 +1,6 @@
 package subscription
 
 import (
-	"bufio"
 	"os"
 	"strings"
 	"sync"
@@ -24,7 +23,6 @@ type CacheManager struct {
 	// Cached Data
 	xrayConfig   xrayconfig.RawConfig
 	activeUsers  map[string]*ActiveUser
-	limitedUsers map[string]*LimitedUser
 	subTemplate  string
 	routeGlobal  string
 	routeRU      string
@@ -36,12 +34,6 @@ type CacheManager struct {
 	routeGlobalModTime time.Time
 	routeRUModTime     time.Time
 
-	// Device State
-	deviceStateMu      sync.Mutex
-	deviceState        DeviceState
-	deviceStateDirty   bool
-	deviceStateLoaded  bool
-	deviceStateModTime time.Time
 
 	// done is closed by Stop() to signal the flush worker to exit.
 	done chan struct{}
@@ -52,11 +44,8 @@ func NewCacheManager(cfg *appconfig.Config) *CacheManager {
 	cm := &CacheManager{
 		cfg:          cfg,
 		activeUsers:  make(map[string]*ActiveUser),
-		limitedUsers: make(map[string]*LimitedUser),
 		done:         make(chan struct{}),
 	}
-	// Start async flusher for devices state
-	go cm.flushDeviceStateWorker()
 	return cm
 }
 
@@ -85,9 +74,7 @@ func (c *CacheManager) Refresh() {
 
 func (c *CacheManager) refreshAll() {
 	c.refreshXrayConfig()
-	c.refreshLimitedDB()
 	c.refreshTemplates()
-	c.refreshDeviceState()
 }
 
 func (c *CacheManager) refreshXrayConfig() {
@@ -194,54 +181,7 @@ func (c *CacheManager) refreshXrayConfig() {
 	logger.Infof("[Cache] Индекс Xray обновлен. Загружено %d пользователей.", len(newActiveUsers))
 }
 
-func (c *CacheManager) refreshLimitedDB() {
-	path := c.cfg.Paths.LimitedDB
-	info, err := os.Stat(path)
-	if err != nil {
-		return
-	}
-	c.mu.RLock()
-	modTime := c.limitedDBModTime
-	c.mu.RUnlock()
 
-	if info.ModTime().Equal(modTime) {
-		return
-	}
-
-	logger.Infof("[Cache] Обнаружено изменение %s. Обновление базы лимитов...", path)
-	f, err := os.Open(path)
-	if err != nil {
-		logger.Errorf("[Cache] Ошибка чтения limited_db: %v", err)
-		return
-	}
-	defer f.Close()
-
-	newLimitedUsers := make(map[string]*LimitedUser)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "|")
-		if len(parts) < 2 {
-			continue
-		}
-		email := strings.TrimSpace(parts[0])
-		sub := strings.TrimSpace(parts[1])
-
-		targetNorm := normalizeSubfileToID(sub)
-		newLimitedUsers[targetNorm] = &LimitedUser{
-			Email:   email,
-			Subfile: sub,
-		}
-	}
-
-	c.mu.Lock()
-	c.limitedUsers = newLimitedUsers
-	c.limitedDBModTime = info.ModTime()
-	c.mu.Unlock()
-}
 
 func (c *CacheManager) refreshTemplates() {
 	// Sub Template
@@ -314,16 +254,16 @@ func (c *CacheManager) refreshTemplates() {
 	}
 }
 
-// GetUserBySubfile returns the active user or limited user in O(1) time.
-func (c *CacheManager) GetUserBySubfile(filename string) (*ActiveUser, *LimitedUser) {
+// GetUserBySubfile returns the active user in O(1) time.
+func (c *CacheManager) GetUserBySubfile(filename string) *ActiveUser {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	targetNorm := normalizeSubfileToID(filename)
 	if targetNorm == "" {
-		return nil, nil
+		return nil
 	}
-	return c.activeUsers[targetNorm], c.limitedUsers[targetNorm]
+	return c.activeUsers[targetNorm]
 }
 
 // GetTemplates returns the cached templates.

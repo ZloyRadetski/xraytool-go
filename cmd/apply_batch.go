@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
@@ -15,7 +14,6 @@ import (
 type BatchPayload struct {
 	Add    []SnapshotUser    `json:"add"`
 	Remove []string          `json:"remove"`
-	Limit  []SnapshotLimited `json:"limit"`
 }
 
 func applyBatchCmd() *cobra.Command {
@@ -71,19 +69,7 @@ func applyBatchCmd() *cobra.Command {
 				}
 			}
 
-			// Apply Limits (Database for slave node limits)
-			db := userdb.New(cfg.Paths.LimitedDB)
-			for _, l := range payload.Limit {
-				if l.Limit != nil && *l.Limit == 0 {
-					db.Remove(l.Email)
-				} else {
-					db.Upsert(userdb.Entry{
-						Email:   l.Email,
-						Subfile: l.Subfile,
-						Limit:   l.Limit,
-					})
-				}
-			}
+			// Removed apply Limits
 
 			// Write config
 			if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
@@ -124,7 +110,6 @@ func applyBatchCmd() *cobra.Command {
 				"status":  "success",
 				"added":   len(payload.Add),
 				"removed": len(payload.Remove),
-				"limits":  len(payload.Limit),
 			})
 		},
 	}

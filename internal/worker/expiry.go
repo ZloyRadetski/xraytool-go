@@ -12,7 +12,6 @@ import (
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 	"xraytool/internal/slave"
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 )
@@ -24,7 +23,6 @@ type ExpiryWorker struct {
 	dispatcher *events.Dispatcher
 	apiClient  *xrayapi.Client
 	log        *slog.Logger
-	limitDB    *userdb.DB
 }
 
 // NewExpiryWorker creates a new ExpiryWorker.
@@ -41,7 +39,6 @@ func NewExpiryWorker(
 		dispatcher: dispatcher,
 		apiClient:  apiClient,
 		log:        log.With("component", "expiry_worker"),
-		limitDB:    userdb.New(cfg.Paths.LimitedDB),
 	}
 }
 
@@ -183,23 +180,7 @@ func (w *ExpiryWorker) handleExpiredBulk(subs []database.Subscription) {
 	// We'll just continue processing the rest of the DB changes.
 
 	for _, sub := range subs {
-		// 2. Add to Limited DB
-		subfile := ""
-		if sub.Metadata != nil {
-			if sf, ok := sub.Metadata["subfile"].(string); ok {
-				subfile = sf
-			}
-		}
-		if subfile == "" {
-			subfile = configSubfiles[sub.Email]
-		}
-		if err := w.limitDB.Upsert(userdb.Entry{
-			Email:   sub.Email,
-			Subfile: subfile,
-			Limit:   nil, // Expired
-		}); err != nil {
-			w.log.Error("Failed to update limited users DB", "email", sub.Email, "error", err)
-		}
+		// 2. Add to Limited DB (Removed)
 
 		// 3. Update DB Status
 		res := w.db.Model(&sub).Where("status = ?", "active").Updates(map[string]interface{}{
@@ -244,11 +225,7 @@ func (w *ExpiryWorker) handleExpired(sub database.Subscription) {
 
 	// 1. Remove from Xray Config JSON and API safely
 	var tags []string
-	var configSubfile string
 	modErr := xrayconfig.Modify(w.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
-		if c, err := xrayconfig.FindUser(cfg, sub.Email); err == nil && c != nil {
-			configSubfile = c.GetString("subfile")
-		}
 		t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
 		tags = t
 		return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
@@ -265,23 +242,7 @@ func (w *ExpiryWorker) handleExpired(sub database.Subscription) {
 		}
 	}
 
-	// 2. Add to Limited DB
-	subfile := ""
-	if sub.Metadata != nil {
-		if sf, ok := sub.Metadata["subfile"].(string); ok {
-			subfile = sf
-		}
-	}
-	if subfile == "" {
-		subfile = configSubfile
-	}
-	if err := w.limitDB.Upsert(userdb.Entry{
-		Email:   sub.Email,
-		Subfile: subfile,
-		Limit:   nil, // Expired, not just device limited
-	}); err != nil {
-		w.log.Error("Failed to update limited users DB", "email", sub.Email, "error", err)
-	}
+	// 2. Add to Limited DB (Removed)
 
 	// 3. Update DB Status
 	res := w.db.Model(&sub).Where("status = ?", "active").Updates(map[string]interface{}{

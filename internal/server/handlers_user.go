@@ -19,10 +19,10 @@ import (
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 
+	"xraytool/internal/convert"
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
 	"xraytool/internal/slave"
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 )
@@ -693,7 +693,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		}
 		newEndsAt = baseTime.AddDate(0, plan.Months, 0)
 	} else {
-		newEndsAt, err = parseExpiryDate(body.NewEndsAt)
+		newEndsAt, err = convert.ParseExpiryDate(body.NewEndsAt)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid new_ends_at format")
 			return
@@ -911,21 +911,7 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		_ = apiClient.RemoveUser(sub.Email, tags)
 	}
 
-	// 2. Add to limitedDB
-	limitDB := userdb.New(r.cfg.Paths.LimitedDB)
-	subfile := ""
-	if sub.Metadata != nil {
-		if sf, ok := sub.Metadata["subfile"].(string); ok {
-			subfile = sf
-		}
-	}
-	limitPtr := float64(sub.MaxDevices)
-	_ = limitDB.Upsert(userdb.Entry{
-		Email:   sub.Email,
-		Subfile: subfile,
-		Limit:   &limitPtr,
-	})
-
+	// 2. Add to limitedDB (Removed)
 	// 3. Update DB Status
 	if result := db.Model(&sub).Updates(map[string]interface{}{
 		"status":     "blocked",
@@ -1027,7 +1013,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	expireTime, err := parseExpiryDate(body.Expire)
+	expireTime, err := convert.ParseExpiryDate(body.Expire)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid expire format")
 		return
@@ -1152,10 +1138,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) unbanUserInXray(sub database.Subscription) {
-	// Remove from limitedDB
-	limitDB := userdb.New(r.cfg.Paths.LimitedDB)
-	_ = limitDB.Remove(sub.Email)
-
+	// Remove from limitedDB (Removed)
 	// We must re-add them to Xray config json & hot reload
 	xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
 	if err != nil {
@@ -1333,31 +1316,4 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 }
 
 // parseExpiryDate parses human-readable dates from the admin bot.
-// Supports: "DD.MM.YYYY HH:MM", "DD.MM.YYYY" (defaults to 15:00 MSK), and RFC3339.
-func parseExpiryDate(dateStr string) (time.Time, error) {
-	if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
-		return t, nil
-	}
-	if t, err := time.Parse("2006-01-02T15:04:05Z", dateStr); err == nil {
-		return t, nil
-	}
-	if t, err := time.Parse("2006-01-02", dateStr); err == nil {
-		return t, nil
-	}
-
-	mskLoc, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		mskLoc = time.FixedZone("MSK", 3*3600)
-	}
-
-	if t, err := time.ParseInLocation("02.01.2006 15:04", dateStr, mskLoc); err == nil {
-		return t.UTC(), nil
-	}
-
-	if t, err := time.ParseInLocation("02.01.2006", dateStr, mskLoc); err == nil {
-		t = time.Date(t.Year(), t.Month(), t.Day(), 15, 0, 0, 0, mskLoc)
-		return t.UTC(), nil
-	}
-
-	return time.Time{}, fmt.Errorf("invalid date format")
-}
+// parseExpiryDate has been moved to internal/convert

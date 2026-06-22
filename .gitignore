@@ -42,3 +42,4 @@ non_existent_config.yaml
 xray-core*/
 xraytool_server_save/
 tests/
+.VSCodeCounter/

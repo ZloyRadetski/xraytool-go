@@ -87,6 +87,7 @@ func isPathAllowed(path string) bool {
 func startServerCmd() *cobra.Command {
 	var port int
 	var runMigrations bool
+	var configPath string
 
 	cmd := &cobra.Command{
 		Use:   "start-server",
@@ -102,13 +103,17 @@ func startServerCmd() *cobra.Command {
 			}
 			baseDir := filepath.Dir(executablePath)
 
-			// We look for config first in WorkingDirectory (like /etc/xraytool) or next to executable
-			configPath := filepath.Join(baseDir, "xray_api_config.json")
-			if _, err := os.Stat(configPath); os.IsNotExist(err) {
-				// Fallback to /etc/xraytool/xray_api_config.json or current directory
-				configPath = "/etc/xraytool/xray_api_config.json"
+			if configPath == "" {
+				configPath = "xray_api_config.json"
+			}
+
+			if configPath == "xray_api_config.json" {
+				configPath = filepath.Join(baseDir, "xray_api_config.json")
 				if _, err := os.Stat(configPath); os.IsNotExist(err) {
-					configPath = "xray_api_config.json"
+					configPath = "/etc/xraytool/xray_api_config.json"
+					if _, err := os.Stat(configPath); os.IsNotExist(err) {
+						configPath = "xray_api_config.json"
+					}
 				}
 			}
 
@@ -150,6 +155,13 @@ func startServerCmd() *cobra.Command {
 					logger.Errorf("[!] Database init failed: %v", dbErr)
 				} else {
 					dbReady = true
+					if runMigrations {
+						if err := database.AutoMigrateAll(); err != nil {
+							logger.Errorf("[!] Database auto-migrate failed: %v", err)
+						} else {
+							logger.Infof("[DB] Database auto-migration completed successfully")
+						}
+					}
 					logger.Infof("[DB] Database initialized successfully (driver: %s)", cfg.Database.Driver)
 				}
 			}
@@ -204,7 +216,8 @@ func startServerCmd() *cobra.Command {
 				}
 
 				// 5. Execute subscription process directly in memory (No exec.Command)
-				subRes := subscription.Process(cacheManager, subReq)
+				dispatcher := events.NewDispatcher(cfg)
+				subRes := subscription.ProcessSQL(database.DB(), cacheManager, dispatcher, subReq)
 
 				subID := subRes.SubID
 				if subID == "" {
@@ -591,6 +604,7 @@ func startServerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
+	cmd.Flags().StringVar(&configPath, "api-config", "xray_api_config.json", "path to API config json")
 	cmd.Flags().BoolVar(&runMigrations, "run-migrations", false, "Run database AutoMigrate on startup")
 	return cmd
 }

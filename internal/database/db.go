@@ -93,32 +93,17 @@ func Init(cfg Config) error {
 		}
 	}
 
+	db = conn
+
 	// AutoMigrate creates or updates tables to match the current model structs.
 	// It is intentionally non-destructive: it never drops columns or indexes.
 	if cfg.AutoMigrate {
-		if err := conn.AutoMigrate(
-			&User{},
-			&Subscription{},
-			&Device{},
-			&Payment{},
-			&ReferralReward{},
-			&SubscriptionNotification{},
-			&Plan{},
-			&PromoCode{},
-		); err != nil {
-			initErr = fmt.Errorf("database: auto-migrate failed: %w", err)
+		if err := AutoMigrateAll(); err != nil {
+			initErr = err
 			return initErr
-		}
-
-		// Create expression indexes for telegram_id in JSON metadata
-		if conn.Dialector.Name() == "postgres" {
-			conn.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users ((metadata->>'telegram_id'));")
-		} else if conn.Dialector.Name() == "sqlite" {
-			conn.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users (json_extract(metadata, '$.telegram_id'));")
 		}
 	}
 
-	db = conn
 	initErr = nil
 
 	// Seed default plans atomically
@@ -145,4 +130,35 @@ func Close() error {
 	}
 	db = nil // Ensure we can re-init if needed
 	return sqlDB.Close()
+}
+
+// AutoMigrateAll performs GORM schema migrations and sets up indexes.
+func AutoMigrateAll() error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+	
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	if err := db.AutoMigrate(
+		&User{},
+		&Subscription{},
+		&Device{},
+		&Payment{},
+		&ReferralReward{},
+		&SubscriptionNotification{},
+		&Plan{},
+		&PromoCode{},
+	); err != nil {
+		return fmt.Errorf("database: auto-migrate failed: %w", err)
+	}
+
+	if db.Dialector.Name() == "postgres" {
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users ((metadata->>'telegram_id'));")
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_username ON users ((metadata->>'telegram_username'));")
+	} else if db.Dialector.Name() == "sqlite" {
+		db.Exec("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users (json_extract(metadata, '$.telegram_id'));")
+	}
+	return nil
 }

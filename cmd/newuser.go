@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"xraytool/internal/generate"
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
@@ -48,10 +47,7 @@ func newUserCmd() *cobra.Command {
 				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -)")
 			}
 
-			db := userdb.New(cfg.Paths.LimitedDB)
-			if blocked, _ := db.Exists(email); blocked {
-				p.Error("user is blocked — use the 'unlimit' command to restore")
-			}
+
 
 			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
 			if err != nil {
@@ -220,10 +216,6 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 
 	legacy, _ := payload["legacy"].(bool)
 
-	db := userdb.New(cfg.Paths.LimitedDB)
-	if blocked, _ := db.Exists(email); blocked {
-		return "", fmt.Errorf("user is blocked — use the 'unlimit' command to restore")
-	}
 
 	xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
 	if err != nil {

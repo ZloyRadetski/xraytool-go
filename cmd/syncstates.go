@@ -8,7 +8,6 @@ import (
 
 	"xraytool/internal/database"
 	"xraytool/internal/slave"
-	"xraytool/internal/userdb"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
@@ -18,10 +17,8 @@ import (
 // usersnapshot — serialises the current node's user state to JSON
 // ---------------------------------------------------------------------------
 
-// Snapshot is the JSON payload returned by usersnapshot.
 type Snapshot struct {
 	Active  []SnapshotUser    `json:"active"`
-	Limited []SnapshotLimited `json:"limited"`
 }
 
 type SnapshotUser struct {
@@ -33,11 +30,7 @@ type SnapshotUser struct {
 	Limit   *float64 `json:"limit,omitempty"`
 }
 
-type SnapshotLimited struct {
-	Email   string   `json:"email"`
-	Subfile string   `json:"subfile"`
-	Limit   *float64 `json:"limit,omitempty"`
-}
+
 
 func getBlockedEmails() map[string]bool {
 	db := database.DB()
@@ -94,21 +87,7 @@ func userSnapshotCmd() *cobra.Command {
 				active = append(active, su)
 			}
 
-			db := userdb.New(cfg.Paths.LimitedDB)
-			limited, _ := db.All()
-			sl := make([]SnapshotLimited, 0, len(limited))
-			for _, e := range limited {
-				if blockedMap[e.Email] {
-					continue
-				}
-				sl = append(sl, SnapshotLimited{
-					Email:   e.Email,
-					Subfile: e.Subfile,
-					Limit:   e.Limit,
-				})
-			}
-
-			snap := Snapshot{Active: active, Limited: sl}
+			snap := Snapshot{Active: active}
 			data, _ := json.Marshal(snap)
 			fmt.Println(string(data))
 		},
@@ -242,21 +221,7 @@ func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 		active = append(active, su)
 	}
 
-	db := userdb.New(cfg.Paths.LimitedDB)
-	limited, _ := db.All()
-	sl := make([]SnapshotLimited, 0, len(limited))
-	for _, e := range limited {
-		if blockedMap[e.Email] {
-			continue
-		}
-		sl = append(sl, SnapshotLimited{
-			Email:   e.Email,
-			Subfile: e.Subfile,
-			Limit:   e.Limit,
-		})
-	}
-
-	return Snapshot{Active: active, Limited: sl}
+	return Snapshot{Active: active}
 }
 
 // syncSlave compares masterSnap with a slave's current snapshot and issues
@@ -290,36 +255,19 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 	for _, u := range slaveSnap.Active {
 		slaveActive[u.Email] = u
 	}
-	slaveLimited := make(map[string]SnapshotLimited, len(slaveSnap.Limited))
-	for _, l := range slaveSnap.Limited {
-		slaveLimited[l.Email] = l
-	}
 	masterActive := make(map[string]SnapshotUser, len(master.Active))
 	for _, u := range master.Active {
 		masterActive[u.Email] = u
-	}
-	masterLimited := make(map[string]SnapshotLimited, len(master.Limited))
-	for _, l := range master.Limited {
-		masterLimited[l.Email] = l
 	}
 
 	batch := BatchPayload{
 		Add:    []SnapshotUser{},
 		Remove: []string{},
-		Limit:  []SnapshotLimited{},
 	}
 
 	// 1. Add or update users that are on master but missing/different on slave.
 	for _, mu := range master.Active {
 		su, existsActive := slaveActive[mu.Email]
-		_, existsLimited := slaveLimited[mu.Email]
-
-		if existsLimited {
-			var zero float64 = 0
-			batch.Limit = append(batch.Limit, SnapshotLimited{Email: mu.Email, Limit: &zero})
-			batch.Add = append(batch.Add, mu)
-			continue
-		}
 
 		if !existsActive {
 			batch.Add = append(batch.Add, mu)
@@ -345,40 +293,20 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 	// 2. Remove users that are active on slave but gone from master.
 	for _, su := range slaveSnap.Active {
 		_, okActive := masterActive[su.Email]
-		_, okLimited := masterLimited[su.Email]
-		if !okActive && !okLimited {
-			batch.Remove = append(batch.Remove, su.Email)
-		} else if !okActive && okLimited {
-			var zero float64 = 0
-			limitVal := &zero
-			if l, ok := masterLimited[su.Email]; ok && l.Limit != nil {
-				limitVal = l.Limit
-			}
-			batch.Limit = append(batch.Limit, SnapshotLimited{Email: su.Email, Subfile: su.Subfile, Limit: limitVal})
+		if !okActive {
 			batch.Remove = append(batch.Remove, su.Email)
 		}
 	}
 
-	// 3. Clean up limited users on slave that are gone from master
-	for _, su := range slaveSnap.Limited {
-		_, okActive := masterActive[su.Email]
-		_, okLimited := masterLimited[su.Email]
-		if !okActive && !okLimited {
-			batch.Remove = append(batch.Remove, su.Email)
-			var zero float64 = 0
-			batch.Limit = append(batch.Limit, SnapshotLimited{Email: su.Email, Limit: &zero})
-		}
-	}
-
-	totalOps := len(batch.Add) + len(batch.Remove) + len(batch.Limit)
+	totalOps := len(batch.Add) + len(batch.Remove)
 	if totalOps == 0 {
 		fmt.Printf("  [OK] %s: Already in sync.\n", srvName)
 		return
 	}
 
 	if dryRun {
-		fmt.Printf("  [DRY-RUN] %s: Would apply %d ops (Add: %d, Rm: %d, Lim: %d)\n", 
-			srvName, totalOps, len(batch.Add), len(batch.Remove), len(batch.Limit))
+		fmt.Printf("  [DRY-RUN] %s: Would apply %d ops (Add: %d, Rm: %d)\n", 
+			srvName, totalOps, len(batch.Add), len(batch.Remove))
 		return
 	}
 

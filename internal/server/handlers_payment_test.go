@@ -2,9 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -71,14 +68,10 @@ func TestPlategaWebhook_Success(t *testing.T) {
 
 	payload := []byte(`{"external_id":"pay_123","status":"completed"}`)
 
-	// Create HMAC using the test secret "test-platega-secret"
-	mac := hmac.New(sha256.New, []byte("test-platega-secret"))
-	mac.Write(payload)
-	expectedMAC := hex.EncodeToString(mac.Sum(nil))
-
 	req := httptest.NewRequest("POST", "/api/v1/payments/platega/callback", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Platega-Signature", expectedMAC)
+	// Platega sends the secret as plain text in X-Secret header
+	req.Header.Set("X-Secret", "test-platega-secret")
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

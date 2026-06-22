@@ -159,13 +159,13 @@ func TestPlatgaCallback_Comprehensive(t *testing.T) {
 	}
 
 	// 2. Successful callback -> auto updates status
-	payloadSuccess := []byte(fmt.Sprintf(`{"external_id":"%s","status":"success"}`, extID))
-	mac = hmac.New(sha256.New, []byte("test-platega-secret"))
-	mac.Write(payloadSuccess)
+	// Note: Platega uses "id" field, not "external_id"
+	payloadSuccess := []byte(fmt.Sprintf(`{"id":"%s","status":"success"}`, extID))
 
 	reqSuccess := httptest.NewRequest("POST", "/api/v1/payments/platega/callback", bytes.NewReader(payloadSuccess))
 	reqSuccess.Header.Set("Content-Type", "application/json")
-	reqSuccess.Header.Set("X-Platega-Signature", hex.EncodeToString(mac.Sum(nil)))
+	// Platega sends the secret as plain text in X-Secret header
+	reqSuccess.Header.Set("X-Secret", "test-platega-secret")
 	
 	wSuccess := httptest.NewRecorder()
 	r.ServeHTTP(wSuccess, reqSuccess)
