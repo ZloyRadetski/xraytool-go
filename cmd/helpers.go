@@ -141,7 +141,13 @@ func slaveRegistry(cfg *appconfig.Config) *slave.Registry {
 
 // systemctlRestart restarts a systemd service. Non-fatal on failure.
 var systemctlRestart = func(service string) {
-	exec.Command("systemctl", "restart", service).Run() //nolint:errcheck
+	fmt.Printf("INFO|Restarting systemd service: %s\n", service)
+	err := exec.Command("systemctl", "restart", service).Run()
+	if err != nil {
+		fmt.Printf("WARN|Failed to restart service %s: %v\n", service, err)
+	} else {
+		fmt.Printf("INFO|Successfully restarted service %s\n", service)
+	}
 }
 
 // subfileID strips the ".txt" suffix from a subfile name for use in URLs.

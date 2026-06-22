@@ -59,7 +59,7 @@ func init() {
 		shareLinkCmd(),
 		statsCmd(),
 		syncStatesCmd(),
-		userSnapshotCmd(),
+
 		migrateCmd(),
 		updateXrayCmd(),
 		updateGeoCmd(),

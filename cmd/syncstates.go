@@ -13,87 +13,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ---------------------------------------------------------------------------
-// usersnapshot — serialises the current node's user state to JSON
-// ---------------------------------------------------------------------------
-
-type Snapshot struct {
-	Active  []SnapshotUser    `json:"active"`
-}
-
-type SnapshotUser struct {
-	Email   string   `json:"email"`
-	UUID    string   `json:"uuid,omitempty"`
-	Auth    string   `json:"auth,omitempty"`
-	Subfile string   `json:"subfile"`
-	Expire  string   `json:"expire"`
-	Limit   *float64 `json:"limit,omitempty"`
-}
-
-
-
-func getBlockedEmails() map[string]bool {
-	db := database.DB()
-	var blockedSubs []database.Subscription
-	// Only run this query if the database connection exists.
-	if db != nil {
-		db.Joins("JOIN users ON users.id = subscriptions.user_id").
-			Where("users.is_blocked = ?", true).
-			Find(&blockedSubs)
-	}
-
-	blockedMap := make(map[string]bool)
-	for _, sub := range blockedSubs {
-		blockedMap[sub.Email] = true
-	}
-	return blockedMap
-}
-
-func userSnapshotCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "usersnapshot",
-		Short: "Dump current user state as JSON (used by syncstates)",
-		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
-
-			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-			if err != nil {
-				printJSON(map[string]interface{}{"ok": false, "error": err.Error()})
-				return
-			}
-
-			blockedMap := getBlockedEmails()
-
-			users, _ := xrayconfig.ListUsers(xrayCfg)
-			active := make([]SnapshotUser, 0, len(users))
-			for _, u := range users {
-				if blockedMap[u.Email()] {
-					continue
-				}
-				authVal := u.GetString("auth")
-				if authVal == "" {
-					authVal = u.GetString("password")
-				}
-				su := SnapshotUser{
-					Email:   u.Email(),
-					UUID:    u.GetString("id"),
-					Auth:    authVal,
-					Subfile: u.GetString("subfile"),
-					Expire:  u.GetString("expire"),
-				}
-				if lv, ok := u.GetNumber("limit"); ok {
-					su.Limit = &lv
-				}
-				active = append(active, su)
-			}
-
-			snap := Snapshot{Active: active}
-			data, _ := json.Marshal(snap)
-			fmt.Println(string(data))
-		},
-	}
-	return cmd
-}
 
 // ---------------------------------------------------------------------------
 // syncstates — reconcile master config with each slave's state
@@ -171,7 +90,7 @@ func syncStatesCmd() *cobra.Command {
 				xrayCfg, _ = xrayconfig.Read(cfg.Paths.XrayConfig)
 			}
 
-			masterSnap := buildMasterSnapshot(xrayCfg)
+			masterSnap := slave.BuildMasterSnapshot(xrayCfg)
 
 			reg := slaveRegistry(cfg)
 			servers, err := reg.Servers()
@@ -197,45 +116,16 @@ func syncStatesCmd() *cobra.Command {
 	return cmd
 }
 
-// buildMasterSnapshot returns the current master user state.
-func buildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
-	blockedMap := getBlockedEmails()
-
-	users, _ := xrayconfig.ListUsers(xrayCfg)
-	active := make([]SnapshotUser, 0, len(users))
-	for _, u := range users {
-		if blockedMap[u.Email()] {
-			continue
-		}
-		authVal := u.GetString("auth")
-		su := SnapshotUser{
-			Email:   u.Email(),
-			UUID:    u.GetString("id"),
-			Auth:    authVal,
-			Subfile: u.GetString("subfile"),
-			Expire:  u.GetString("expire"),
-		}
-		if lv, ok := u.GetNumber("limit"); ok {
-			su.Limit = &lv
-		}
-		active = append(active, su)
-	}
-
-	return Snapshot{Active: active}
-}
-
-// syncSlave compares masterSnap with a slave's current snapshot and issues
-// the minimum set of commands to reconcile the slave to match the master.
 // syncSlave compares masterSnap with a slave's current snapshot and issues
 // a single batch payload to reconcile the slave to match the master.
-func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool) {
+func syncSlave(reg *slave.Registry, srvName string, master slave.Snapshot, dryRun bool) {
 	out, err := reg.CallOne(srvName, "usersnapshot", map[string]string{})
 	if err != nil {
 		fmt.Printf("  [FAIL] %s: Could not get snapshot: %v\n", srvName, err)
 		return
 	}
 
-	var slaveSnap Snapshot
+	var slaveSnap slave.Snapshot
 	
 	firstBrace := strings.Index(out, "{")
 	lastBrace := strings.LastIndex(out, "}")
@@ -251,17 +141,17 @@ func syncSlave(reg *slave.Registry, srvName string, master Snapshot, dryRun bool
 	}
 
 	// Build lookup maps.
-	slaveActive := make(map[string]SnapshotUser, len(slaveSnap.Active))
+	masterActive := make(map[string]slave.SnapshotUser, len(master.Active))
+	for _, mu := range master.Active {
+		masterActive[mu.Email] = mu
+	}
+	slaveActive := make(map[string]slave.SnapshotUser, len(slaveSnap.Active))
 	for _, u := range slaveSnap.Active {
 		slaveActive[u.Email] = u
 	}
-	masterActive := make(map[string]SnapshotUser, len(master.Active))
-	for _, u := range master.Active {
-		masterActive[u.Email] = u
-	}
 
-	batch := BatchPayload{
-		Add:    []SnapshotUser{},
+	batch := slave.BatchPayload{
+		Add:    []slave.SnapshotUser{},
 		Remove: []string{},
 	}
 

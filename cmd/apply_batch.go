@@ -4,17 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"xraytool/internal/slave"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
 )
 
-// BatchPayload represents the requested operations for apply-batch
-type BatchPayload struct {
-	Add    []SnapshotUser    `json:"add"`
-	Remove []string          `json:"remove"`
-}
+
 
 func applyBatchCmd() *cobra.Command {
 	var payloadStr string
@@ -30,7 +27,7 @@ func applyBatchCmd() *cobra.Command {
 				return
 			}
 
-			var payload BatchPayload
+			var payload slave.BatchPayload
 			if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
 				printJSON(map[string]interface{}{"ok": false, "error": fmt.Sprintf("invalid json payload: %v", err)})
 				return

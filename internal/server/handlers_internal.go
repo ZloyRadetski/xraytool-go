@@ -6,14 +6,16 @@ import (
 	"os"
 	"os/exec"
 
+	"xraytool/internal/slave"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 )
 
 type internalSyncRequest struct {
-	Action string `json:"action"` // "newuser" or "rmuser"
-	Email  string `json:"email"`
-	UUID   string `json:"uuid,omitempty"`
+	Action  string `json:"action"`
+	Email   string `json:"email"`
+	UUID    string `json:"uuid,omitempty"`
+	Payload string `json:"payload,omitempty"`
 }
 
 func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request) {
@@ -24,7 +26,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" && body.Action != "usersnapshot" {
+	if body.Email == "" && body.Action != "usersnapshot" && body.Action != "apply-batch" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
@@ -33,10 +35,22 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 
 	switch body.Action {
 	case "usersnapshot":
-		out, err := exec.Command(os.Args[0], "usersnapshot").Output()
+		xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
 		if err != nil {
-			r.log.Error("internal sync: failed to run usersnapshot", "err", err, "out", string(out))
-			writeError(w, http.StatusInternalServerError, "failed to build usersnapshot")
+			r.log.Error("internal sync: failed to read xray config for snapshot", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to read xray config")
+			return
+		}
+		snap := slave.BuildMasterSnapshot(xrayCfg)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(snap)
+		return
+
+	case "apply-batch":
+		out, err := exec.Command(os.Args[0], "apply-batch", "--payload", body.Payload).Output()
+		if err != nil {
+			r.log.Error("internal sync: failed to run apply-batch", "err", err, "out", string(out))
+			writeError(w, http.StatusInternalServerError, "failed to run apply-batch")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

@@ -979,6 +979,9 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 		return
 	}
 
+	// Also unblock the global user record just in case they were globally banned
+	db.Model(&database.User{}).Where("id = ?", sub.UserID).Update("is_blocked", false)
+
 	// Reload sub from DB so unbanUserInXray receives fresh max_devices / status.
 	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
 		r.log.Error("admin unblock user: reload subscription", "err", err)
@@ -1036,6 +1039,9 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
+
+	// Also unblock the global user record just in case they were globally banned
+	db.Model(&database.User{}).Where("id = ?", sub.UserID).Update("is_blocked", false)
 
 	// Reload sub from DB so unbanUserInXray receives the updated ends_at / status.
 	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
