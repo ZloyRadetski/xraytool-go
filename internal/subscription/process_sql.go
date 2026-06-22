@@ -75,7 +75,10 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 		return failResponse(500, "xray config not loaded in cache")
 	}
 
+	var source string
+
 	if len(subs) == 0 {
+		source = "xray config"
 		// Fallback: Check if user exists in xray_config.json directly (e.g. admin)
 		var foundEmail string
 		inbounds, err := xrayCfg.GetInbounds()
@@ -111,6 +114,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 			return failResponse(404, "User not found")
 		}
 	} else {
+		source = "database"
 		sub = subs[0]
 		if err := db.Where("id = ?", sub.UserID).First(&user).Error; err != nil {
 			return failResponse(404, "User not found")
@@ -306,6 +310,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	res.Headers["X-SubPHP-Debug"] = "1"
 	res.Headers["X-Checks-Bypass"] = skipChecksReason
 	res.Headers["X-Is-User-Blocked"] = fmt.Sprintf("%t", isBlockedUser)
+	res.Headers["X-Sub-Source"] = source
 
 	expireTs := parseDateToTimestamp(expireVal)
 
@@ -323,10 +328,13 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 		res.StatusCode = 200
 
 		if deviceLimitReached {
+			res.Headers["X-Reject-Reason"] = "device_limit_reached"
 			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.DeviceLimit)
 		} else if unsupportedClient {
+			res.Headers["X-Reject-Reason"] = "unsupported_client"
 			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.UnsupportedClient)
 		} else { // isBlockedOrExpired
+			res.Headers["X-Reject-Reason"] = "blocked_or_expired"
 			res.Body = generateDummyVless(cm.cfg.Subscription.DummyConfigs.Expired)
 		}
 		return res

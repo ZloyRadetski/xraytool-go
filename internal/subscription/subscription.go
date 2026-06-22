@@ -96,7 +96,8 @@ func failResponse(code int, msg string) *Response {
 	return &Response{
 		StatusCode: code,
 		Headers: map[string]string{
-			"Content-Type": "text/plain; charset=utf-8",
+			"Content-Type":    "text/plain; charset=utf-8",
+			"X-Reject-Reason": msg,
 		},
 		Body:        msg,
 		ErrorReason: msg,

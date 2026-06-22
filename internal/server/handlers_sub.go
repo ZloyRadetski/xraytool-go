@@ -63,11 +63,18 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 		r.log.Error("Ошибка записи ответа SQL подписки", "err", err)
 	}
 
+	source := subRes.Headers["X-Sub-Source"]
+	if source == "" {
+		source = "unknown"
+	}
+	rejectReason := subRes.Headers["X-Reject-Reason"]
+	bypass := subRes.Headers["X-Checks-Bypass"]
+
 	if isBot && subRes.StatusCode < 400 {
-		r.log.Debug("Successfully served SQL subscription", "ip", remoteAddr, "status", subRes.StatusCode)
-	} else if subRes.StatusCode >= 400 {
-		r.log.Warn("Failed to serve SQL subscription", "ip", remoteAddr, "status", subRes.StatusCode)
+		r.log.Debug("Successfully served SQL subscription", "ip", remoteAddr, "status", subRes.StatusCode, "source", source, "bypass", bypass, "reject_reason", rejectReason)
+	} else if subRes.StatusCode >= 400 || rejectReason != "" {
+		r.log.Warn("Failed to serve SQL subscription", "ip", remoteAddr, "status", subRes.StatusCode, "source", source, "bypass", bypass, "reject_reason", rejectReason)
 	} else {
-		r.log.Info("Successfully served SQL subscription", "ip", remoteAddr, "status", subRes.StatusCode)
+		r.log.Info("Successfully served SQL subscription", "ip", remoteAddr, "status", subRes.StatusCode, "source", source, "bypass", bypass, "reject_reason", rejectReason)
 	}
 }
