@@ -44,15 +44,20 @@ func applyBatchCmd() *cobra.Command {
 			originalCfg, _ := xrayconfig.Read(cfg.Paths.XrayConfig)
 
 			// Apply Removes
-			for _, email := range payload.Remove {
-				_ = xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email)
+			if len(payload.Remove) > 0 {
+				_ = xrayconfig.RemoveUsersFromAllInbounds(xrayCfg, payload.Remove)
 			}
 
 			// Apply Adds
+			var addEmails []string
 			for _, u := range payload.Add {
-				// Remove first to ensure a clean replace if they already exist
-				_ = xrayconfig.RemoveUserFromAllInbounds(xrayCfg, u.Email)
+				addEmails = append(addEmails, u.Email)
+			}
+			if len(addEmails) > 0 {
+				_ = xrayconfig.RemoveUsersFromAllInbounds(xrayCfg, addEmails)
+			}
 
+			for _, u := range payload.Add {
 				params := xrayconfig.ClientParams{
 					Email:   u.Email,
 					UUID:    u.UUID,
@@ -81,8 +86,9 @@ func applyBatchCmd() *cobra.Command {
 			var wg sync.WaitGroup
 
 			// 1. Hot-Remove
+			tagsMap, _ := xrayconfig.InboundTagsForUsers(originalCfg, payload.Remove)
 			for _, email := range payload.Remove {
-				tags, _ := xrayconfig.InboundTagsForUser(originalCfg, email)
+				tags := tagsMap[email]
 				wg.Add(1)
 				go func(e string, t []string) {
 					defer wg.Done()

@@ -161,6 +161,39 @@ func InboundTagsForUser(cfg RawConfig, email string) ([]string, error) {
 	return tags, nil
 }
 
+// InboundTagsForUsers returns the tags of all inbounds that contain these users.
+func InboundTagsForUsers(cfg RawConfig, emails []string) (map[string][]string, error) {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return nil, err
+	}
+
+	emailMap := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		emailMap[e] = true
+	}
+
+	result := make(map[string][]string)
+	for _, ib := range inbounds {
+		clients, err := ib.GetClients()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] xrayconfig: пропуск inbound из-за ошибки парсинга: %v\n", err)
+			continue
+		}
+		foundInInbound := make(map[string]bool)
+		for _, c := range clients {
+			e := c.Email()
+			if emailMap[e] && !foundInInbound[e] {
+				foundInInbound[e] = true
+				if tag := ib.Tag(); tag != "" {
+					result[e] = append(result[e], tag)
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
 // ClientInbounds returns info about all inbounds that have a client list.
 func ClientInbounds(cfg RawConfig) ([]InboundInfo, error) {
 	inbounds, err := cfg.GetInbounds()
@@ -239,6 +272,40 @@ func RemoveUserFromAllInbounds(cfg RawConfig, email string) error {
 		var kept []RawClient
 		for _, c := range clients {
 			if c.Email() != email {
+				kept = append(kept, c)
+			}
+		}
+		if err := inbounds[i].SetClients(kept); err != nil {
+			return err
+		}
+	}
+
+	return cfg.SetInbounds(inbounds)
+}
+
+// RemoveUsersFromAllInbounds removes the clients with the given emails from every inbound.
+func RemoveUsersFromAllInbounds(cfg RawConfig, emails []string) error {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return err
+	}
+
+	emailMap := make(map[string]bool, len(emails))
+	for _, e := range emails {
+		emailMap[e] = true
+	}
+
+	for i, ib := range inbounds {
+		clients, err := ib.GetClients()
+		if err != nil {
+			return err
+		}
+		if clients == nil {
+			continue
+		}
+		var kept []RawClient
+		for _, c := range clients {
+			if !emailMap[c.Email()] {
 				kept = append(kept, c)
 			}
 		}

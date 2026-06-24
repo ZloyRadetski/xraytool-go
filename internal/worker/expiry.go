@@ -171,14 +171,21 @@ func (w *ExpiryWorker) handleExpiredBulk(subs []database.Subscription) {
 			return err
 		}
 
+		var emails []string
 		for _, sub := range subs {
+			emails = append(emails, sub.Email)
 			if c := findUser(sub.Email); c != nil {
 				configSubfiles[sub.Email] = c.GetString("subfile")
 			}
-			t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
-			allTags = append(allTags, t...)
-			_ = xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
 		}
+
+		tagsMap, _ := xrayconfig.InboundTagsForUsers(cfg, emails)
+		for _, email := range emails {
+			allTags = append(allTags, tagsMap[email]...)
+		}
+		
+		_ = xrayconfig.RemoveUsersFromAllInbounds(cfg, emails)
+
 		return nil
 	})
 
