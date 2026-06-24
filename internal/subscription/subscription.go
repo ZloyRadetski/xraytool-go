@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"bufio"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -10,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -497,26 +497,37 @@ func derivePublicKey(privateKey string) string {
 		pubKeyCache[privateKey] = ""
 		return ""
 	}
+	// Decode private key
+	privBytes, err := base64.RawURLEncoding.DecodeString(privateKey)
+	if err != nil {
+		privBytes, err = base64.StdEncoding.DecodeString(privateKey)
+		if err != nil {
+			pubKeyCache[privateKey] = ""
+			return ""
+		}
+	}
 
-	cmd := exec.Command("xray", "x25519", "-i", privateKey)
-	out, err := cmd.CombinedOutput()
+	if len(privBytes) != 32 {
+		pubKeyCache[privateKey] = ""
+		return ""
+	}
+
+	// Apply Curve25519 clamping (Xray compatibility)
+	privBytes[0] &= 248
+	privBytes[31] &= 127
+	privBytes[31] |= 64
+
+	key, err := ecdh.X25519().NewPrivateKey(privBytes)
 	if err != nil {
 		pubKeyCache[privateKey] = ""
 		return ""
 	}
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(strings.ToLower(line), "public key:") {
-			parts := strings.Split(line, ":")
-			if len(parts) >= 2 {
-				pub := strings.TrimSpace(parts[1])
-				pubKeyCache[privateKey] = pub
-				return pub
-			}
-		}
-	}
-	pubKeyCache[privateKey] = ""
-	return ""
+
+	pubBytes := key.PublicKey().Bytes()
+	pub = base64.RawURLEncoding.EncodeToString(pubBytes)
+	
+	pubKeyCache[privateKey] = pub
+	return pub
 }
 
 func ssServerPassword(cfg xrayconfig.RawConfig) string {
