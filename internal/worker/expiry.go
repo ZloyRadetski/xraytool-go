@@ -71,9 +71,10 @@ func (w *ExpiryWorker) Run(ctx context.Context) {
 // ProcessOnce runs a single iteration of expiration checks and device limit checks.
 func (w *ExpiryWorker) ProcessOnce() {
 	// 0. Cleanup old devices (older than 48 hours) to prevent device limit exhaustion over time
-	if err := w.db.Where("last_seen < ?", time.Now().Add(-48*time.Hour)).Delete(&database.Device{}).Error; err != nil {
-		w.log.Warn("Failed to cleanup old devices", "error", err)
-	}
+	// DISABLED: We no longer delete old devices automatically.
+	// if err := w.db.Where("last_seen < ?", time.Now().Add(-48*time.Hour)).Delete(&database.Device{}).Error; err != nil {
+	// 	w.log.Warn("Failed to cleanup old devices", "error", err)
+	// }
 
 	var subs []database.Subscription
 	// Fetch all active subscriptions (even those without ends_at, for device limits)

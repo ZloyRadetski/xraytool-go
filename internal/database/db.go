@@ -98,7 +98,7 @@ func Init(cfg Config) error {
 	// AutoMigrate creates or updates tables to match the current model structs.
 	// It is intentionally non-destructive: it never drops columns or indexes.
 	if cfg.AutoMigrate {
-		if err := AutoMigrateAll(); err != nil {
+		if err := autoMigrateAllUnsafe(); err != nil {
 			initErr = err
 			return initErr
 		}
@@ -134,9 +134,12 @@ func Close() error {
 
 // AutoMigrateAll performs GORM schema migrations and sets up indexes.
 func AutoMigrateAll() error {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-	
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+	return autoMigrateAllUnsafe()
+}
+
+func autoMigrateAllUnsafe() error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}

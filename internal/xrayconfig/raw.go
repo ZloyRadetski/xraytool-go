@@ -34,6 +34,9 @@ func (c RawConfig) GetInbounds() ([]RawInbound, error) {
 
 // SetInbounds replaces the inbounds array in the config.
 func (c RawConfig) SetInbounds(inbounds []RawInbound) error {
+	if c == nil {
+		return fmt.Errorf("RawConfig is nil")
+	}
 	data, err := json.Marshal(inbounds)
 	if err != nil {
 		return fmt.Errorf("marshaling inbounds: %w", err)

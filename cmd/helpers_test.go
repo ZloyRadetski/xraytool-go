@@ -98,6 +98,13 @@ func TestRoot_RequireRoot(t *testing.T) {
 	setupTest(t)
 	defer teardownTest()
 
+	oldGOOS := currentGOOS
+	oldGeteuid := geteuid
+	defer func() {
+		currentGOOS = oldGOOS
+		geteuid = oldGeteuid
+	}()
+
 	// Windows (default)
 	currentGOOS = "windows"
 	captureOutput(func() { requireRoot() })

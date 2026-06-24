@@ -1606,7 +1606,7 @@ func TestE2ESuite(t *testing.T) {
 	t.Run("Tier5_Case2_LegacyV1SubEndpoint", func(t *testing.T) {
 		db := getDB(t)
 		var sub database.Subscription
-		db.Last(&sub)
+		db.Order("created_at desc").First(&sub)
 
 		if sub.ID == "" {
 			t.Skipf("No subscription found to test legacy fallback")
@@ -1621,7 +1621,7 @@ func TestE2ESuite(t *testing.T) {
 	t.Run("Tier5_Case3_FormatVlessParameter", func(t *testing.T) {
 		db := getDB(t)
 		var sub database.Subscription
-		db.Last(&sub)
+		db.Order("created_at desc").First(&sub)
 
 		if sub.ID == "" {
 			t.Skipf("No subscription found to test format=vless")
