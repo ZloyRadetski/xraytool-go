@@ -82,6 +82,19 @@ func (r *Registry) CallOne(serverName, cmd string, params map[string]string) (st
 	return r.client.Call(entry, cmd, params)
 }
 
+// CallOneDecode calls cmd on a single named slave and decodes the JSON response directly into target.
+func (r *Registry) CallOneDecode(serverName, cmd string, params map[string]string, target interface{}) error {
+	servers, err := r.Servers()
+	if err != nil {
+		return err
+	}
+	entry, ok := servers[serverName]
+	if !ok {
+		return fmt.Errorf("unknown slave server: %q", serverName)
+	}
+	return r.client.CallDecode(entry, cmd, params, target)
+}
+
 // ---------------------------------------------------------------------------
 // servers.json parser — supports both object and array formats
 // ---------------------------------------------------------------------------

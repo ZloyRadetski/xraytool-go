@@ -164,6 +164,56 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 	return unwrapBody(bodyStr)
 }
 
+// CallDecode sends a POST request to <entry endpoint>/<cmd> with params as JSON body.
+// It decodes the JSON response directly into the provided target structure, avoiding loading the entire response into memory.
+func (c *Client) CallDecode(entry Entry, cmd string, params map[string]string, target interface{}) error {
+	endpoint := entry.Endpoint(c.remotePath)
+	if endpoint == "" {
+		return fmt.Errorf("cannot determine endpoint for slave server")
+	}
+	url := endpoint
+
+	// Inject cmd as action
+	if params == nil {
+		params = make(map[string]string)
+	}
+	params["action"] = cmd
+
+	payload, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("marshaling params: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("building request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	applyAuthHeaders(req, entry)
+
+	httpClient := c.http
+	if entry.Insecure || entry.AllowInsecure {
+		httpClient = c.httpInsecure
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request to %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("HTTP %d | %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Response unwrapper
 // ---------------------------------------------------------------------------

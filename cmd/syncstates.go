@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	"xraytool/internal/database"
@@ -30,14 +29,19 @@ func syncMasterUUIDsFromDB(xrayCfg xrayconfig.RawConfig) (bool, error) {
 		return false, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
+	findUser, err := xrayconfig.BuildUserIndex(xrayCfg)
+	if err != nil {
+		return false, fmt.Errorf("failed to build user index: %w", err)
+	}
+
 	updatedCount := 0
 	for _, sub := range subs {
 		if sub.Email == "" || sub.XrayUUID == "" {
 			continue
 		}
 		
-		client, err := xrayconfig.FindUser(xrayCfg, sub.Email)
-		if err != nil || client == nil {
+		client := findUser(sub.Email)
+		if client == nil {
 			continue
 		}
 
@@ -119,24 +123,11 @@ func syncStatesCmd() *cobra.Command {
 // syncSlave compares masterSnap with a slave's current snapshot and issues
 // a single batch payload to reconcile the slave to match the master.
 func syncSlave(reg *slave.Registry, srvName string, master slave.Snapshot, dryRun bool) {
-	out, err := reg.CallOne(srvName, "usersnapshot", map[string]string{})
-	if err != nil {
-		fmt.Printf("  [FAIL] %s: Could not get snapshot: %v\n", srvName, err)
-		return
-	}
-
 	var slaveSnap slave.Snapshot
 	
-	firstBrace := strings.Index(out, "{")
-	lastBrace := strings.LastIndex(out, "}")
-	if firstBrace == -1 || lastBrace == -1 || firstBrace > lastBrace {
-		fmt.Printf("  [FAIL] %s: No JSON object found in snapshot output\n", srvName)
-		return
-	}
-	
-	jsonStr := out[firstBrace : lastBrace+1]
-	if err := json.Unmarshal([]byte(jsonStr), &slaveSnap); err != nil {
-		fmt.Printf("  [FAIL] %s: Could not parse snapshot JSON: %v\n", srvName, err)
+	err := reg.CallOneDecode(srvName, "usersnapshot", map[string]string{}, &slaveSnap)
+	if err != nil {
+		fmt.Printf("  [FAIL] %s: Could not get snapshot: %v\n", srvName, err)
 		return
 	}
 

@@ -41,6 +41,39 @@ func FindUser(cfg RawConfig, email string) (RawClient, error) {
 	return mergeClients(matched), nil
 }
 
+// BuildUserIndex creates an index of users by email to avoid repeated
+// parsing of the config in hot loops. It returns a lookup function.
+func BuildUserIndex(cfg RawConfig) (func(email string) RawClient, error) {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return nil, err
+	}
+
+	index := make(map[string][]RawClient)
+	for _, ib := range inbounds {
+		clients, err := ib.GetClients()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] xrayconfig: пропуск inbound из-за ошибки парсинга: %v\n", err)
+			continue
+		}
+		for _, c := range clients {
+			email := c.Email()
+			// match FindUser behavior: even if email is empty string, we might index it if we search for it?
+			// Actually FindUser checks if c.Email() == email, so it matches empty emails if we pass "".
+			// Let's just index everything.
+			index[email] = append(index[email], c)
+		}
+	}
+
+	return func(email string) RawClient {
+		matched := index[email]
+		if len(matched) == 0 {
+			return nil
+		}
+		return mergeClients(matched)
+	}, nil
+}
+
 // ListUsers returns one entry per unique email, merging their fields across all inbounds.
 func ListUsers(cfg RawConfig) ([]RawClient, error) {
 	inbounds, err := cfg.GetInbounds()

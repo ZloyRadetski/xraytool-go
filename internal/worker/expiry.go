@@ -113,6 +113,7 @@ func (w *ExpiryWorker) ProcessOnce() {
 	now := time.Now()
 
 	var expiredSubs []database.Subscription
+	var devicesToDelete []int64
 
 	for _, sub := range subs {
 		// 1. Check time-based expiration
@@ -138,11 +139,17 @@ func (w *ExpiryWorker) ProcessOnce() {
 			var oldestDevices []database.Device
 			if err := w.db.Where("subscription_id = ?", sub.ID).Order("last_seen asc").Limit(excess).Find(&oldestDevices).Error; err == nil {
 				for _, d := range oldestDevices {
-					if err := w.db.Delete(&d).Error; err != nil {
-						w.log.Warn("Failed to delete excess device", "subscription_id", sub.ID, "hwid", d.HWID, "error", err)
-					}
+					devicesToDelete = append(devicesToDelete, d.ID)
 				}
 			}
+		}
+	}
+
+	if len(devicesToDelete) > 0 {
+		if err := w.db.Where("id IN ?", devicesToDelete).Delete(&database.Device{}).Error; err != nil {
+			w.log.Warn("Failed to delete excess devices", "error", err)
+		} else {
+			w.log.Info("Deleted excess devices in bulk", "count", len(devicesToDelete))
 		}
 	}
 
@@ -159,8 +166,13 @@ func (w *ExpiryWorker) handleExpiredBulk(subs []database.Subscription) {
 	configSubfiles := make(map[string]string)
 	
 	modErr := xrayconfig.Modify(w.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
+		findUser, err := xrayconfig.BuildUserIndex(cfg)
+		if err != nil {
+			return err
+		}
+
 		for _, sub := range subs {
-			if c, err := xrayconfig.FindUser(cfg, sub.Email); err == nil && c != nil {
+			if c := findUser(sub.Email); c != nil {
 				configSubfiles[sub.Email] = c.GetString("subfile")
 			}
 			t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
