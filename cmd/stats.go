@@ -235,14 +235,20 @@ func collectSlaveTotals() ([]slaveUserTotal, slaveReportJSON) {
 					ClusterTotal *int64 `json:"cluster_total"`
 				} `json:"users"`
 			}
+			lines := strings.Split(out, "\n")
+			var jsonStr string
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") && strings.Contains(line, "\"ok\"") {
+					jsonStr = line
+					break
+				}
+			}
 			
-			firstBrace := strings.Index(out, "{")
-			lastBrace := strings.LastIndex(out, "}")
-			if firstBrace == -1 || lastBrace == -1 || firstBrace > lastBrace {
+			if jsonStr == "" {
 				jobs <- job{server: name}
 				return
 			}
-			jsonStr := out[firstBrace : lastBrace+1]
 			
 			if json.Unmarshal([]byte(jsonStr), &parsed) != nil {
 				jobs <- job{server: name}
