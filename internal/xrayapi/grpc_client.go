@@ -54,7 +54,6 @@ type GRPCClient struct {
 	addr string
 	log  *slog.Logger
 	mu   sync.Mutex
-	conn *grpc.ClientConn
 }
 
 // NewGRPCClient creates a new GRPCClient. The connection is lazy — it is only
@@ -65,6 +64,11 @@ func NewGRPCClient(addr string) *GRPCClient {
 		log:  slog.Default().With("component", "xray-grpc"),
 	}
 }
+
+var (
+	globalConns   = make(map[string]*grpc.ClientConn)
+	globalConnsMu sync.Mutex
+)
 
 // ---------------------------------------------------------------------------
 // Connection management
@@ -78,24 +82,25 @@ func NewGRPCClient(addr string) *GRPCClient {
 //   - Xray not running: dial blocks for connectTimeout, then returns error.
 //   - Previous connection dropped: state is Shutdown/TransientFailure → recreate.
 func (g *GRPCClient) dial() (*grpc.ClientConn, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	globalConnsMu.Lock()
+	defer globalConnsMu.Unlock()
 
-	if g.conn != nil {
-		state := g.conn.GetState()
+	conn := globalConns[g.addr]
+	if conn != nil {
+		state := conn.GetState()
 		if state != connectivity.Shutdown && state != connectivity.TransientFailure {
-			return g.conn, nil
+			return conn, nil
 		}
 		// Close stale connection before recreating.
-		_ = g.conn.Close()
-		g.conn = nil
+		_ = conn.Close()
+		delete(globalConns, g.addr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 
 	//nolint:staticcheck // DialContext is the established pattern for lazy+block dial in grpc v1.
-	conn, err := grpc.DialContext(
+	newConn, err := grpc.DialContext(
 		ctx,
 		g.addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -106,18 +111,14 @@ func (g *GRPCClient) dial() (*grpc.ClientConn, error) {
 	}
 
 	g.log.Info("xrayapi: gRPC connection established", "addr", g.addr)
-	g.conn = conn
-	return conn, nil
+	globalConns[g.addr] = newConn
+	return newConn, nil
 }
 
 // Close releases the underlying gRPC connection. Safe to call multiple times.
+// Note: with global connection pooling, this is a no-op to allow connection reuse.
 func (g *GRPCClient) Close() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.conn != nil {
-		_ = g.conn.Close()
-		g.conn = nil
-	}
+	// No-op. The connection is held globally and reused across clients.
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +213,10 @@ func (g *GRPCClient) AddUserSingle(inboundTag, inboundProtocol string, clientJSO
 		),
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			g.log.Info("xrayapi: user already in inbound, skipping", "tag", inboundTag, "email", user.Email)
+			return nil
+		}
 		return fmt.Errorf("xrayapi: AddUser (tag=%s email=%s): %w", inboundTag, user.Email, err)
 	}
 
@@ -302,8 +307,13 @@ func (g *GRPCClient) fallbackAddUser(payload []xrayconfig.TaggedClient, configPa
 	cmd := exec.CommandContext(ctx, "xray", "api", "adu", "-s", g.addr, f.Name())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		g.log.Warn("Fallback hot-add failed", "err", err, "out", string(out))
-		return fmt.Errorf("fallback adu: %v (output: %s)", err, strings.TrimSpace(string(out)))
+		outStr := strings.TrimSpace(string(out))
+		if strings.Contains(outStr, "already exists") {
+			g.log.Info("xrayapi: user already exists in fallback hot-add, skipping")
+			return nil
+		}
+		g.log.Warn("Fallback hot-add failed", "err", err, "out", outStr)
+		return fmt.Errorf("fallback adu: %v (output: %s)", err, outStr)
 	}
 	return nil
 }
@@ -349,7 +359,11 @@ func (g *GRPCClient) RemoveUser(email string, tags []string) error {
 				),
 			})
 			if callErr != nil {
-				errs = append(errs, fmt.Sprintf("tag=%s: %v", tag, callErr))
+				if strings.Contains(callErr.Error(), "not found") {
+					g.log.Info("xrayapi: user already not in inbound, skipping", "tag", tag, "email", email)
+				} else {
+					errs = append(errs, fmt.Sprintf("tag=%s: %v", tag, callErr))
+				}
 			} else {
 				g.log.Info("xrayapi: user removed via gRPC", "tag", tag, "email", email)
 			}

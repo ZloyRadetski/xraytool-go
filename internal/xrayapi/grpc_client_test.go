@@ -348,8 +348,11 @@ func TestGRPCClient_ConnectionCaching(t *testing.T) {
 	c := newTestGRPCClient(addr)
 	defer c.Close()
 
-	if c.conn != nil {
-		t.Fatal("expected conn to be nil initially")
+	globalConnsMu.Lock()
+	conn0 := globalConns[addr]
+	globalConnsMu.Unlock()
+	if conn0 != nil {
+		t.Fatal("expected global conn to be nil initially")
 	}
 
 	err := c.RemoveUser("test@example.com", []string{"tag1"})
@@ -357,9 +360,11 @@ func TestGRPCClient_ConnectionCaching(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	conn1 := c.conn
+	globalConnsMu.Lock()
+	conn1 := globalConns[addr]
+	globalConnsMu.Unlock()
 	if conn1 == nil {
-		t.Fatal("expected conn to be initialized")
+		t.Fatal("expected global conn to be initialized")
 	}
 
 	err = c.RemoveUser("test@example.com", []string{"tag2"})
@@ -367,20 +372,28 @@ func TestGRPCClient_ConnectionCaching(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if c.conn != conn1 {
-		t.Fatal("expected conn to be reused")
+	globalConnsMu.Lock()
+	conn2 := globalConns[addr]
+	globalConnsMu.Unlock()
+	if conn2 != conn1 {
+		t.Fatal("expected global conn to be reused")
 	}
 	
-	// test close reconnect
-	c.Close()
-	if c.conn != nil {
-		t.Fatal("expected conn to be nil after close")
-	}
+	// Force close and delete to simulate broken connection
+	globalConnsMu.Lock()
+	_ = conn2.Close()
+	delete(globalConns, addr)
+	globalConnsMu.Unlock()
+
 	err = c.RemoveUser("test@example.com", []string{"tag3"})
 	if err != nil {
 		t.Fatalf("unexpected error after close/reconnect: %v", err)
 	}
-	if c.conn == nil || c.conn == conn1 {
+
+	globalConnsMu.Lock()
+	conn3 := globalConns[addr]
+	globalConnsMu.Unlock()
+	if conn3 == nil || conn3 == conn1 {
 		t.Fatal("expected new conn to be initialized after close")
 	}
 }

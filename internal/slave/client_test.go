@@ -81,8 +81,8 @@ func TestClientCall(t *testing.T) {
 		var req map[string]string
 		json.NewDecoder(r.Body).Decode(&req)
 
-		if r.URL.Path == "/sync" {
-			if req["action"] == "test" {
+		if r.URL.Path == "/" {
+			if req["action"] == "sync" {
 				w.Write([]byte(`{"status":"success","output":"test_ok"}`))
 				return
 			}
@@ -91,14 +91,14 @@ func TestClientCall(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(1*time.Second, 1*time.Second, "remote")
+	client := NewClient(1*time.Second, 1*time.Second, "/sync")
 
 	entry := Entry{
 		URL:    ts.URL,
 		APIKey: "secret",
 	}
 
-	out, err := client.Call(entry, "sync", map[string]string{"action": "test"})
+	out, err := client.Call(entry, "sync", map[string]string{"foo": "bar"})
 	if err != nil {
 		t.Fatalf("Call error: %v", err)
 	}

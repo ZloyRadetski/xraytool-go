@@ -107,7 +107,7 @@ func rmOrLimitCmd(action string) *cobra.Command {
 				}
 				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 				if err := apiClient.RemoveUser(email, tags); err != nil {
-					p.Errorf("xray API hot-remove failed: %v\n\nUse --legacy flag to restart xray instead.", err)
+					p.Warn("xray API hot-remove failed: %v\n\nUse --legacy flag to restart xray instead.", err)
 				}
 			}
 

@@ -12,15 +12,14 @@ func TestRoot_Execute(t *testing.T) {
 
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
-	os.Args = []string{"xraytool", "--help"}
-
+	rootCmd.SetArgs([]string{"--help"})
 	out := captureOutput(func() { Execute() })
 	if !strings.Contains(out, "Available Commands") {
 		t.Errorf("expected help output, got %s", out)
 	}
 
 	// Test Execute with error
-	os.Args = []string{"xraytool", "--non-existent-flag"}
+	rootCmd.SetArgs([]string{"--non-existent-flag"})
 	out = captureOutput(func() { Execute() })
 	if !strings.Contains(out, "unknown flag") || !exitCalled {
 		t.Errorf("expected error exit, got %v", out)

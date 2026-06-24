@@ -57,6 +57,17 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		w.Write(out)
 		return
 
+	case "cli-stats":
+		out, err := exec.Command(os.Args[0], "cli-stats", "--api").Output()
+		if err != nil {
+			r.log.Error("internal sync: failed to run cli-stats", "err", err, "out", string(out))
+			writeError(w, http.StatusInternalServerError, "failed to run cli-stats")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+		return
+
 	case "newuser":
 		if body.UUID == "" {
 			writeError(w, http.StatusBadRequest, "uuid is required for newuser sync")
