@@ -123,7 +123,7 @@ func newUserCmd() *cobra.Command {
 
 			// Hot-add via xray API.
 			if !legacy {
-				apiClient := xrayapi.New(cfg.Xray.APIAddr)
+				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 				if err := apiClient.AddUser(payload, cfg.Paths.XrayConfig); err != nil {
 					p.Errorf("xray API hot-add failed: %v\n\nUse --legacy flag to restart xray instead.", err)
 				}
@@ -283,7 +283,7 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 
 	// Hot-add via xray API
 	if !legacy {
-		apiClient := xrayapi.New(cfg.Xray.APIAddr)
+		apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 		if err := apiClient.AddUser(clientsPayload, cfg.Paths.XrayConfig); err != nil {
 			return "", fmt.Errorf("xray API hot-add failed: %v", err)
 		}

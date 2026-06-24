@@ -94,7 +94,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			return
 		}
 
-		apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+		apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
 		_ = apiClient.AddUser(clientsPayload, r.cfg.Paths.XrayConfig)
 
 	case "rmuser":
@@ -109,7 +109,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		}
 
 		if len(tags) > 0 {
-			apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+			apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
 			_ = apiClient.RemoveUser(body.Email, tags)
 		}
 

@@ -75,7 +75,7 @@ func applyBatchCmd() *cobra.Command {
 			}
 
 			// Apply Hot-Reload using Xray API
-			apiClient := xrayapi.New(cfg.Xray.APIAddr)
+			apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 			
 			// 1. Hot-Remove
 			for _, email := range payload.Remove {

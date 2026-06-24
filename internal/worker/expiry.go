@@ -21,7 +21,7 @@ type ExpiryWorker struct {
 	db         *gorm.DB
 	cfg        *appconfig.Config
 	dispatcher *events.Dispatcher
-	apiClient  *xrayapi.Client
+	apiClient  *xrayapi.GRPCClient
 	log        *slog.Logger
 }
 
@@ -30,7 +30,7 @@ func NewExpiryWorker(
 	db *gorm.DB,
 	cfg *appconfig.Config,
 	dispatcher *events.Dispatcher,
-	apiClient *xrayapi.Client,
+	apiClient *xrayapi.GRPCClient,
 	log *slog.Logger,
 ) *ExpiryWorker {
 	return &ExpiryWorker{

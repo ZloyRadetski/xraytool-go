@@ -907,7 +907,7 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 	}
 
 	if len(tags) > 0 {
-		apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+		apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
 		_ = apiClient.RemoveUser(sub.Email, tags)
 	}
 
@@ -1182,7 +1182,7 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 	_ = xrayconfig.AddUserToInbounds(xrayCfg, payload)
 	_ = xrayconfig.Write(r.cfg.Paths.XrayConfig, xrayCfg)
 
-	apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+	apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
 	if err := apiClient.AddUser(payload, r.cfg.Paths.XrayConfig); err != nil {
 		r.log.Error("hot-add failed", "email", sub.Email, "err", err)
 	}
@@ -1268,7 +1268,7 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 			return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
 		})
 		if modErr == nil && len(tags) > 0 {
-			apiClient := xrayapi.New(r.cfg.Xray.APIAddr)
+			apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
 			_ = apiClient.RemoveUser(sub.Email, tags)
 		}
 		

@@ -105,7 +105,7 @@ func rmOrLimitCmd(action string) *cobra.Command {
 				if tagsErr != nil {
 					p.Errorf("getting inbound tags for %s: %v", email, tagsErr)
 				}
-				apiClient := xrayapi.New(cfg.Xray.APIAddr)
+				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 				if err := apiClient.RemoveUser(email, tags); err != nil {
 					p.Errorf("xray API hot-remove failed: %v\n\nUse --legacy flag to restart xray instead.", err)
 				}

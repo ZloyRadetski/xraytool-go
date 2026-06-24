@@ -445,7 +445,7 @@ func startServerCmd() *cobra.Command {
 				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
 
 				if cfg.Worker.Enabled {
-					apiClient := xrayapi.New(cfg.Xray.APIAddr)
+					apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 					wkr := worker.NewExpiryWorker(database.DB(), cfg, events.NewDispatcher(cfg), apiClient, slog.Default())
 					go wkr.Run(context.Background())
 					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", cfg.Worker.ExpiryInterval)

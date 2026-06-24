@@ -150,7 +150,7 @@ func statsCmd() *cobra.Command {
 // ---------------------------------------------------------------------------
 
 func updateStatsStorage(statePath string) error {
-	apiClient := xrayapi.New(cfg.Xray.APIAddr)
+	apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 	rawStats, err := apiClient.QueryStats()
 	if err != nil {
 		// Non-fatal; xray might be restarting.

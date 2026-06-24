@@ -124,7 +124,7 @@ func unlimitCmd() *cobra.Command {
 			if isActive {
 				if !legacy {
 					tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, email)
-					if err := xrayapi.New(cfg.Xray.APIAddr).RemoveUser(email, tags); err != nil {
+					if err := xrayapi.NewGRPCClient(cfg.Xray.APIAddr).RemoveUser(email, tags); err != nil {
 						fmt.Fprintf(os.Stderr, "[WARN] unlimit: hot-remove failed for %s: %v\n", email, err)
 					}
 				}
@@ -142,7 +142,7 @@ func unlimitCmd() *cobra.Command {
 			}
 
 			if !legacy {
-				if err := xrayapi.New(cfg.Xray.APIAddr).AddUser(payload, cfg.Paths.XrayConfig); err != nil {
+				if err := xrayapi.NewGRPCClient(cfg.Xray.APIAddr).AddUser(payload, cfg.Paths.XrayConfig); err != nil {
 					p.Errorf("xray API hot-add failed: %v\n\nUse --legacy to restart xray instead.", err)
 				}
 			}
@@ -293,7 +293,7 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	if isActive {
 		if !legacy {
 			tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, email)
-			if err := xrayapi.New(cfg.Xray.APIAddr).RemoveUser(email, tags); err != nil {
+			if err := xrayapi.NewGRPCClient(cfg.Xray.APIAddr).RemoveUser(email, tags); err != nil {
 				// Non-fatal: log and continue. A failed hot-remove before hot-add
 				// may cause a duplicate in xray, but config will be written correctly.
 				fmt.Fprintf(os.Stderr, "[WARN] unlimit: hot-remove failed for %s: %v\n", email, err)
@@ -313,7 +313,7 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	}
 
 	if !legacy {
-		if err := xrayapi.New(cfg.Xray.APIAddr).AddUser(clientsPayload, cfg.Paths.XrayConfig); err != nil {
+		if err := xrayapi.NewGRPCClient(cfg.Xray.APIAddr).AddUser(clientsPayload, cfg.Paths.XrayConfig); err != nil {
 			return "", fmt.Errorf("xray API hot-add failed: %v", err)
 		}
 	}
