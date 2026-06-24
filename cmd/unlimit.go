@@ -142,8 +142,9 @@ func unlimitCmd() *cobra.Command {
 			}
 
 			if !legacy {
-				if err := xrayapi.NewGRPCClient(cfg.Xray.APIAddr).AddUser(payload, cfg.Paths.XrayConfig); err != nil {
-					p.Errorf("xray API hot-add failed: %v\n\nUse --legacy to restart xray instead.", err)
+				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
+				if err := apiClient.AddUser(payload, cfg.Paths.XrayConfig); err != nil {
+					p.Warnf("xray API hot-add failed: %v\n\nUse --legacy to restart xray instead.", err)
 				}
 			}
 

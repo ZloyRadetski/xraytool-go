@@ -125,7 +125,7 @@ func newUserCmd() *cobra.Command {
 			if !legacy {
 				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 				if err := apiClient.AddUser(payload, cfg.Paths.XrayConfig); err != nil {
-					p.Errorf("xray API hot-add failed: %v\n\nUse --legacy flag to restart xray instead.", err)
+					p.Warnf("xray API hot-add failed: %v\n\nUse --legacy flag to restart xray instead.", err)
 				}
 			}
 

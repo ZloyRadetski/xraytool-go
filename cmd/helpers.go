@@ -42,6 +42,20 @@ func (p *Printer) Errorf(format string, args ...interface{}) {
 	p.Error(fmt.Sprintf(format, args...))
 }
 
+// Warn prints a warning message without exiting.
+func (p *Printer) Warn(msg string) {
+	if p.Batch {
+		fmt.Println("WARN|" + msg)
+	} else {
+		fmt.Fprintf(os.Stderr, "\n\033[0;33m[WARN] %s\033[0m\n", msg)
+	}
+}
+
+// Warnf is Warn with printf formatting.
+func (p *Printer) Warnf(format string, args ...interface{}) {
+	p.Warn(fmt.Sprintf(format, args...))
+}
+
 // Success prints a success message (batch only; interactive callers print inline).
 func (p *Printer) Success(fields ...string) {
 	if p.Batch {

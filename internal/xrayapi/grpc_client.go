@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -235,6 +237,8 @@ func (g *GRPCClient) AddUser(payload []xrayconfig.TaggedClient, configPath strin
 	}
 
 	var errs []string
+	var fallbackPayloads []xrayconfig.TaggedClient
+
 	for _, tc := range payload {
 		proto := ibByTag[tc.Tag]
 		if proto == "" {
@@ -250,12 +254,56 @@ func (g *GRPCClient) AddUser(payload []xrayconfig.TaggedClient, configPath strin
 		}
 
 		if err := g.AddUserSingle(tc.Tag, proto, clientJSON); err != nil {
+			if strings.Contains(err.Error(), "unsupported protocol") {
+				g.log.Info("xrayapi: queuing unsupported protocol for legacy hot-add", "tag", tc.Tag, "proto", proto)
+				fallbackPayloads = append(fallbackPayloads, tc)
+			} else {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+
+	if len(fallbackPayloads) > 0 {
+		if err := g.fallbackAddUser(fallbackPayloads, configPath); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("xrayapi: AddUser errors: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// fallbackAddUser uses the legacy os/exec approach for protocols that our protobuf parsers
+// do not support (e.g. hysteria/hysteria2 on custom Xray builds).
+func (g *GRPCClient) fallbackAddUser(payload []xrayconfig.TaggedClient, configPath string) error {
+	apiPld := buildAddPayload(payload, configPath)
+	data, err := json.Marshal(apiPld)
+	if err != nil {
+		return fmt.Errorf("marshal fallback payload: %w", err)
+	}
+
+	f, err := os.CreateTemp("", "xray-adu-fallback-*.json")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("writing temp file: %w", err)
+	}
+	f.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "xray", "api", "adu", "-s", g.addr, f.Name())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		g.log.Warn("Fallback hot-add failed", "err", err, "out", string(out))
+		return fmt.Errorf("fallback adu: %v (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
