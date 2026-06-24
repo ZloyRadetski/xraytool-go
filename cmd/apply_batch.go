@@ -99,8 +99,7 @@ func applyBatchCmd() *cobra.Command {
 				}
 			}
 
-			// Systemctl restart for fallback/legacy systems (no-op in Docker)
-			systemctlRestart("xray")
+			// (systemctl restart fallback removed to ensure pure hot-reload without dropping connections)
 
 			printJSON(map[string]interface{}{
 				"ok":      true,
