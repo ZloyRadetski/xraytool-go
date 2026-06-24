@@ -3,10 +3,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"os/exec"
 
 	"xraytool/internal/slave"
+	"xraytool/internal/stats"
+	"xraytool/internal/subscription"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 )
@@ -47,25 +47,21 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 
 	case "apply-batch":
-		out, err := exec.Command(os.Args[0], "apply-batch", "--payload", body.Payload).Output()
-		if err != nil {
-			r.log.Error("internal sync: failed to run apply-batch", "err", err, "out", string(out))
-			writeError(w, http.StatusInternalServerError, "failed to run apply-batch")
+		var payload slave.BatchPayload
+		if err := json.Unmarshal([]byte(body.Payload), &payload); err != nil {
+			r.log.Error("internal sync: invalid payload", "err", err)
+			writeError(w, http.StatusBadRequest, "invalid payload")
 			return
 		}
+		result := subscription.ApplyBatchOperations(r.cfg, payload)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(out)
+		json.NewEncoder(w).Encode(result)
 		return
 
 	case "cli-stats":
-		out, err := exec.Command(os.Args[0], "cli-stats", "--api").Output()
-		if err != nil {
-			r.log.Error("internal sync: failed to run cli-stats", "err", err, "out", string(out))
-			writeError(w, http.StatusInternalServerError, "failed to run cli-stats")
-			return
-		}
+		result := stats.GenerateLocalStats(r.cfg)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(out)
+		json.NewEncoder(w).Encode(result)
 		return
 
 	case "newuser":

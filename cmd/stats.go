@@ -64,7 +64,7 @@ func statsCmd() *cobra.Command {
 
 			// Collect slave totals (master only, non-inferred).
 			var slaveTotals []slaveUserTotal
-			var slaveReport slaveReportJSON
+			var slaveReport stats.SlaveReportJSON
 			if !inferredMode && cfg.IsMaster() {
 				slaveTotals, slaveReport = collectSlaveTotals()
 			}
@@ -116,7 +116,7 @@ func statsCmd() *cobra.Command {
 					"slave_report": slaveReport,
 					"users":        merged,
 					"totals": map[string]interface{}{
-						"xray":    map[string]int64{"up": sumField(merged, func(u mergedUser) int64 { return u.Xray.Up }), "down": sumField(merged, func(u mergedUser) int64 { return u.Xray.Down }), "total": xTotal},
+						"xray":    map[string]int64{"up": sumField(merged, func(u stats.MergedUser) int64 { return u.Xray.Up }), "down": sumField(merged, func(u stats.MergedUser) int64 { return u.Xray.Down }), "total": xTotal},
 						"slave":   map[string]int64{"total": slaveTotal},
 						"cluster": map[string]int64{"combined": clTotal},
 					},
@@ -193,21 +193,15 @@ type slaveUserTotal struct {
 	Slave int64  `json:"slave"`
 }
 
-type slaveReportJSON struct {
-	Enabled       bool `json:"enabled"`
-	TotalServers  int  `json:"total_servers"`
-	OKServers     int  `json:"ok_servers"`
-	FailedServers int  `json:"failed_servers"`
-}
 
-func collectSlaveTotals() ([]slaveUserTotal, slaveReportJSON) {
+func collectSlaveTotals() ([]slaveUserTotal, stats.SlaveReportJSON) {
 	reg := slaveRegistry(cfg)
 	servers, err := reg.Servers()
 	if err != nil || len(servers) == 0 {
-		return nil, slaveReportJSON{Enabled: len(servers) > 0}
+		return nil, stats.SlaveReportJSON{Enabled: len(servers) > 0}
 	}
 
-	report := slaveReportJSON{Enabled: true, TotalServers: len(servers)}
+	report := stats.SlaveReportJSON{Enabled: true, TotalServers: len(servers)}
 
 	type job struct {
 		server string
@@ -290,15 +284,7 @@ func collectSlaveTotals() ([]slaveUserTotal, slaveReportJSON) {
 // Merge + display
 // ---------------------------------------------------------------------------
 
-type mergedUser struct {
-	Email        string              `json:"email"`
-	Xray         stats.XrayCounters  `json:"xray"`
-	Total        stats.TotalCounters `json:"total"`
-	Slave        int64               `json:"slave"`
-	ClusterTotal int64               `json:"cluster_total"`
-}
-
-func mergeWithSlaves(local []stats.CumulativeUser, slaveTotals []slaveUserTotal) []mergedUser {
+func mergeWithSlaves(local []stats.CumulativeUser, slaveTotals []slaveUserTotal) []stats.MergedUser {
 	slaveMap := make(map[string]int64, len(slaveTotals))
 	for _, s := range slaveTotals {
 		slaveMap[s.Email] = s.Slave
@@ -318,25 +304,30 @@ func mergeWithSlaves(local []stats.CumulativeUser, slaveTotals []slaveUserTotal)
 		all[e] = true
 	}
 
-	result := make([]mergedUser, 0, len(all))
+	result := make([]stats.MergedUser, 0, len(all))
 	for email := range all {
 		u := localMap[email]
 		s := slaveMap[email]
 		ct := u.Total.Combined + s
-		result = append(result, mergedUser{
+		result = append(result, stats.MergedUser{
 			Email:        email,
 			Xray:         u.Xray,
 			Total:        u.Total,
 			Slave:        s,
-			ClusterTotal: ct,
+			ClusterTotal: &ct,
 		})
 	}
 	return result
 }
 
-func clusterTotal(u mergedUser) int64 { return u.ClusterTotal }
+func clusterTotal(u stats.MergedUser) int64 {
+	if u.ClusterTotal == nil {
+		return 0
+	}
+	return *u.ClusterTotal
+}
 
-func sumField(users []mergedUser, f func(mergedUser) int64) int64 {
+func sumField(users []stats.MergedUser, f func(stats.MergedUser) int64) int64 {
 	var sum int64
 	for _, u := range users {
 		sum += f(u)
@@ -344,13 +335,13 @@ func sumField(users []mergedUser, f func(mergedUser) int64) int64 {
 	return sum
 }
 
-func printAllStatsTable(users []mergedUser) {
+func printAllStatsTable(users []stats.MergedUser) {
 	cyan := "\033[0;36m"
 	green := "\033[1;32m"
 	nc := "\033[0m"
 
 	// Only show users with traffic.
-	var active []mergedUser
+	var active []stats.MergedUser
 	for _, u := range users {
 		if clusterTotal(u) > 0 || u.Slave > 0 {
 			active = append(active, u)
@@ -383,7 +374,7 @@ func printAllStatsTable(users []mergedUser) {
 		green, float64(sumTotal)/1024/1024/1024, len(active), nc)
 }
 
-func printUserStatsTable(u mergedUser) {
+func printUserStatsTable(u stats.MergedUser) {
 	fmt.Printf("%-25s %12s %12s\n", "Field", "Direction", "Traffic")
 	fmt.Println("-------------------------------------------------------")
 	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray up", stats.HumanBytes(u.Xray.Up))
