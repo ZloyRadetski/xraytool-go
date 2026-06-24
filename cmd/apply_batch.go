@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"xraytool/internal/slave"
 	"xraytool/internal/xrayapi"
@@ -77,10 +78,16 @@ func applyBatchCmd() *cobra.Command {
 			// Apply Hot-Reload using Xray API
 			apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 			
+			var wg sync.WaitGroup
+
 			// 1. Hot-Remove
 			for _, email := range payload.Remove {
 				tags, _ := xrayconfig.InboundTagsForUser(originalCfg, email)
-				_ = apiClient.RemoveUser(email, tags)
+				wg.Add(1)
+				go func(e string, t []string) {
+					defer wg.Done()
+					_ = apiClient.RemoveUser(e, t)
+				}(email, tags)
 			}
 			
 			// 2. Hot-Add/Update
@@ -95,9 +102,15 @@ func applyBatchCmd() *cobra.Command {
 				}
 				tagged, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
 				if err == nil && len(tagged) > 0 {
-					_ = apiClient.AddUser(tagged, cfg.Paths.XrayConfig)
+					wg.Add(1)
+					go func(tg []xrayconfig.TaggedClient) {
+						defer wg.Done()
+						_ = apiClient.AddUser(tg, cfg.Paths.XrayConfig)
+					}(tagged)
 				}
 			}
+
+			wg.Wait()
 
 			// (systemctl restart fallback removed to ensure pure hot-reload without dropping connections)
 
