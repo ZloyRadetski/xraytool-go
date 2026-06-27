@@ -67,6 +67,13 @@ type Module struct {
 	state    *State
 	banStore *banStore
 	log      *slog.Logger
+
+	// eventCh is the channel shared between the tailer and the analyzer.
+	// It is also used by IngestEvents to inject slave-originated IP events.
+	eventCh chan event
+
+	// ipTTL is parsed once in Run and stored for use in IngestEvents.
+	ipTTL time.Duration
 }
 
 // New creates a new Module. The module is not started until Run is called.
@@ -77,6 +84,11 @@ func New(cfg *appconfig.Config, db *gorm.DB, log *slog.Logger) *Module {
 		state:    newState(),
 		banStore: newBanStore(),
 		log:      log.With("component", "antifraud"),
+		// eventCh is created in Run once we know the buffer size we want.
+		// It is pre-allocated here with a small buffer so IngestEvents never
+		// blocks even if Run has not been called yet (safe no-op — events
+		// will be dropped by the select-default in IngestEvents).
+		eventCh: make(chan event, 512),
 	}
 }
 
@@ -90,6 +102,33 @@ func (m *Module) IsBanned(email string) bool {
 // Used by the CLI / API for diagnostics.
 func (m *Module) GetSnapshot() map[string]int {
 	return m.state.Snapshot()
+}
+
+// IngestEvents accepts IP events forwarded by slave nodes and feeds them into
+// the master's analyzer via the shared event channel.
+//
+// This is the integration point for the slave → master IP aggregation feature.
+// It is called from the internal HTTP handler (handlers_internal.go) when the
+// master receives an "antifraud-events" action from a slave.
+//
+// Design notes:
+//   - Events are injected into the same eventCh that the tailer uses, so the
+//     analyzer processes local and remote events in a single goroutine — no
+//     extra locking needed.
+//   - The non-blocking send (select + default) ensures a misbehaving or burst
+//     slave cannot block the HTTP handler goroutine.
+func (m *Module) IngestEvents(events []SlaveIPEvent) {
+	for _, e := range events {
+		if e.Email == "" || e.IP == "" {
+			continue
+		}
+		select {
+		case m.eventCh <- event{email: e.Email, ip: e.IP}:
+		default:
+			// Channel full — drop to avoid blocking the HTTP handler.
+			// The slave will retry on the next 5-second flush.
+		}
+	}
 }
 
 // ForceUnban immediately lifts the ban for an email.
@@ -136,7 +175,8 @@ func (m *Module) Run(ctx context.Context) {
 
 	// Channel connecting tailer → analyzer.
 	// Buffer of 512 smooths out burst reads without blocking the tailer.
-	eventCh := make(chan event, 512)
+	// The same channel is reused for slave-originated events (see IngestEvents).
+	eventCh := m.eventCh
 
 	// Channel for Rotator → Tailer "file renamed, re-open" signal.
 	rotateCh := make(chan struct{}, 1)

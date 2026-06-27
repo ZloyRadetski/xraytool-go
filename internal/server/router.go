@@ -39,6 +39,7 @@ import (
 	"strings"
 
 	"xraytool/internal/appconfig"
+	"xraytool/internal/antifraud"
 	"xraytool/internal/events"
 	"xraytool/internal/subscription"
 )
@@ -55,6 +56,9 @@ type Router struct {
 	isBanned     func(email string) bool
 	forceUnban   func(email string)
 	getSnapshot  func() map[string]int
+	// ingestEvents is called when master receives IP events from a slave node.
+	// nil when the module is disabled or when running in slave mode.
+	ingestEvents func(events []antifraud.SlaveIPEvent)
 }
 
 // New constructs a Router, registers all routes and middleware, and returns the
@@ -75,10 +79,16 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *R
 
 // WithAntiFraud injects the anti-fraud module hooks into the router.
 // Call this before the server starts serving requests.
-func (r *Router) WithAntiFraud(isBanned func(string) bool, forceUnban func(string), getSnapshot func() map[string]int) *Router {
+func (r *Router) WithAntiFraud(
+	isBanned func(string) bool,
+	forceUnban func(string),
+	getSnapshot func() map[string]int,
+	ingestEvents func([]antifraud.SlaveIPEvent),
+) *Router {
 	r.isBanned = isBanned
 	r.forceUnban = forceUnban
 	r.getSnapshot = getSnapshot
+	r.ingestEvents = ingestEvents
 	return r
 }
 

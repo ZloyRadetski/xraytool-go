@@ -66,6 +66,11 @@ type AntiFraudConf struct {
 	// LogRotationSizeMB is the file size threshold (in MB) that triggers log rotation.
 	// Rotation: rename to .old → gRPC RestartLogger → read .old → delete .old.
 	LogRotationSizeMB int `yaml:"log_rotation_size_mb"`
+	// ReportToMaster enables forwarding of IP events to the master server (slave-only).
+	// When true, the slave batches observed IP events every 5s and sends them to master
+	// so that master has a global view across all nodes for fraud detection.
+	// The master node must have anti_fraud.enabled: true.
+	ReportToMaster bool `yaml:"report_to_master"`
 }
 
 // SubscriptionConf holds subscription endpoint settings.
@@ -402,6 +407,9 @@ anti_fraud:
   ban_duration: "10m"
   # Max size of the log file before it is automatically rotated (in MB)
   log_rotation_size_mb: 20
+  # (slave only) If true, forward observed IP events to master every 5s for global fraud detection.
+  # Master must have anti_fraud.enabled: true.
+  report_to_master: false
 
 # ============================================================
 # servers.json format (object style):

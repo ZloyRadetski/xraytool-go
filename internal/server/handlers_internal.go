@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"xraytool/internal/antifraud"
 	"xraytool/internal/slave"
 	"xraytool/internal/stats"
 	"xraytool/internal/subscription"
@@ -26,7 +27,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" && body.Action != "usersnapshot" && body.Action != "apply-batch" && body.Action != "cli-stats" {
+	if body.Email == "" && body.Action != "usersnapshot" && body.Action != "apply-batch" && body.Action != "cli-stats" && body.Action != "antifraud-events" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
@@ -34,6 +35,24 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 	r.log.Info("received internal sync request", "action", body.Action, "email", body.Email)
 
 	switch body.Action {
+	case "antifraud-events":
+		// Slave → master IP aggregation: slave sends batched IP events so that
+		// master can maintain a global view across all nodes for fraud detection.
+		if r.ingestEvents == nil {
+			writeError(w, http.StatusServiceUnavailable, "antifraud not enabled on this node")
+			return
+		}
+		var req struct {
+			Events []antifraud.SlaveIPEvent `json:"events"`
+		}
+		if err := json.Unmarshal([]byte(body.Payload), &req); err != nil || len(req.Events) == 0 {
+			writeError(w, http.StatusBadRequest, "invalid or empty events payload")
+			return
+		}
+		r.ingestEvents(req.Events)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(req.Events)})
+		return
+
 	case "usersnapshot":
 		xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
 		if err != nil {

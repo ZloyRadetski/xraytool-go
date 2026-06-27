@@ -4,7 +4,6 @@
 package antifraud
 
 import (
-	"fmt"
 	"sync"
 	"time"
 )
@@ -121,7 +120,3 @@ func (s *State) Snapshot() map[string]int {
 	return out
 }
 
-// fraudReason builds a human-readable ban reason string.
-func fraudReason(email string, ipCount, limit int, ttl time.Duration) string {
-	return fmt.Sprintf("%d unique IPs in %s window (limit %d) for %q", ipCount, ttl, limit, email)
-}

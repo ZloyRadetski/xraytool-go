@@ -2,8 +2,10 @@ package antifraud
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -31,6 +33,22 @@ type analyzer struct {
 	log           *slog.Logger
 	db            *gorm.DB
 	dryRunLogTime map[string]time.Time
+
+	// deviceCache holds per-user MaxDevices values, refreshed every 2 minutes.
+	// The dynamic threshold for user U is: maxIPs * deviceCache[U].
+	deviceCache deviceLimitCache
+
+	// reporter batches IP events and forwards them to master (slave mode only).
+	// nil when ReportToMaster is false or mode is master.
+	reporter *slaveReporter
+}
+
+// deviceLimitCache is an in-memory cache of MaxDevices per email.
+// Access is guarded by its own RWMutex so the hot event-loop path
+// (RLock → read) never contends with the background refresh (Lock → swap).
+type deviceLimitCache struct {
+	mu     sync.RWMutex
+	limits map[string]int // email → MaxDevices (0 means "not found in DB")
 }
 
 func newAnalyzer(
@@ -43,7 +61,7 @@ func newAnalyzer(
 	db *gorm.DB,
 	log *slog.Logger,
 ) *analyzer {
-	return &analyzer{
+	a := &analyzer{
 		cfg:      cfg,
 		state:    state,
 		banStore: bs,
@@ -53,13 +71,34 @@ func newAnalyzer(
 		log:           log,
 		db:            db,
 		dryRunLogTime: make(map[string]time.Time),
+		deviceCache: deviceLimitCache{
+			limits: make(map[string]int, 64),
+		},
 	}
+
+	// Slave mode: set up the reporter that forwards events to master.
+	if !cfg.IsMaster() && cfg.AntiFraud.ReportToMaster {
+		a.reporter = newSlaveReporter(cfg, log)
+	}
+
+	return a
 }
 
 // run processes events until ctx is cancelled.
+// It also spawns two background goroutines:
+//   - deviceCacheRefresh: keeps per-user MaxDevices limits fresh.
+//   - slaveReporter.run: batches and forwards events to master (slave-only).
 func (a *analyzer) run(ctx context.Context) {
 	a.log.Info("antifraud analyzer: starting", "max_ips", a.maxIPs, "ttl", a.ipTTL)
 	defer a.log.Info("antifraud analyzer: stopped")
+
+	// Warm up the device cache before processing the first event.
+	a.refreshDeviceCache()
+	go a.runDeviceCacheRefresh(ctx)
+
+	if a.reporter != nil {
+		go a.reporter.run(ctx)
+	}
 
 	for {
 		select {
@@ -83,11 +122,20 @@ func (a *analyzer) handleEvent(e event) {
 	now := time.Now()
 	count := a.state.AddEvent(e.email, e.ip, a.ipTTL, now)
 
-	if count > a.maxIPs {
-		reason := fraudReason(e.email, count, a.maxIPs, a.ipTTL)
-		
+	// Dynamic threshold: base limit × number of devices the user is allowed.
+	devices := a.getDeviceLimit(e.email)
+	threshold := a.maxIPs * devices
+
+	// Forward to master for global aggregation (slave mode only, fire-and-forget).
+	if a.reporter != nil {
+		a.reporter.add(e)
+	}
+
+	if count > threshold {
+		reason := fraudReason(e.email, count, threshold, a.maxIPs, devices, a.ipTTL)
+
 		if a.cfg.AntiFraud.DryRun {
-			// Debounce dry-run logs to once per minute per user to avoid log spam
+			// Debounce dry-run logs to once per minute per user to avoid log spam.
 			if lastLog, ok := a.dryRunLogTime[e.email]; !ok || time.Since(lastLog) > time.Minute {
 				a.log.Warn("antifraud: fraud detected (dry-run mode, no ban applied)",
 					slog.String("email", e.email),
@@ -101,6 +149,84 @@ func (a *analyzer) handleEvent(e event) {
 		a.enforce(e.email, reason)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Device limit cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+// runDeviceCacheRefresh refreshes the device limit cache every 2 minutes.
+// The first refresh is performed synchronously before the event loop starts.
+func (a *analyzer) runDeviceCacheRefresh(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.refreshDeviceCache()
+		}
+	}
+}
+
+// refreshDeviceCache fetches all (email, max_devices) pairs from the DB
+// in a single query and atomically replaces the in-memory map.
+func (a *analyzer) refreshDeviceCache() {
+	var rows []struct {
+		Email      string
+		MaxDevices int
+	}
+	if err := a.db.Model(&database.Subscription{}).
+		Select("email, max_devices").
+		Scan(&rows).Error; err != nil {
+		a.log.Warn("antifraud: device cache refresh failed", slog.String("err", err.Error()))
+		return
+	}
+
+	newLimits := make(map[string]int, len(rows))
+	for _, r := range rows {
+		if r.MaxDevices > 0 {
+			newLimits[r.Email] = r.MaxDevices
+		}
+	}
+
+	a.deviceCache.mu.Lock()
+	a.deviceCache.limits = newLimits
+	a.deviceCache.mu.Unlock()
+}
+
+// getDeviceLimit returns the cached MaxDevices for email.
+// On a cache miss (new user), it falls back to a single DB query and caches the result.
+// Returns 1 as a safe fallback if the user is not found.
+func (a *analyzer) getDeviceLimit(email string) int {
+	a.deviceCache.mu.RLock()
+	limit, ok := a.deviceCache.limits[email]
+	a.deviceCache.mu.RUnlock()
+
+	if ok {
+		if limit <= 0 {
+			return 1 // defensive: zero or negative stored value falls back to safe minimum
+		}
+		return limit
+	}
+
+	// Cache miss — point query for newly created users not yet in the bulk cache.
+	var sub database.Subscription
+	val := 1
+	if err := a.db.Select("max_devices").Where("email = ?", email).First(&sub).Error; err == nil && sub.MaxDevices > 0 {
+		val = sub.MaxDevices
+	}
+
+	a.deviceCache.mu.Lock()
+	a.deviceCache.limits[email] = val
+	a.deviceCache.mu.Unlock()
+
+	return val
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// enforce (ban logic)
+// ─────────────────────────────────────────────────────────────────────────────
 
 // enforce bans a user: writes to DB, removes from Xray memory, propagates to slaves.
 //
@@ -182,6 +308,102 @@ func (a *analyzer) enforce(email, reason string) {
 		slog.String("reason", reason),
 	)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// slaveReporter — forwards IP events to master in batches (slave mode only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SlaveIPEvent is a single IP observation forwarded from a slave to master.
+// Exported so that handlers_internal.go can decode the incoming JSON.
+type SlaveIPEvent struct {
+	Email string `json:"email"`
+	IP    string `json:"ip"`
+}
+
+// slaveReporter accumulates events and flushes them to master every 5 seconds.
+// It is nil on the master node.
+type slaveReporter struct {
+	mu   sync.Mutex
+	buf  []SlaveIPEvent
+	cfg  *appconfig.Config
+	log  *slog.Logger
+}
+
+func newSlaveReporter(cfg *appconfig.Config, log *slog.Logger) *slaveReporter {
+	return &slaveReporter{
+		buf: make([]SlaveIPEvent, 0, 64),
+		cfg: cfg,
+		log: log,
+	}
+}
+
+// add enqueues an event for the next flush. Thread-safe.
+func (r *slaveReporter) add(e event) {
+	r.mu.Lock()
+	r.buf = append(r.buf, SlaveIPEvent{Email: e.email, IP: e.ip})
+	r.mu.Unlock()
+}
+
+// run flushes the buffer every 5 seconds until ctx is cancelled.
+func (r *slaveReporter) run(ctx context.Context) {
+	r.log.Info("antifraud slave reporter: starting")
+	defer r.log.Info("antifraud slave reporter: stopped")
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			r.flush() // drain remaining events on shutdown
+			return
+		case <-ticker.C:
+			r.flush()
+		}
+	}
+}
+
+// flush drains the buffer and sends it to master.
+// No-op if the buffer is empty.
+func (r *slaveReporter) flush() {
+	r.mu.Lock()
+	if len(r.buf) == 0 {
+		r.mu.Unlock()
+		return
+	}
+	batch := r.buf
+	r.buf = make([]SlaveIPEvent, 0, 64) // reset for next window
+	r.mu.Unlock()
+
+	payload, err := json.Marshal(struct {
+		Events []SlaveIPEvent `json:"events"`
+	}{Events: batch})
+	if err != nil {
+		r.log.Error("antifraud slave reporter: failed to marshal batch", slog.String("err", err.Error()))
+		return
+	}
+
+	client := slave.NewClient(
+		r.cfg.SlaveAPI.ConnectTimeout,
+		r.cfg.SlaveAPI.RequestTimeout,
+		r.cfg.SlaveAPI.RemotePath,
+	)
+	reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+	results := reg.PropagateAll("antifraud-events", map[string]string{"payload": string(payload)})
+
+	for _, res := range results {
+		if res.Err != nil {
+			r.log.Warn("antifraud slave reporter: failed to reach master",
+				slog.String("server", res.Server),
+				slog.String("err", res.Err.Error()),
+			)
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// unbanCleaner
+// ─────────────────────────────────────────────────────────────────────────────
 
 // unbanCleaner periodically checks the DB for expired bans and restores users.
 //
@@ -326,7 +548,7 @@ func (uc *unbanCleaner) tryUnban(ban database.AntifraudBan) {
 				uc.cfg.SlaveAPI.RemotePath,
 			)
 			reg := slave.NewRegistry(uc.cfg.Paths.ServersJSON, client)
-			
+
 			limitF := float64(sub.MaxDevices)
 			subfile := ""
 			if sub.Metadata != nil {
@@ -370,4 +592,12 @@ func buildPayload(cfg *appconfig.Config, xrayCfg xrayconfig.RawConfig, email str
 		Subfile: user.GetString("subfile"),
 		Expire:  user.GetString("expire"),
 	})
+}
+
+// fraudReason builds a human-readable ban reason string with dynamic limit details.
+func fraudReason(email string, ipCount, threshold, baseLimit, devices int, ttl time.Duration) string {
+	return fmt.Sprintf(
+		"%d unique IPs in %s window (limit %d = %d base × %d devices) for %q",
+		ipCount, ttl, threshold, baseLimit, devices, email,
+	)
 }

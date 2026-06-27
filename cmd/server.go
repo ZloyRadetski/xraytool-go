@@ -446,7 +446,13 @@ func startServerCmd() *cobra.Command {
 				// ── Anti-Fraud Module ──────────────────────────────────────────────
 				if cfg.AntiFraud.Enabled {
 					afModule := antifraud.New(cfg, database.DB(), slog.Default())
-					apiRouter.WithAntiFraud(afModule.IsBanned, afModule.ForceUnban, afModule.GetSnapshot)
+					// On master: expose IngestEvents so slaves can forward IP events here.
+					// On slave: IngestEvents is unused (nil hook is safe — router guards it).
+					var ingestFn func([]antifraud.SlaveIPEvent)
+					if cfg.IsMaster() {
+						ingestFn = afModule.IngestEvents
+					}
+					apiRouter.WithAntiFraud(afModule.IsBanned, afModule.ForceUnban, afModule.GetSnapshot, ingestFn)
 					go afModule.Run(context.Background())
 					logger.Infof("[ANTIFRAUD] Anti-Fraud module started (log_path=%s, max_ips=%d)",
 						cfg.AntiFraud.LogPath, cfg.AntiFraud.MaxIPs)
