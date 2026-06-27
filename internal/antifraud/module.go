@@ -56,24 +56,20 @@ func (b *banStore) clearBan(email string) {
 	b.mu.Unlock()
 }
 
-// Module orchestrates all Anti-Fraud goroutines.
-//
-// Call New() to create an instance and Run(ctx) to start it.
-// All goroutines are gated on the provided context; cancelling it
-// performs a clean shutdown.
+// Module is the public API for the anti-fraud component.
 type Module struct {
 	cfg      *appconfig.Config
 	db       *gorm.DB
-	state    *State
-	banStore *banStore
 	log      *slog.Logger
+	banStore *banStore
+	state    *State
 
-	// eventCh is the channel shared between the tailer and the analyzer.
-	// It is also used by IngestEvents to inject slave-originated IP events.
+	// Channels
 	eventCh chan event
 
-	// ipTTL is parsed once in Run and stored for use in IngestEvents.
-	ipTTL time.Duration
+	// slave tracking
+	slavesMu     sync.Mutex
+	activeSlaves map[string]time.Time
 }
 
 // New creates a new Module. The module is not started until Run is called.
@@ -81,13 +77,13 @@ func New(cfg *appconfig.Config, db *gorm.DB, log *slog.Logger) *Module {
 	return &Module{
 		cfg:      cfg,
 		db:       db,
-		state:    newState(),
-		banStore: newBanStore(),
 		log:      log.With("component", "antifraud"),
-		// eventCh is created in Run once we know the buffer size we want.
-		// It is pre-allocated here with a small buffer so IngestEvents never
-		// blocks even if Run has not been called yet (safe no-op — events
-		// will be dropped by the select-default in IngestEvents).
+		banStore: newBanStore(),
+		state:    newState(),
+		activeSlaves: make(map[string]time.Time),
+
+		// Buffer size of 512 is plenty. If it fills, it means the analyzer is
+		// blocked or too slow (tailer will wait, slave pushes will be dropped).
 		eventCh: make(chan event, 512),
 	}
 }
@@ -98,10 +94,31 @@ func (m *Module) IsBanned(email string) bool {
 	return m.banStore.isBanned(email)
 }
 
-// GetSnapshot returns a map of emails to their current active IP counts.
+// SnapshotData holds the state of the antifraud module.
+type SnapshotData struct {
+	State        map[string]int `json:"state"`
+	ActiveSlaves int            `json:"active_slaves"`
+}
+
+// GetSnapshot returns the current state of active IP counts and active slave nodes.
 // Used by the CLI / API for diagnostics.
-func (m *Module) GetSnapshot() map[string]int {
-	return m.state.Snapshot()
+func (m *Module) GetSnapshot() SnapshotData {
+	m.slavesMu.Lock()
+	now := time.Now()
+	activeCount := 0
+	for id, lastSeen := range m.activeSlaves {
+		if now.Sub(lastSeen) < 5*time.Minute {
+			activeCount++
+		} else {
+			delete(m.activeSlaves, id)
+		}
+	}
+	m.slavesMu.Unlock()
+
+	return SnapshotData{
+		State:        m.state.Snapshot(),
+		ActiveSlaves: activeCount,
+	}
 }
 
 // IngestEvents accepts IP events forwarded by slave nodes and feeds them into
@@ -112,12 +129,15 @@ func (m *Module) GetSnapshot() map[string]int {
 // master receives an "antifraud-events" action from a slave.
 //
 // Design notes:
-//   - Events are injected into the same eventCh that the tailer uses, so the
-//     analyzer processes local and remote events in a single goroutine — no
-//     extra locking needed.
-//   - The non-blocking send (select + default) ensures a misbehaving or burst
-//     slave cannot block the HTTP handler goroutine.
-func (m *Module) IngestEvents(events []SlaveIPEvent) {
+//   - Events are injected into the same eventCh that the tailer uses.
+//   - slaveID is used to track how many unique slaves are reporting.
+func (m *Module) IngestEvents(slaveID string, events []SlaveIPEvent) {
+	if slaveID != "" {
+		m.slavesMu.Lock()
+		m.activeSlaves[slaveID] = time.Now()
+		m.slavesMu.Unlock()
+	}
+
 	for _, e := range events {
 		if e.Email == "" || e.IP == "" {
 			continue

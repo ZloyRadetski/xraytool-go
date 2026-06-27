@@ -448,7 +448,7 @@ func startServerCmd() *cobra.Command {
 					afModule := antifraud.New(cfg, database.DB(), slog.Default())
 					// On master: expose IngestEvents so slaves can forward IP events here.
 					// On slave: IngestEvents is unused (nil hook is safe — router guards it).
-					var ingestFn func([]antifraud.SlaveIPEvent)
+					var ingestFn func(string, []antifraud.SlaveIPEvent)
 					if cfg.IsMaster() {
 						ingestFn = afModule.IngestEvents
 					}

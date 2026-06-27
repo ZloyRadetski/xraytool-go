@@ -55,10 +55,10 @@ type Router struct {
 	// antifraud hooks — nil when the module is disabled.
 	isBanned     func(email string) bool
 	forceUnban   func(email string)
-	getSnapshot  func() map[string]int
+	getSnapshot  func() antifraud.SnapshotData
 	// ingestEvents is called when master receives IP events from a slave node.
 	// nil when the module is disabled or when running in slave mode.
-	ingestEvents func(events []antifraud.SlaveIPEvent)
+	ingestEvents func(slaveID string, events []antifraud.SlaveIPEvent)
 }
 
 // New constructs a Router, registers all routes and middleware, and returns the
@@ -82,8 +82,8 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *R
 func (r *Router) WithAntiFraud(
 	isBanned func(string) bool,
 	forceUnban func(string),
-	getSnapshot func() map[string]int,
-	ingestEvents func([]antifraud.SlaveIPEvent),
+	getSnapshot func() antifraud.SnapshotData,
+	ingestEvents func(string, []antifraud.SlaveIPEvent),
 ) *Router {
 	r.isBanned = isBanned
 	r.forceUnban = forceUnban

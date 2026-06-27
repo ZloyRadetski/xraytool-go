@@ -1343,9 +1343,10 @@ func (r *Router) handleAdminAntiFraudState(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	state := r.getSnapshot()
+	snapshot := r.getSnapshot()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"enabled": true,
-		"state":   state,
+		"enabled":       true,
+		"state":         snapshot.State,
+		"active_slaves": snapshot.ActiveSlaves,
 	})
 }

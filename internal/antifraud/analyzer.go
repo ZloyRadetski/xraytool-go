@@ -217,7 +217,7 @@ func (a *analyzer) getDeviceLimit(email string) int {
 	// Cache miss — point query for newly created users not yet in the bulk cache.
 	var sub database.Subscription
 	val := 1
-	if err := a.db.Select("max_devices").Where("email = ?", email).First(&sub).Error; err == nil && sub.MaxDevices > 0 {
+	if err := a.db.Select("max_devices").Where("email = ?", email).Limit(1).Find(&sub).Error; err == nil && sub.MaxDevices > 0 {
 		val = sub.MaxDevices
 	}
 

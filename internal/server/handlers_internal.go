@@ -42,15 +42,15 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			writeError(w, http.StatusServiceUnavailable, "antifraud not enabled on this node")
 			return
 		}
-		var req struct {
+		var payloadReq struct {
 			Events []antifraud.SlaveIPEvent `json:"events"`
 		}
-		if err := json.Unmarshal([]byte(body.Payload), &req); err != nil || len(req.Events) == 0 {
+		if err := json.Unmarshal([]byte(body.Payload), &payloadReq); err != nil || len(payloadReq.Events) == 0 {
 			writeError(w, http.StatusBadRequest, "invalid or empty events payload")
 			return
 		}
-		r.ingestEvents(req.Events)
-		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(req.Events)})
+		r.ingestEvents(getClientIP(req), payloadReq.Events)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(payloadReq.Events)})
 		return
 
 	case "usersnapshot":

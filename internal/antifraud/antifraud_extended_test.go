@@ -415,7 +415,7 @@ func TestModule_IngestEvents_ValidEvents(t *testing.T) {
 		{Email: "slave@x.com", IP: "10.0.0.2"},
 	}
 
-	m.IngestEvents(events)
+	m.IngestEvents("1.1.1.1", events)
 
 	// Даём анализатору время обработать события из канала
 	time.Sleep(50 * time.Millisecond)
@@ -435,7 +435,7 @@ func TestModule_IngestEvents_SkipsInvalid(t *testing.T) {
 	m := New(&appconfig.Config{}, db, slog.Default())
 	initialLen := len(m.eventCh)
 
-	m.IngestEvents([]SlaveIPEvent{
+	m.IngestEvents("1.1.1.1", []SlaveIPEvent{
 		{Email: "", IP: "1.1.1.1"},   // пустой email
 		{Email: "u@x.com", IP: ""},   // пустой IP
 		{Email: "", IP: ""},          // оба пустых
@@ -461,7 +461,7 @@ func TestModule_IngestEvents_FullChannel_DoesNotBlock(t *testing.T) {
 	// IngestEvents должен вернуться мгновенно, не блокируясь
 	done := make(chan struct{})
 	go func() {
-		m.IngestEvents([]SlaveIPEvent{{Email: "new@x.com", IP: "5.5.5.5"}})
+		m.IngestEvents("1.1.1.1", []SlaveIPEvent{{Email: "new@x.com", IP: "5.5.5.5"}})
 		close(done)
 	}()
 
@@ -486,7 +486,7 @@ func TestModule_IngestEvents_ConcurrentCalls(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			m.IngestEvents([]SlaveIPEvent{
+			m.IngestEvents("1.1.1.1", []SlaveIPEvent{
 				{Email: fmt.Sprintf("u%d@x.com", n), IP: generateIP(n)},
 			})
 		}(i)
@@ -558,7 +558,7 @@ func TestIntegration_SlaveEvents_TriggerBan(t *testing.T) {
 	go an.run(ctx)
 
 	// Инжектируем события как если бы они пришли со slave
-	m.IngestEvents([]SlaveIPEvent{
+	m.IngestEvents("1.1.1.1", []SlaveIPEvent{
 		{Email: email, IP: "10.1.1.1"},
 		{Email: email, IP: "10.1.1.2"},
 	})
@@ -568,7 +568,7 @@ func TestIntegration_SlaveEvents_TriggerBan(t *testing.T) {
 	assert.False(t, m.IsBanned(email), "2 IPs at threshold 2 must not ban")
 
 	// Третий IP — должен вызвать бан
-	m.IngestEvents([]SlaveIPEvent{
+	m.IngestEvents("1.1.1.1", []SlaveIPEvent{
 		{Email: email, IP: "10.1.1.3"},
 	})
 

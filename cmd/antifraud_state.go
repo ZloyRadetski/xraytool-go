@@ -75,8 +75,9 @@ var antiFraudStateCmd = &cobra.Command{
 		}
 
 		var result struct {
-			Enabled bool           `json:"enabled"`
-			State   map[string]int `json:"state"`
+			Enabled      bool           `json:"enabled"`
+			State        map[string]int `json:"state"`
+			ActiveSlaves int            `json:"active_slaves"`
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -89,6 +90,8 @@ var antiFraudStateCmd = &cobra.Command{
 			return
 		}
 
+		fmt.Printf("Active Slaves reporting stats: %d\n", result.ActiveSlaves)
+		
 		if len(result.State) == 0 {
 			fmt.Println("No active IPs currently tracked.")
 			return
