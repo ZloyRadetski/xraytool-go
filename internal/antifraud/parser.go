@@ -38,49 +38,47 @@ var (
 // Zero-allocation contract: no strings are created; we return sub-slices
 // of the input buf. Callers must copy if they need the values to outlive buf.
 //
-// Dry-run scenarios verified:
-//   - Line without " accepted " → returns ("", "")
-//   - Line with accepted but no space after address → returns ("", "")
-//   - IPv6 address [::1]:port → StripPort handles brackets
-//   - Line with trailing \r\n → trimmed by Scanner
+// Xray actual log format:
+// 2024/01/15 12:34:56 1.2.3.4:56789 accepted tcp:8.8.8.8:443 [inbound] email
 func parseLine(line []byte) (ip, email []byte) {
 	idx := bytes.Index(line, acceptedTag)
 	if idx < 0 {
 		return nil, nil
 	}
 
-	// rest is everything after " accepted "
-	rest := line[idx+len(acceptedTag):]
-
-	// Find the address field (first token in rest)
-	spaceIdx := bytes.IndexByte(rest, ' ')
-	if spaceIdx < 0 {
+	// 1. Extract Source IP (the token immediately BEFORE " accepted ")
+	beforeAccepted := bytes.TrimSpace(line[:idx])
+	lastSpaceIdx := bytes.LastIndexByte(beforeAccepted, ' ')
+	if lastSpaceIdx < 0 {
 		return nil, nil
 	}
+	srcAddrField := beforeAccepted[lastSpaceIdx+1:] // e.g. "1.2.3.4:56789"
 
-	addrField := rest[:spaceIdx]  // e.g. "tcp:1.2.3.4:12345" or "1.2.3.4:12345"
-	remaining := rest[spaceIdx+1:] // "[inbound] email"
-
-	// Strip optional protocol prefix (tcp:, udp:)
-	if colonIdx := bytes.IndexByte(addrField, ':'); colonIdx >= 0 {
-		proto := addrField[:colonIdx]
-		if bytes.Equal(proto, []byte("tcp")) || bytes.Equal(proto, []byte("udp")) {
-			addrField = addrField[colonIdx+1:]
-		}
-	}
-
-	// Strip port: last colon separates host from port.
-	// For IPv6 [::1]:port the host part is wrapped in brackets.
-	rawIP := stripPort(addrField)
+	// Strip port to get raw IP
+	rawIP := stripPort(srcAddrField)
 	if len(rawIP) == 0 {
 		return nil, nil
 	}
 
-	// Email is the last whitespace-delimited token in the line.
-	emailField := lastToken(remaining)
+	// 2. Extract Email (the LAST token on the entire line)
+	// Example: "tcp:8.8.8.8:443 [inbound] email"
+	rest := line[idx+len(acceptedTag):]
+	
+	// Xray logs always have at least "[tag] email" or "[tag]" after the destination address.
+	// If there's no space in rest, it means it just ends with "tcp:8.8.8.8:443", which is not an email.
+	if bytes.IndexByte(rest, ' ') < 0 {
+		return nil, nil
+	}
+
+	emailField := lastToken(rest)
 	if len(emailField) == 0 {
 		return nil, nil
 	}
+
+	// Newer Xray versions prefix the email with "email: " (e.g., "... email: bot_client").
+	// We handle this cleanly since `lastToken` already splits by space, but just in case
+	// it appears as `email:bot_client` (without space), we trim it.
+	emailField = bytes.TrimPrefix(emailField, []byte("email:"))
 
 	return rawIP, emailField
 }

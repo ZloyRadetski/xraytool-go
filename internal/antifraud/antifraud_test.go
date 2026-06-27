@@ -13,7 +13,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestParseLine_AcceptedIPv4(t *testing.T) {
-	line := []byte("2024/01/15 12:34:56 accepted tcp:1.2.3.4:12345 [inbound] user@example.com")
+	line := []byte("2024/01/15 12:34:56 1.2.3.4:56789 accepted tcp:8.8.8.8:443 [inbound] user@example.com")
 	ip, email := parseLine(line)
 	require.NotNil(t, ip, "ip should not be nil")
 	require.NotNil(t, email, "email should not be nil")
@@ -22,7 +22,7 @@ func TestParseLine_AcceptedIPv4(t *testing.T) {
 }
 
 func TestParseLine_AcceptedIPv6(t *testing.T) {
-	line := []byte("2024/01/15 12:34:56 accepted tcp:[::1]:12345 [inbound] user2@example.com")
+	line := []byte("2024/01/15 12:34:56 [::1]:56789 accepted tcp:8.8.8.8:443 [inbound] user2@example.com")
 	ip, email := parseLine(line)
 	require.NotNil(t, ip)
 	require.NotNil(t, email)
@@ -31,7 +31,7 @@ func TestParseLine_AcceptedIPv6(t *testing.T) {
 }
 
 func TestParseLine_AcceptedUDP(t *testing.T) {
-	line := []byte("2024/01/15 12:34:56 accepted udp:5.6.7.8:9999 [inbound] vpnuser")
+	line := []byte("2024/01/15 12:34:56 5.6.7.8:56789 accepted udp:8.8.8.8:53 [inbound] vpnuser")
 	ip, email := parseLine(line)
 	require.NotNil(t, ip)
 	assert.Equal(t, "5.6.7.8", string(ip))
@@ -53,11 +53,29 @@ func TestParseLine_EmptyLine_ReturnsNil(t *testing.T) {
 
 func TestParseLine_MissingEmail_ReturnsNil(t *testing.T) {
 	// Only address field, no trailing token for email
-	line := []byte("2024/01/15 12:34:56 accepted tcp:1.2.3.4:12345")
+	line := []byte("2024/01/15 12:34:56 1.2.3.4:56789 accepted tcp:8.8.8.8:443")
 	ip, email := parseLine(line)
 	// spaceIdx will be -1 after the address, so parseLine returns nil
 	assert.Nil(t, ip)
 	assert.Nil(t, email)
+
+	// Incomplete line
+	line = []byte("2024/01/15 12:34:56 accepted tcp:1.2.3.4:12345")
+	ip, email = parseLine(line)
+	assert.Nil(t, ip)
+	assert.Nil(t, email)
+}
+
+func TestParseLine_RealXrayLogs(t *testing.T) {
+	line1 := []byte("2026/06/27 21:09:15.937557 from 188.65.244.206:60770 accepted tcp:www.google.com:80 [hy2 -> warp] email: bot_client_7912770979")
+	ip, email := parseLine(line1)
+	assert.Equal(t, "188.65.244.206", string(ip))
+	assert.Equal(t, "bot_client_7912770979", string(email))
+
+	line2 := []byte("2026/06/27 21:09:16.926077 from 62.33.196.224:59925 accepted tcp:sf16-teko2.tiktokcdn.com:443 [reality-in-1 -> direct] email: bot_client_5086550015")
+	ip, email = parseLine(line2)
+	assert.Equal(t, "62.33.196.224", string(ip))
+	assert.Equal(t, "bot_client_5086550015", string(email))
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +229,7 @@ func TestBanStore_UnknownEmail_NotBanned(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func BenchmarkParseLine(b *testing.B) {
-	line := []byte("2024/01/15 12:34:56 accepted tcp:203.0.113.42:54321 [vless-443] client@example.com")
+	line := []byte("2024/01/15 12:34:56 203.0.113.42:56789 accepted tcp:8.8.8.8:443 [vless-443] client@example.com")
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
