@@ -32,7 +32,11 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	r.log.Info("received internal sync request", "action", body.Action, "email", body.Email)
+	if body.Action != "antifraud-events" {
+		r.log.Info("received internal sync request", "action", body.Action, "email", body.Email)
+	} else {
+		r.log.Debug("received internal sync request", "action", body.Action, "email", body.Email)
+	}
 
 	switch body.Action {
 	case "antifraud-events":
