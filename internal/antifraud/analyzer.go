@@ -129,6 +129,10 @@ func (a *analyzer) handleEvent(e event) {
 	// Forward to master for global aggregation (slave mode only, fire-and-forget).
 	if a.reporter != nil {
 		a.reporter.add(e)
+		// If this slave is configured to report to master, the master makes the final
+		// decision. We skip local enforcement because the slave doesn't have the full DB
+		// (so it doesn't know the user's real max_devices).
+		return
 	}
 
 	if count > threshold {
