@@ -19,6 +19,7 @@ type Config struct {
 	Xray          XrayConf         `yaml:"xray"`
 	Stats         StatsConf        `yaml:"stats"`
 	SlaveAPI      SlaveAPIConf     `yaml:"slave_api"`
+	MasterAPI     MasterAPIConf    `yaml:"master_api"`
 	Ports         PortsConf        `yaml:"ports"`
 	Logging       LoggingConf      `yaml:"logging"`
 	Webhooks      []string         `yaml:"webhooks"`
@@ -137,6 +138,13 @@ type XrayConf struct {
 	APIAddr string `yaml:"api_addr"`
 }
 
+// MasterAPIConf defines how a slave node authenticates and connects to the master.
+type MasterAPIConf struct {
+	URL      string `yaml:"url"`
+	APIKey   string `yaml:"api_key"`
+	Insecure bool   `yaml:"insecure"`
+}
+
 // StatsConf holds traffic statistics settings.
 type StatsConf struct {
 	BucketSeconds         int `yaml:"bucket_seconds"`
@@ -189,6 +197,11 @@ func defaults() *Config {
 			ConnectTimeout: 5 * time.Second,
 			RequestTimeout: 30 * time.Second,
 			RemotePath:     "/api/v1/internal/xray/sync",
+		},
+		MasterAPI: MasterAPIConf{
+			URL:      "",
+			APIKey:   "",
+			Insecure: false,
 		},
 		Ports: PortsConf{
 			APIServer: 8080,
@@ -315,6 +328,17 @@ slave_api:
   request_timeout: 15s
   # Default API path on slave servers (can be overridden per-server in servers.json)
   remote_path: "/api/rest/xraytool"
+
+# ============================================================
+# Master Node Access (used ONLY when mode=slave)
+# ============================================================
+master_api:
+  # The exact URL of the master's sync endpoint. Must include scheme, domain, and path.
+  url: "https://master.example.com/api/v1/internal/xray/sync"
+  # The internal API key of the master node (matches master's api.internal_key).
+  api_key: "secret"
+  # If true, skips TLS certificate verification when connecting to the master.
+  insecure: false
 
 ports:
   # Port for the REST API server (api-server / start-server)

@@ -383,21 +383,26 @@ func (r *slaveReporter) flush() {
 		return
 	}
 
+	if r.cfg.MasterAPI.URL == "" {
+		r.log.Warn("antifraud slave reporter: master_api.url is not configured, cannot forward events")
+		return
+	}
+
+	entry := slave.Entry{
+		URL:      r.cfg.MasterAPI.URL,
+		APIKey:   r.cfg.MasterAPI.APIKey,
+		Insecure: r.cfg.MasterAPI.Insecure,
+	}
+
 	client := slave.NewClient(
 		r.cfg.SlaveAPI.ConnectTimeout,
 		r.cfg.SlaveAPI.RequestTimeout,
-		r.cfg.SlaveAPI.RemotePath,
+		"", // remote path is fully defined by MasterAPI.URL
 	)
-	reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
-	results := reg.PropagateAll("antifraud-events", map[string]string{"payload": string(payload)})
 
-	for _, res := range results {
-		if res.Err != nil {
-			r.log.Warn("antifraud slave reporter: failed to reach master",
-				slog.String("server", res.Server),
-				slog.String("err", res.Err.Error()),
-			)
-		}
+	_, err = client.Call(entry, "antifraud-events", map[string]string{"payload": string(payload)})
+	if err != nil {
+		r.log.Warn("antifraud slave reporter: failed to reach master", slog.String("err", err.Error()))
 	}
 }
 
