@@ -86,6 +86,12 @@ func (m *Module) IsBanned(email string) bool {
 	return m.banStore.isBanned(email)
 }
 
+// GetSnapshot returns a map of emails to their current active IP counts.
+// Used by the CLI / API for diagnostics.
+func (m *Module) GetSnapshot() map[string]int {
+	return m.state.Snapshot()
+}
+
 // ForceUnban immediately lifts the ban for an email.
 // It removes the record from both the in-memory store and the database.
 // This is called when an administrator manually unblocks or modifies a user,

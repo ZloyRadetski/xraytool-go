@@ -54,6 +54,7 @@ type Router struct {
 	// antifraud hooks — nil when the module is disabled.
 	isBanned     func(email string) bool
 	forceUnban   func(email string)
+	getSnapshot  func() map[string]int
 }
 
 // New constructs a Router, registers all routes and middleware, and returns the
@@ -74,9 +75,10 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *R
 
 // WithAntiFraud injects the anti-fraud module hooks into the router.
 // Call this before the server starts serving requests.
-func (r *Router) WithAntiFraud(isBanned func(string) bool, forceUnban func(string)) *Router {
+func (r *Router) WithAntiFraud(isBanned func(string) bool, forceUnban func(string), getSnapshot func() map[string]int) *Router {
 	r.isBanned = isBanned
 	r.forceUnban = forceUnban
+	r.getSnapshot = getSnapshot
 	return r
 }
 
@@ -133,6 +135,9 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/admin/users/{email}/set-expire", protected(r.handleAdminSetExpire))
 	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-ban", protected(r.handleAdminGlobalBan))
 	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-unban", protected(r.handleAdminGlobalUnban))
+	
+	// Anti-Fraud
+	r.mux.Handle("GET /api/v1/admin/antifraud/state", protected(r.handleAdminAntiFraudState))
 	
 	// Admin Promocodes
 	r.mux.Handle("POST /api/v1/admin/promocodes", protected(r.handleAdminCreatePromoCode))

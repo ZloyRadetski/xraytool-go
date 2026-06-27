@@ -369,6 +369,11 @@ subscription:
       - "🛑 Приложение не поддерживается 🛑"
       - "Клиент не отправил HWID"
       - "👉 @torvaldsvpnbot"
+    anti_fraud:
+      - "⚠️ АНТИФРОД СИСТЕМА ⚠️"
+      - "Обнаружено подозрительное подключение"
+      - "Доступ временно ограничен на 10 минут"
+      - "👉 @torvaldsvpnbot"
 
 worker:
   # Enable or disable the background expiry worker
@@ -381,6 +386,22 @@ worker:
     - "24h"
     - "3h"
     - "1h"
+
+anti_fraud:
+  # Enable or disable the Anti-Fraud module
+  enabled: false
+  # If true, detect fraud and log it, but do NOT apply bans or delete users
+  dry_run: true
+  # Path to the Xray access log to parse
+  log_path: "/dev/shm/xray-access.log"
+  # Maximum allowed unique IPs within the TTL window
+  max_ips: 3
+  # Time window to track IPs for a single user
+  ip_limit_ttl: "3m"
+  # How long the user should be banned
+  ban_duration: "10m"
+  # Max size of the log file before it is automatically rotated (in MB)
+  log_rotation_size_mb: 20
 
 # ============================================================
 # servers.json format (object style):

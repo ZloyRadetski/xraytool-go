@@ -100,11 +100,14 @@ func (s *State) Clean(ttl time.Duration) {
 func (s *State) ActiveIPCount(email string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if u, ok := s.users[email]; ok {
-		return len(u.ips)
+	u, ok := s.users[email]
+	if !ok {
+		return 0
 	}
-	return 0
+	return len(u.ips)
 }
+
+
 
 // Snapshot returns a debug snapshot of all tracked emails and their IP counts.
 // Not used in the hot path — only for diagnostics.

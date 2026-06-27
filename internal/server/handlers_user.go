@@ -1328,3 +1328,24 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 
 // parseExpiryDate parses human-readable dates from the admin bot.
 // parseExpiryDate has been moved to internal/convert
+
+// handleAdminAntiFraudState returns the current snapshot of Anti-Fraud IPs
+func (r *Router) handleAdminAntiFraudState(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.getSnapshot == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"enabled": false,
+		})
+		return
+	}
+
+	state := r.getSnapshot()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled": true,
+		"state":   state,
+	})
+}
