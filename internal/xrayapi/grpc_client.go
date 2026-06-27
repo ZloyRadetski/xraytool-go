@@ -23,6 +23,7 @@ import (
 	"time"
 
 	handlerService "github.com/xtls/xray-core/app/proxyman/command"
+	loggerService "github.com/xtls/xray-core/app/log/command"
 	statsService "github.com/xtls/xray-core/app/stats/command"
 	"github.com/xtls/xray-core/common/protocol"
 	"xraytool/internal/xrayconfig"
@@ -481,4 +482,38 @@ func firstUserFrom(built interface{}) (*protocol.User, error) {
 		return nil, fmt.Errorf("no users found in parsed inbound config")
 	}
 	return users[0], nil
+}
+
+// ---------------------------------------------------------------------------
+// RestartLogger — LoggerService.RestartLogger
+// ---------------------------------------------------------------------------
+
+// RestartLogger signals Xray core to close and reopen its log file handles.
+// This is the safe, zero-downtime mechanism for log rotation:
+//   1. The caller renames access.log → access.log.old  (Xray keeps writing to .old via the open fd)
+//   2. RestartLogger is called  →  Xray closes the old fd and opens a fresh access.log
+//   3. The caller drains access.log.old and removes it, freeing RAM (tmpfs)
+//
+// No user connections are interrupted; Xray core is NOT restarted.
+//
+// Dry-run scenarios verified:
+//   - Xray not running: dial() returns error within connectTimeout.
+//   - Call succeeds but Xray ignores it (noop): log file keeps growing — Rotator handles that gracefully.
+func (g *GRPCClient) RestartLogger() error {
+	conn, err := g.dial()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCallTimeout)
+	defer cancel()
+
+	client := loggerService.NewLoggerServiceClient(conn)
+	_, err = client.RestartLogger(ctx, &loggerService.RestartLoggerRequest{})
+	if err != nil {
+		return fmt.Errorf("xrayapi: RestartLogger: %w", err)
+	}
+
+	g.log.Info("xrayapi: logger restarted via gRPC (log rotation)")
+	return nil
 }

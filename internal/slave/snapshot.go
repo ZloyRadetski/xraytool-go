@@ -1,6 +1,8 @@
 package slave
 
 import (
+	"time"
+
 	"xraytool/internal/database"
 	"xraytool/internal/xrayconfig"
 )
@@ -25,10 +27,10 @@ type BatchPayload struct {
 }
 
 func GetBlockedEmails() map[string]bool {
-	db := database.DB()
 	var blockedSubs []database.Subscription
 	// Only run this query if the database connection exists.
-	if db != nil {
+	if database.IsReady() {
+		db := database.DB()
 		db.Joins("JOIN users ON users.id = subscriptions.user_id").
 			Where("users.is_blocked = ?", true).
 			Find(&blockedSubs)
@@ -43,6 +45,16 @@ func GetBlockedEmails() map[string]bool {
 
 func BuildMasterSnapshot(xrayCfg xrayconfig.RawConfig) Snapshot {
 	blockedMap := GetBlockedEmails()
+
+	// Anti-Fraud: exclude soft-banned users so they aren't sent to slaves as Active.
+	if database.IsReady() {
+		var banned []database.AntifraudBan
+		if err := database.DB().Where("expires_at > ?", time.Now()).Find(&banned).Error; err == nil {
+			for _, b := range banned {
+				blockedMap[b.Email] = true
+			}
+		}
+	}
 
 	users, _ := xrayconfig.ListUsers(xrayCfg)
 	active := make([]SnapshotUser, 0, len(users))

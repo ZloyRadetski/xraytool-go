@@ -153,6 +153,7 @@ func autoMigrateAllUnsafe() error {
 		&SubscriptionNotification{},
 		&Plan{},
 		&PromoCode{},
+		&AntifraudBan{},
 	); err != nil {
 		return fmt.Errorf("database: auto-migrate failed: %w", err)
 	}

@@ -45,12 +45,15 @@ import (
 
 // Router holds all server-wide dependencies and the configured mux.
 type Router struct {
-	mux        *http.ServeMux
-	apiKey     string
-	cfg        *appconfig.Config
-	dispatcher *events.Dispatcher
-	log        *slog.Logger
-	cm         *subscription.CacheManager
+	mux          *http.ServeMux
+	apiKey       string
+	cfg          *appconfig.Config
+	dispatcher   *events.Dispatcher
+	log          *slog.Logger
+	cm           *subscription.CacheManager
+	// antifraud hooks — nil when the module is disabled.
+	isBanned     func(email string) bool
+	forceUnban   func(email string)
 }
 
 // New constructs a Router, registers all routes and middleware, and returns the
@@ -66,6 +69,14 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *R
 	}
 
 	r.registerRoutes()
+	return r
+}
+
+// WithAntiFraud injects the anti-fraud module hooks into the router.
+// Call this before the server starts serving requests.
+func (r *Router) WithAntiFraud(isBanned func(string) bool, forceUnban func(string)) *Router {
+	r.isBanned = isBanned
+	r.forceUnban = forceUnban
 	return r
 }
 

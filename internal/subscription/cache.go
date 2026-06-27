@@ -263,7 +263,13 @@ func (c *CacheManager) GetUserBySubfile(filename string) *ActiveUser {
 	if targetNorm == "" {
 		return nil
 	}
-	return c.activeUsers[targetNorm]
+	u, exists := c.activeUsers[targetNorm]
+	if !exists {
+		return nil
+	}
+	// Return a copy to prevent concurrent mutation
+	copyUser := *u
+	return &copyUser
 }
 
 // GetTemplates returns the cached templates.

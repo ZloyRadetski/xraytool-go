@@ -91,7 +91,11 @@ func syncStatesCmd() *cobra.Command {
 				// non-fatal, continue anyway
 			} else if changed {
 				fmt.Println("INFO|Self-healing complete. Reloading xray config...")
-				xrayCfg, _ = xrayconfig.Read(cfg.Paths.XrayConfig)
+				xrayCfg, err = xrayconfig.Read(cfg.Paths.XrayConfig)
+				if err != nil {
+					fmt.Printf("ERROR|failed to reload config after self-healing: %v\n", err)
+					return
+				}
 			}
 
 			masterSnap := slave.BuildMasterSnapshot(xrayCfg)

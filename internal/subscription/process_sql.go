@@ -11,6 +11,7 @@ import (
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
+	"log/slog"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -18,7 +19,10 @@ import (
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
 // instead of the legacy devices_state.json and limited_users.db files.
-func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, req *Request) *Response {
+//
+// isBanned is a function provided by the antifraud module; pass nil to disable
+// anti-fraud checks (useful for tests or when the module is disabled).
+func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, req *Request, isBanned func(email string) bool) *Response {
 	cfg := cm.cfg
 
 	// 1. Resolve Client ID from request (xray_uuid)
@@ -128,6 +132,27 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	uuid := sub.XrayUUID
 	userPassSs := ""
 	rawHy2Auth := ""
+
+	// Anti-Fraud check: if the user is currently soft-banned, return ONLY dummy
+	// warning profiles. Real outbounds are NOT generated, preventing any attempt
+	// to connect and protecting server CPU from TLS handshake load.
+	if isBanned != nil && isBanned(email) {
+		res := &Response{
+			StatusCode: 200,
+			Headers: map[string]string{
+				"Content-Type":      "text/plain; charset=utf-8",
+				"Content-Disposition": `attachment; filename="configs.txt"`,
+				"Profile-Title":     "Torvalds VPN",
+				"X-Reject-Reason":   "antifraud_ban",
+				"Cache-Control":     "no-store, no-cache, must-revalidate, max-age=0",
+				"Pragma":            "no-cache",
+			},
+			Body: generateDummyVless(cm.cfg.Subscription.DummyConfigs.AntiFraud),
+		}
+		slog.Default().Info("antifraud: serving dummy subscription", "email", email)
+		return res
+	}
+
 
 	// We still need to pull user's specific passwords from Xray config
 	// because they are generated dynamically or stored only in Xray.

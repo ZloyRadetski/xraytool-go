@@ -21,6 +21,7 @@ import (
 	"xraytool/internal/subscription"
 	"xraytool/internal/worker"
 	"xraytool/internal/xrayapi"
+	"xraytool/internal/antifraud"
 
 	"github.com/spf13/cobra"
 )
@@ -215,7 +216,7 @@ func startServerCmd() *cobra.Command {
 
 				// 5. Execute subscription process directly in memory (No exec.Command)
 				dispatcher := events.NewDispatcher(cfg)
-				subRes := subscription.ProcessSQL(database.DB(), cacheManager, dispatcher, subReq)
+				subRes := subscription.ProcessSQL(database.DB(), cacheManager, dispatcher, subReq, nil)
 
 				subID := subRes.SubID
 				if subID == "" {
@@ -441,6 +442,18 @@ func startServerCmd() *cobra.Command {
 			// priority due to Go 1.22+ most-specific-match routing — no conflict.
 			if dbReady {
 				apiRouter := server.New(cfg, apiConfig.APIKey, cacheManager)
+
+				// ── Anti-Fraud Module ──────────────────────────────────────────────
+				if cfg.AntiFraud.Enabled {
+					afModule := antifraud.New(cfg, database.DB(), slog.Default())
+					apiRouter.WithAntiFraud(afModule.IsBanned, afModule.ForceUnban)
+					go afModule.Run(context.Background())
+					logger.Infof("[ANTIFRAUD] Anti-Fraud module started (log_path=%s, max_ips=%d)",
+						cfg.AntiFraud.LogPath, cfg.AntiFraud.MaxIPs)
+				} else {
+					logger.Infof("[ANTIFRAUD] Anti-Fraud module DISABLED in config")
+				}
+
 				mux.Handle("/api/", apiRouter)
 				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
 

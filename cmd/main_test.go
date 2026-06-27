@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"xraytool/internal/database"
 )
 
 var exitCalled bool
@@ -15,6 +16,8 @@ func setupTest(t *testing.T) {
 		exitCalled = true
 		panic("exit")
 	}
+	// Ensure global DB state is reset before each test
+	database.Close()
 }
 
 func teardownTest() {

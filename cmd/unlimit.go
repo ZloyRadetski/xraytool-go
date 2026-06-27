@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"xraytool/internal/database"
 	"xraytool/internal/generate"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
@@ -159,6 +160,9 @@ func unlimitCmd() *cobra.Command {
 
 			sqlSetStatus(email, "active")
 
+			// Remove AntiFraud ban if it exists
+			database.DB().Where("email = ?", email).Delete(&database.AntifraudBan{})
+
 			// Propagate.
 			if cfg.IsMaster() {
 				sp := map[string]string{
@@ -246,6 +250,9 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Remove any anti-fraud ban for this user from DB.
+	database.DB().Where("email = ?", email).Delete(&database.AntifraudBan{})
 
 	if uuid == "" && isActive {
 		if c, _ := xrayconfig.FindUser(xrayCfg, email); c != nil {

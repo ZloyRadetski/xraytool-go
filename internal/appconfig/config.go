@@ -27,6 +27,7 @@ type Config struct {
 	PlategaSecret string           `yaml:"platega_secret"`
 	WebhookSecret string           `yaml:"webhook_secret"`
 	Subscription  SubscriptionConf `yaml:"subscription"`
+	AntiFraud     AntiFraudConf    `yaml:"anti_fraud"`
 }
 
 // WorkerConf holds background worker settings.
@@ -41,6 +42,30 @@ type DummyConfigsConf struct {
 	Expired           []string `yaml:"expired"`
 	DeviceLimit       []string `yaml:"device_limit"`
 	UnsupportedClient []string `yaml:"unsupported_client"`
+	AntiFraud         []string `yaml:"anti_fraud"`
+}
+
+// AntiFraudConf holds the configuration for the multi-IP anti-fraud system.
+type AntiFraudConf struct {
+	// Enabled toggles the anti-fraud module on or off.
+	Enabled bool `yaml:"enabled"`
+	// DryRun enables log-only mode. If true, detects fraud but does NOT apply bans.
+	DryRun bool `yaml:"dry_run"`
+	// LogPath is the path to the Xray access log file in tmpfs (e.g. /dev/shm/xray-access.log).
+	// The file MUST reside in a RAM-backed filesystem to avoid disk I/O overhead.
+	LogPath string `yaml:"log_path"`
+	// MaxIPs is the maximum number of unique IP addresses allowed per user within IPLimitTTL.
+	// Recommended: 3 (accounts for mobile network switching, dual-stack IPv4+IPv6, CGNAT).
+	MaxIPs int `yaml:"max_ips"`
+	// IPLimitTTL is the sliding window duration for IP activity tracking.
+	// An IP is considered active for this duration after the last observed connection.
+	IPLimitTTL string `yaml:"ip_limit_ttl"`
+	// BanDuration is the duration of the soft ban applied when fraud is detected.
+	// During the ban, the user is removed from Xray memory only; the config on disk is untouched.
+	BanDuration string `yaml:"ban_duration"`
+	// LogRotationSizeMB is the file size threshold (in MB) that triggers log rotation.
+	// Rotation: rename to .old → gRPC RestartLogger → read .old → delete .old.
+	LogRotationSizeMB int `yaml:"log_rotation_size_mb"`
 }
 
 // SubscriptionConf holds subscription endpoint settings.
@@ -199,7 +224,22 @@ func defaults() *Config {
 					"Клиент не отправил HWID",
 					"Поддержка -> @torvaldsvpnbot",
 				},
+				AntiFraud: []string{
+					"⚠️ АНТИФРОД СИСТЕМА ⚠️",
+					"Обнаружено подозрительное подключение",
+					"Доступ временно ограничен на 10 минут",
+					"👉 @torvaldsvpnbot",
+				},
 			},
+		},
+		AntiFraud: AntiFraudConf{
+			Enabled:           false,
+			DryRun:            true,
+			LogPath:           "/dev/shm/xray-access.log",
+			MaxIPs:            3,
+			IPLimitTTL:        "3m",
+			BanDuration:       "10m",
+			LogRotationSizeMB: 20,
 		},
 	}
 }
@@ -489,6 +529,25 @@ func Load(path string) (*Config, error) {
 	}
 	if len(cfg.Subscription.DummyConfigs.UnsupportedClient) == 0 {
 		cfg.Subscription.DummyConfigs.UnsupportedClient = defs.Subscription.DummyConfigs.UnsupportedClient
+	}
+	if len(cfg.Subscription.DummyConfigs.AntiFraud) == 0 {
+		cfg.Subscription.DummyConfigs.AntiFraud = defs.Subscription.DummyConfigs.AntiFraud
+	}
+	// AntiFraud defaults: only set if the block wasn't configured at all.
+	if cfg.AntiFraud.LogPath == "" {
+		cfg.AntiFraud.LogPath = defs.AntiFraud.LogPath
+	}
+	if cfg.AntiFraud.MaxIPs == 0 {
+		cfg.AntiFraud.MaxIPs = defs.AntiFraud.MaxIPs
+	}
+	if cfg.AntiFraud.IPLimitTTL == "" {
+		cfg.AntiFraud.IPLimitTTL = defs.AntiFraud.IPLimitTTL
+	}
+	if cfg.AntiFraud.BanDuration == "" {
+		cfg.AntiFraud.BanDuration = defs.AntiFraud.BanDuration
+	}
+	if cfg.AntiFraud.LogRotationSizeMB == 0 {
+		cfg.AntiFraud.LogRotationSizeMB = defs.AntiFraud.LogRotationSizeMB
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -98,15 +98,9 @@ func NewClient(connectTimeout, requestTimeout time.Duration, remotePath string) 
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	return &Client{
-		http: &http.Client{
-			Timeout:   requestTimeout,
-			Transport: transport,
-		},
-		httpInsecure: &http.Client{
-			Timeout:   requestTimeout,
-			Transport: transportInsecure,
-		},
-		remotePath: remotePath,
+		http:         &http.Client{Transport: transport, Timeout: requestTimeout},
+		httpInsecure: &http.Client{Transport: transportInsecure, Timeout: requestTimeout},
+		remotePath:   remotePath,
 	}
 }
 

@@ -151,3 +151,19 @@ type SubscriptionNotification struct {
 	WarningLevel   string `gorm:"primaryKey;type:text"`
 	SentAt         time.Time `gorm:"autoCreateTime"`
 }
+
+// AntifraudBan records a temporary soft-ban imposed by the anti-fraud system.
+// The ban lives only in Xray memory — the user is removed from Xray runtime but
+// NOT from xrayconfig.json on disk. When ExpiresAt passes, the Unban Cleaner
+// verifies the subscription is still active in the DB before re-adding the user.
+//
+// Index on Email: fast lookup during subscription serving and syncstates.
+// Index on ExpiresAt: efficient range query by the Unban Cleaner ticker.
+type AntifraudBan struct {
+	ID        int64     `gorm:"primaryKey;autoIncrement"`
+	Email     string    `gorm:"type:text;not null;uniqueIndex"`
+	BannedAt  time.Time `gorm:"not null"`
+	ExpiresAt time.Time `gorm:"not null;index"`
+	// Reason contains a human-readable description, e.g. "5 unique IPs in 3m (limit 3)".
+	Reason string `gorm:"type:text"`
+}

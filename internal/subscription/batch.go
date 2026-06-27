@@ -66,18 +66,44 @@ func ApplyBatchOperations(cfg *appconfig.Config, payload slave.BatchPayload) Bat
 	apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
 	
 	var wg sync.WaitGroup
+	var errs []string
+	var mu sync.Mutex
 
-	// 1. Hot-Remove
+	addErr := func(err error) {
+		if err != nil {
+			mu.Lock()
+			errs = append(errs, err.Error())
+			mu.Unlock()
+		}
+	}
+
+	// 1. Hot-Remove explicitly removed users
 	tagsMap, _ := xrayconfig.InboundTagsForUsers(originalCfg, payload.Remove)
 	for _, email := range payload.Remove {
 		tags := tagsMap[email]
 		wg.Add(1)
 		go func(e string, t []string) {
 			defer wg.Done()
-			_ = apiClient.RemoveUser(e, t)
+			addErr(apiClient.RemoveUser(e, t))
 		}(email, tags)
 	}
 	
+	// 1.5. Hot-Remove for Add users (to prevent "already exists" error on update)
+	addTagsMap, _ := xrayconfig.InboundTagsForUsers(originalCfg, addEmails)
+	for _, email := range addEmails {
+		tags := addTagsMap[email]
+		if len(tags) > 0 {
+			wg.Add(1)
+			go func(e string, t []string) {
+				defer wg.Done()
+				_ = apiClient.RemoveUser(e, t) // Ignore errors if they don't exist
+			}(email, tags)
+		}
+	}
+
+	// Wait for all removals to finish before adding
+	wg.Wait()
+
 	// 2. Hot-Add/Update
 	for _, u := range payload.Add {
 		params := xrayconfig.ClientParams{
@@ -93,16 +119,20 @@ func ApplyBatchOperations(cfg *appconfig.Config, payload slave.BatchPayload) Bat
 			wg.Add(1)
 			go func(tg []xrayconfig.TaggedClient) {
 				defer wg.Done()
-				_ = apiClient.AddUser(tg, cfg.Paths.XrayConfig)
+				addErr(apiClient.AddUser(tg, cfg.Paths.XrayConfig))
 			}(tagged)
 		}
 	}
 
 	wg.Wait()
 
+	if len(errs) > 0 {
+		return BatchApplyResult{Ok: false, Error: fmt.Sprintf("grpc errors: %v", errs)}
+	}
+
 	return BatchApplyResult{
 		Ok:      true,
-		Status:  "success",
+		Status:  "ok",
 		Added:   len(payload.Add),
 		Removed: len(payload.Remove),
 	}

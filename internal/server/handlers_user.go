@@ -982,6 +982,11 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	// Also unblock the global user record just in case they were globally banned
 	db.Model(&database.User{}).Where("id = ?", sub.UserID).Update("is_blocked", false)
 
+	// If Anti-Fraud module is active, force lift any soft-ban on this user.
+	if r.forceUnban != nil {
+		r.forceUnban(email)
+	}
+
 	// Reload sub from DB so unbanUserInXray receives fresh max_devices / status.
 	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
 		r.log.Error("admin unblock user: reload subscription", "err", err)

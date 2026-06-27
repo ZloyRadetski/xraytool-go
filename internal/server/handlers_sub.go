@@ -50,7 +50,7 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// 5. Execute subscription process directly in memory using SQL Database
-	subRes := subscription.ProcessSQL(database.DB(), r.cm, r.dispatcher, subReq)
+	subRes := subscription.ProcessSQL(database.DB(), r.cm, r.dispatcher, subReq, r.isBanned)
 
 	// 6. Send headers and write body
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
