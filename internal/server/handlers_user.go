@@ -7,6 +7,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -489,8 +490,16 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	}
 	_ = user // Ignore unused var
 
-	code := generateOTPCode()
-	setOTP(body.TelegramID, code, 5*time.Minute)
+	code, err := requestOTP(body.TelegramID, 5*time.Minute)
+	if err != nil {
+		if errors.Is(err, ErrMaxRequestsReached) {
+			r.log.Warn("auth request rate limited", "telegram_id", body.TelegramID, "ip", req.RemoteAddr)
+			writeError(w, http.StatusTooManyRequests, "too many requests, try again later")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to generate otp")
+		return
+	}
 
 	if r.dispatcher != nil {
 		r.dispatcher.Dispatch("auth.request_code", map[string]interface{}{
@@ -522,7 +531,17 @@ func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if !verifyOTP(body.TelegramID, body.Code) {
+	ok, err := verifyOTP(body.TelegramID, body.Code)
+	if err != nil {
+		if errors.Is(err, ErrMaxAttemptsReached) {
+			r.log.Warn("auth brute force detected", "telegram_id", body.TelegramID, "ip", req.RemoteAddr)
+			writeError(w, http.StatusForbidden, "too many failed attempts. please request a new code")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}

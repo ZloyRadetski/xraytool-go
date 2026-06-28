@@ -2,14 +2,23 @@ package server
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
 
-type OTP struct {
-	Code      string
-	ExpiresAt time.Time
+var (
+	ErrMaxRequestsReached = errors.New("max requests reached")
+	ErrMaxAttemptsReached = errors.New("max attempts reached")
+)
+
+type otpEntry struct {
+	mu           sync.Mutex
+	code         string
+	expiresAt    time.Time
+	attempts     int
+	requestCount int
 }
 
 var (
@@ -24,28 +33,59 @@ func generateOTPCode() string {
 	return fmt.Sprintf("%06d", val)
 }
 
-func setOTP(telegramID int64, code string, ttl time.Duration) {
-	otpCache.Store(telegramID, OTP{
-		Code:      code,
-		ExpiresAt: time.Now().Add(ttl),
-	})
+func requestOTP(telegramID int64, ttl time.Duration) (string, error) {
+	val, loaded := otpCache.LoadOrStore(telegramID, &otpEntry{})
+	entry := val.(*otpEntry)
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	now := time.Now()
+	// Reset counters if expired
+	if loaded && now.After(entry.expiresAt) {
+		entry.attempts = 0
+		entry.requestCount = 0
+	}
+
+	if entry.requestCount >= 2 {
+		return "", ErrMaxRequestsReached
+	}
+
+	entry.code = generateOTPCode()
+	entry.expiresAt = now.Add(ttl)
+	entry.requestCount++
+
+	return entry.code, nil
 }
 
-func verifyOTP(telegramID int64, code string) bool {
+func verifyOTP(telegramID int64, code string) (bool, error) {
 	val, ok := otpCache.Load(telegramID)
 	if !ok {
-		return false
+		return false, nil
 	}
-	otp := val.(OTP)
-	if time.Now().After(otp.ExpiresAt) {
+
+	entry := val.(*otpEntry)
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	if time.Now().After(entry.expiresAt) {
 		otpCache.Delete(telegramID)
-		return false
+		return false, nil
 	}
-	if otp.Code == code {
+
+	if entry.code == code {
 		otpCache.Delete(telegramID)
-		return true
+		return true, nil
 	}
-	return false
+
+	entry.attempts++
+	if entry.attempts >= 3 {
+		otpCache.Delete(telegramID)
+		return false, ErrMaxAttemptsReached
+	}
+
+	return false, nil
 }
 
 func init() {
@@ -55,8 +95,12 @@ func init() {
 			time.Sleep(10 * time.Minute)
 			now := time.Now()
 			otpCache.Range(func(key, value interface{}) bool {
-				otp := value.(OTP)
-				if now.After(otp.ExpiresAt) {
+				entry := value.(*otpEntry)
+				entry.mu.Lock()
+				expired := now.After(entry.expiresAt)
+				entry.mu.Unlock()
+
+				if expired {
 					otpCache.Delete(key)
 				}
 				return true
