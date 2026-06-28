@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -87,15 +86,13 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 
 	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
 	if telegramIDStr != "" {
-		if tgID, err := strconv.ParseInt(telegramIDStr, 10, 64); err == nil {
-			user, err := findUserByTelegramID(db, tgID)
-			if err == nil {
-				var count int64
-				db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
-				if count > 0 {
-					writeError(w, http.StatusBadRequest, "promo code already used by this user")
-					return
-				}
+		user, err := findUserByPlatformID(db, "telegram", telegramIDStr)
+		if err == nil {
+			var count int64
+			db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
+			if count > 0 {
+				writeError(w, http.StatusBadRequest, "promo code already used by this user")
+				return
 			}
 		}
 	}

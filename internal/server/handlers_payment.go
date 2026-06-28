@@ -82,7 +82,8 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	db := database.DB()
 
 	// Find user by telegram_id.
-	user, err := findUserByTelegramID(db, body.TelegramID)
+	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
+	user, err := findUserByPlatformID(db, "telegram", tgIDStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -237,16 +238,13 @@ func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
 	}
 	// Filter by telegram_id (via user lookup).
 	if tgIDStr := q.Get("telegram_id"); tgIDStr != "" {
-		tgID, err := strconv.ParseInt(tgIDStr, 10, 64)
+		user, err := findUserByPlatformID(db, "telegram", tgIDStr)
 		if err == nil {
-			user, err := findUserByTelegramID(db, tgID)
-			if err == nil {
-				query = query.Where("user_id = ?", user.ID)
-			} else {
-				// Unknown user → return empty list.
-				writeJSON(w, http.StatusOK, []interface{}{})
-				return
-			}
+			query = query.Where("user_id = ?", user.ID)
+		} else {
+			// Unknown user → return empty list.
+			writeJSON(w, http.StatusOK, []interface{}{})
+			return
 		}
 	}
 

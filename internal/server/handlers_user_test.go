@@ -252,20 +252,20 @@ func TestGetUserByTelegram_SQLiteRepresentationsAndEdgeCases(t *testing.T) {
 
 	// Test zero ID lookup
 	wZero := doAuth(r, "GET", "/api/v1/users/telegram/0", "")
-	if wZero.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for zero tg ID, got %d", wZero.Code)
+	if wZero.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for zero tg ID, got %d", wZero.Code)
 	}
 
 	// Test extremely large ID lookup
 	wLarge := doAuth(r, "GET", "/api/v1/users/telegram/999999999999999999999999999999", "")
-	if wLarge.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for extremely large tg ID, got %d", wLarge.Code)
+	if wLarge.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for extremely large tg ID, got %d", wLarge.Code)
 	}
 
 	// Test non-numeric ID lookup
 	wAlpha := doAuth(r, "GET", "/api/v1/users/telegram/abc", "")
-	if wAlpha.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for alpha tg ID, got %d", wAlpha.Code)
+	if wAlpha.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for alpha tg ID, got %d", wAlpha.Code)
 	}
 
 	// Test register with extremely large ID (causes json unmarshal error)
@@ -316,14 +316,26 @@ func TestGetUserByTelegram_EdgeCases(t *testing.T) {
 
 	// 3. Zero ID
 	wZeroGet := doAuth(r, "GET", "/api/v1/users/telegram/0", "")
-	if wZeroGet.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 Bad Request for zero ID, got %d", wZeroGet.Code)
+	if wZeroGet.Code != http.StatusNotFound {
+		t.Errorf("expected 404 Not Found for zero ID, got %d", wZeroGet.Code)
 	}
 
 	// 4. Invalid non-numeric ID
 	wInvalidGet := doAuth(r, "GET", "/api/v1/users/telegram/abc", "")
-	if wInvalidGet.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 Bad Request for non-numeric ID, got %d", wInvalidGet.Code)
+	if wInvalidGet.Code != http.StatusNotFound {
+		t.Errorf("expected 404 Not Found for non-numeric ID, got %d", wInvalidGet.Code)
+	}
+}
+
+func TestRequestCode(t *testing.T) {
+	r := newTestRouter(t)
+	
+	// Must register user first because request_code validates existence
+	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1234,"username":"Tester"}`)
+
+	w := doAuth(r, "POST", "/api/v1/users/request_code", `{"telegram_id": 1234}`)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
 

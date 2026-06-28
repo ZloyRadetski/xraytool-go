@@ -111,18 +111,19 @@ func (r *Router) registerRoutes() {
 
 	// Users
 	r.mux.Handle("POST /api/v1/users/register", protected(r.handleRegisterUser))
+	r.mux.Handle("POST /api/v1/users/request_code", protected(r.handleRequestCode))
+	r.mux.Handle("POST /api/v1/users/verify_code", protected(r.handleVerifyCode))
 	r.mux.Handle("GET /api/v1/users", protected(r.handleListUsers))
 	r.mux.Handle("GET /api/v1/users/admins", protected(r.handleListAdmins))
-	r.mux.Handle("GET /api/v1/users/telegram/{id}", protected(r.handleGetUserByTelegram))
-	r.mux.Handle("GET /api/v1/users/telegram/{id}/devices", protected(r.handleGetDevices))
-	r.mux.Handle("DELETE /api/v1/users/telegram/{id}/devices/{device_id}", protected(r.handleDeleteDevice))
-	r.mux.Handle("GET /api/v1/users/uuid/{id}", protected(r.handleGetUserByUUID))
+	r.mux.Handle("GET /api/v1/users/{platform}/{id}", protected(r.handleGetUserByPlatform))
+	r.mux.Handle("GET /api/v1/users/{platform}/{id}/devices", protected(r.handleGetDevices))
+	r.mux.Handle("DELETE /api/v1/users/{platform}/{id}/devices/{device_id}", protected(r.handleDeleteDevice))
 	r.mux.Handle("GET /api/v1/users/ref/{code}", protected(r.handleGetUserByRef))
-	r.mux.Handle("POST /api/v1/users/telegram/{id}/balance", protected(r.handleAdjustBalance))
-	r.mux.Handle("POST /api/v1/users/telegram/{id}/max-devices", protected(r.handleSetMaxDevices))
-	r.mux.Handle("POST /api/v1/users/telegram/{id}/auto-renew-toggle", protected(r.handleAutoRenewToggle))
-	r.mux.Handle("POST /api/v1/users/telegram/{id}/auto-renew", protected(r.handleAutoRenew))
-	r.mux.Handle("POST /api/v1/users/telegram/{id}/metadata", protected(r.handleSetMetadata))
+	r.mux.Handle("POST /api/v1/users/{platform}/{id}/balance", protected(r.handleAdjustBalance))
+	r.mux.Handle("POST /api/v1/users/{platform}/{id}/max-devices", protected(r.handleSetMaxDevices))
+	r.mux.Handle("POST /api/v1/users/{platform}/{id}/auto-renew-toggle", protected(r.handleAutoRenewToggle))
+	r.mux.Handle("POST /api/v1/users/{platform}/{id}/auto-renew", protected(r.handleAutoRenew))
+	r.mux.Handle("POST /api/v1/users/{platform}/{id}/metadata", protected(r.handleSetMetadata))
 
 	// Plans & Promocodes
 	r.mux.Handle("GET /api/v1/plans", protected(r.handleGetPlans))
@@ -143,9 +144,8 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/admin/users/{email}/block", protected(r.handleAdminBlockUser))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/unblock", protected(r.handleAdminUnblockUser))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/set-expire", protected(r.handleAdminSetExpire))
-	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-ban", protected(r.handleAdminGlobalBan))
-	r.mux.Handle("POST /api/v1/admin/users/telegram/{id}/global-unban", protected(r.handleAdminGlobalUnban))
-	
+	r.mux.Handle("POST /api/v1/admin/users/{platform}/{id}/global-ban", protected(r.handleAdminGlobalBan))
+	r.mux.Handle("POST /api/v1/admin/users/{platform}/{id}/global-unban", protected(r.handleAdminGlobalUnban))
 	// Anti-Fraud
 	r.mux.Handle("GET /api/v1/admin/antifraud/state", protected(r.handleAdminAntiFraudState))
 	

@@ -31,33 +31,50 @@ import (
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// findUserByTelegramID locates a User whose Metadata contains
-// "telegram_id":<tgID>. Works for both SQLite (TEXT JSON) and Postgres (JSONB
-// serialised as text by GORM).
-func findUserByTelegramID(db *gorm.DB, tgID int64) (*database.User, error) {
-	var users []database.User
-	tgIDStr := strconv.FormatInt(tgID, 10)
+// findUserByPlatformID locates a User by its ID depending on the platform (uuid, telegram, or web)
+func findUserByPlatformID(db *gorm.DB, platform, id string) (*database.User, error) {
+	if platform == "uuid" {
+		var user database.User
+		if err := db.Where("id = ?", id).First(&user).Error; err != nil {
+			return nil, err
+		}
+		return &user, nil
+	}
 
+	var users []database.User
 	var query *gorm.DB
+	
 	switch db.Dialector.Name() {
 	case "sqlite":
-		query = db.Where(
-			"json_extract(metadata, '$.telegram_id') = ? OR json_extract(metadata, '$.telegram_id') = ?",
-			tgID,
-			tgIDStr,
-		)
+		if platform == "telegram" {
+			tgIDInt, _ := strconv.ParseInt(id, 10, 64)
+			query = db.Where(
+				"json_extract(metadata, '$.telegram_id') = ? OR json_extract(metadata, '$.telegram_id') = ?",
+				tgIDInt, id,
+			)
+		} else if platform == "web" {
+			query = db.Where("json_extract(metadata, '$.email') = ?", id)
+		}
 	case "postgres":
-		query = db.Where(
-			"metadata::jsonb ->> 'telegram_id' = ?",
-			tgIDStr,
-		)
-	default:
-		// Fallback safe query using SQLite/json_extract syntax
-		query = db.Where(
-			"json_extract(metadata, '$.telegram_id') = ? OR json_extract(metadata, '$.telegram_id') = ?",
-			tgID,
-			tgIDStr,
-		)
+		if platform == "telegram" {
+			query = db.Where("metadata::jsonb ->> 'telegram_id' = ?", id)
+		} else if platform == "web" {
+			query = db.Where("metadata::jsonb ->> 'email' = ?", id)
+		}
+	}
+
+	if query == nil {
+		if platform == "telegram" {
+			tgIDInt, _ := strconv.ParseInt(id, 10, 64)
+			query = db.Where(
+				"json_extract(metadata, '$.telegram_id') = ? OR json_extract(metadata, '$.telegram_id') = ?",
+				tgIDInt, id,
+			)
+		} else if platform == "web" {
+			query = db.Where("json_extract(metadata, '$.email') = ?", id)
+		} else {
+			return nil, fmt.Errorf("unsupported platform: %s", platform)
+		}
 	}
 
 	result := query.Limit(1).Find(&users)
@@ -335,7 +352,8 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 	db := database.DB()
 
 	// Idempotency: if user already exists return it.
-	existing, err := findUserByTelegramID(db, body.TelegramID)
+	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
+	existing, err := findUserByPlatformID(db, "telegram", tgIDStr)
 	if err == nil && existing != nil {
 		writeJSON(w, http.StatusOK, r.buildUserResponse(db, existing))
 		return
@@ -448,19 +466,80 @@ func (r *Router) handleListAdmins(w http.ResponseWriter, req *http.Request) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /api/v1/users/telegram/{id}
+// POST /api/v1/users/request_code
+// Body: {"telegram_id":123,"code":"123456"}
 // ─────────────────────────────────────────────────────────────────────────────
 
-func (r *Router) handleGetUserByTelegram(w http.ResponseWriter, req *http.Request) {
-	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
+func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		TelegramID int64 `json:"telegram_id"`
+	}
+	if !readBody(w, req, &body) {
+		return
+	}
+	if body.TelegramID == 0 {
+		writeError(w, http.StatusBadRequest, "telegram_id is required")
 		return
 	}
 
+	user, err := findUserByPlatformID(database.DB(), "telegram", strconv.FormatInt(body.TelegramID, 10))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found. please start the bot first")
+		return
+	}
+	_ = user // Ignore unused var
+
+	code := generateOTPCode()
+	setOTP(body.TelegramID, code, 5*time.Minute)
+
+	if r.dispatcher != nil {
+		r.dispatcher.Dispatch("auth.request_code", map[string]interface{}{
+			"telegram_id": body.TelegramID,
+			"code":        code,
+		}, nil)
+	} else {
+		r.log.Warn("dispatcher is nil, cannot send webhook for request_code")
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/users/verify_code
+// Body: {"telegram_id":123,"code":"123456"}
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		TelegramID int64  `json:"telegram_id"`
+		Code       string `json:"code"`
+	}
+	if !readBody(w, req, &body) {
+		return
+	}
+	if body.TelegramID == 0 || body.Code == "" {
+		writeError(w, http.StatusBadRequest, "telegram_id and code are required")
+		return
+	}
+
+	if !verifyOTP(body.TelegramID, body.Code) {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/users/{platform}/{id}
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (r *Router) handleGetUserByPlatform(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
+	idStr := req.PathValue("id")
+
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -490,17 +569,13 @@ func (r *Router) handleGetUserByRef(w http.ResponseWriter, req *http.Request) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/users/telegram/{id}/balance
+// POST /api/v1/users/{platform}/{id}/balance
 // Body: {"amount":100}  →  {"balance":200}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	var body struct {
 		Amount int `json:"amount"`
@@ -514,7 +589,7 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -538,17 +613,13 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/users/telegram/{id}/max-devices
+// POST /api/v1/users/{platform}/{id}/max-devices
 // Body: {"max_devices":5}  →  {"ok":true}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	var body struct {
 		MaxDevices int `json:"max_devices"`
@@ -562,7 +633,7 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -589,12 +660,8 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	var body struct {
 		AutoRenew bool `json:"auto_renew"`
@@ -604,7 +671,7 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -626,18 +693,14 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/users/telegram/{id}/auto-renew
+// POST /api/v1/users/{platform}/{id}/auto-renew
 // Body: {"plan_total_price":159,"new_ends_at":"2026-07-04T..."}
 // Atomically deducts balance and extends subscription. →  {"ok":true}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	var body struct {
 		PlanTotalPrice int    `json:"plan_total_price"`
@@ -665,7 +728,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -761,12 +824,8 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	var body struct {
 		Key   string      `json:"key"`
@@ -781,7 +840,7 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1068,17 +1127,13 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 // Device Management
 // ---------------------------------------------------------------------------
 
-// GET /api/v1/users/telegram/{id}/devices
+// GET /api/v1/users/{platform}/{id}/devices
 func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
-	tgIDStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(tgIDStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
+	platform := req.PathValue("platform")
+	idStr := req.PathValue("id")
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1099,19 +1154,14 @@ func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, devices)
 }
 
-// DELETE /api/v1/users/telegram/{id}/devices/{device_id}
+// DELETE /api/v1/users/{platform}/{id}/devices/{device_id}
 func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
-	tgIDStr := req.PathValue("id")
+	platform := req.PathValue("platform")
+	idStr := req.PathValue("id")
 	deviceIDStr := req.PathValue("device_id")
 
-	tgID, err := strconv.ParseInt(tgIDStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
-
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1221,35 +1271,15 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 	}
 }
 
-// GET /api/v1/users/uuid/{id}
-func (r *Router) handleGetUserByUUID(w http.ResponseWriter, req *http.Request) {
-	id := req.PathValue("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "uuid path parameter is required")
-		return
-	}
 
-	db := database.DB()
-	var existing database.User
-	if err := db.Where("id = ?", id).First(&existing).Error; err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
-	}
 
-	writeJSON(w, http.StatusOK, r.buildUserResponse(db, &existing))
-}
-
-// POST /api/v1/admin/users/telegram/{id}/global-ban
+// POST /api/v1/admin/users/{platform}/{id}/global-ban
 func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1289,21 +1319,17 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	r.log.Warn("admin action", "action", "global-ban", "telegram_id", tgID, "caller_ip", getClientIP(req))
+	r.log.Warn("admin action", "action", "global-ban", "id", idStr, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// POST /api/v1/admin/users/telegram/{id}/global-unban
+// POST /api/v1/admin/users/{platform}/{id}/global-unban
 func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request) {
+	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
-	tgID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || tgID == 0 {
-		writeError(w, http.StatusBadRequest, "invalid telegram id")
-		return
-	}
 
 	db := database.DB()
-	user, err := findUserByTelegramID(db, tgID)
+	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1322,7 +1348,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 		go r.unbanUserInXray(sub)
 	}
 
-	r.log.Warn("admin action", "action", "global-unban", "telegram_id", tgID, "caller_ip", getClientIP(req))
+	r.log.Warn("admin action", "action", "global-unban", "id", idStr, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

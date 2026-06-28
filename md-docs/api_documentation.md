@@ -98,6 +98,51 @@ X-API-Key: secret
 }
 ```
 
+
+### 3.1. `POST /api/v1/users/request_code`
+Запрос кода для авторизации на сайте через Telegram. При вызове бэкенд xraytool **сам генерирует 6-значный код** и сохраняет его во временном кэше (на 5 минут), а затем генерирует webhook `auth.request_code`, который ловит Python-бот и отправляет этот код пользователю в Telegram.
+
+**Пример запроса:**
+```http
+POST /api/v1/users/request_code HTTP/1.1
+Content-Type: application/json
+X-API-Key: secret
+
+{
+  "telegram_id": 123456789
+}
+```
+
+**Пример ответа (200 OK):**
+```json
+{
+  "ok": true
+}
+```
+
+### 3.2. `POST /api/v1/users/verify_code`
+Проверка введенного кода подтверждения. Если код верный, бэкенд возвращает 200 OK, и SvelteKit может авторизовать пользователя.
+
+**Пример запроса:**
+```http
+POST /api/v1/users/verify_code HTTP/1.1
+Content-Type: application/json
+X-API-Key: secret
+
+{
+  "telegram_id": 123456789,
+  "code": "843912"
+}
+```
+
+**Пример ответа (200 OK):**
+```json
+{
+  "ok": true
+}
+```
+*(В случае неверного или просроченного кода вернется 401 Unauthorized)*
+
 ### 4. `GET /api/v1/users`
 Получение списка всех пользователей.
 
@@ -136,8 +181,13 @@ X-API-Key: secret
 ]
 ```
 
-### 6. `GET /api/v1/users/telegram/{id}`
-Получение пользователя по его Telegram ID.
+### 6. `GET /api/v1/users/{platform}/{id}`
+Получение пользователя по его платформенному ID.
+
+`platform` может быть:
+- `telegram` (поиск по `telegram_id` в метаданных)
+- `web` (поиск по `email` в метаданных)
+- `uuid` (поиск по основному UUID)
 
 **Пример запроса:**
 ```http
@@ -147,7 +197,7 @@ X-API-Key: secret
 
 **Пример ответа (200 OK):** *(См. структуру ответа регистрации)*
 
-### 7. `GET /api/v1/users/telegram/{id}/devices`
+### 7. `GET /api/v1/users/{platform}/{id}/devices`
 Получение списка подключенных устройств пользователя.
 
 **Пример запроса:**
@@ -170,7 +220,7 @@ X-API-Key: secret
 ]
 ```
 
-### 8. `DELETE /api/v1/users/telegram/{id}/devices/{device_id}`
+### 8. `DELETE /api/v1/users/{platform}/{id}/devices/{device_id}`
 Удаление устройства пользователя (с авто-разблокировкой при необходимости).
 
 **Пример запроса:**
@@ -197,7 +247,7 @@ X-API-Key: secret
 
 **Пример ответа (200 OK):** *(См. структуру ответа регистрации)*
 
-### 10. `POST /api/v1/users/telegram/{id}/balance`
+### 10. `POST /api/v1/users/{platform}/{id}/balance`
 Атомарное изменение баланса пользователя. Для списания передайте отрицательное значение.
 
 **Пример запроса:**
@@ -218,7 +268,7 @@ X-API-Key: secret
 }
 ```
 
-### 11. `POST /api/v1/users/telegram/{id}/max-devices`
+### 11. `POST /api/v1/users/{platform}/{id}/max-devices`
 Установка максимального количества разрешенных устройств.
 
 **Пример запроса:**
@@ -239,7 +289,7 @@ X-API-Key: secret
 }
 ```
 
-### 12. `POST /api/v1/users/telegram/{id}/auto-renew-toggle`
+### 12. `POST /api/v1/users/{platform}/{id}/auto-renew-toggle`
 Включение/выключение автопродления подписки.
 
 **Пример запроса:**
@@ -260,7 +310,7 @@ X-API-Key: secret
 }
 ```
 
-### 13. `POST /api/v1/users/telegram/{id}/auto-renew`
+### 13. `POST /api/v1/users/{platform}/{id}/auto-renew`
 Атомарное продление подписки со списанием средств с баланса и автоматическим разбаном в Xray.
 
 **Пример запроса:**
@@ -283,7 +333,7 @@ X-API-Key: secret
 ```
 *(При нехватке средств вернется `402 Payment Required`)*
 
-### 14. `POST /api/v1/users/telegram/{id}/metadata`
+### 14. `POST /api/v1/users/{platform}/{id}/metadata`
 Обновление/добавление кастомного ключа в `metadata` пользователя.
 
 **Пример запроса:**
@@ -495,8 +545,8 @@ X-API-Key: secret
 }
 ```
 
-### 23. `POST /api/v1/admin/users/telegram/{id}/global-ban`
-Глобальная блокировка пользователя по Telegram ID. Отключает подписку, удаляет из Xray и устанавливает флаг `is_blocked = true`. Пользователь не сможет продлевать подписку или покупать новую, пока не будет разбанен.
+### 23. `POST /api/v1/admin/users/{platform}/{id}/global-ban`
+Глобальная блокировка пользователя. Отключает подписку, удаляет из Xray и устанавливает флаг `is_blocked = true`. Пользователь не сможет продлевать подписку или покупать новую, пока не будет разбанен.
 
 **Пример запроса:**
 ```http
@@ -511,8 +561,8 @@ X-API-Key: secret
 }
 ```
 
-### 24. `POST /api/v1/admin/users/telegram/{id}/global-unban`
-Снятие глобальной блокировки пользователя по Telegram ID. Устанавливает флаг `is_blocked = false` и, если подписка активна, немедленно возвращает доступ в Xray.
+### 24. `POST /api/v1/admin/users/{platform}/{id}/global-unban`
+Снятие глобальной блокировки пользователя. Устанавливает флаг `is_blocked = false` и, если подписка активна, немедленно возвращает доступ в Xray.
 
 **Пример запроса:**
 ```http
@@ -564,3 +614,87 @@ X-API-Key: secret
   "error": "promo code usage limit reached"
 }
 ```
+
+### 25. `GET /api/v1/admin/users`
+Получение полного списка пользователей для админ-панели.
+
+### 26. `GET /api/v1/admin/payments/stats`
+Получение статистики по платежам (сумма, количество и т.д.).
+
+### 27. `GET /api/v1/admin/antifraud/state`
+Просмотр текущего состояния системы антифрода (метрики аномалий).
+
+### 28. `POST /api/v1/admin/promocodes`
+Создание нового промокода.
+**Пример запроса:**
+```http
+POST /api/v1/admin/promocodes HTTP/1.1
+Content-Type: application/json
+X-API-Key: secret
+
+{
+  "code": "NEW20",
+  "discount_percent": 20,
+  "max_uses": 100,
+  "target_platform": "all",
+  "is_active": true
+}
+```
+
+### 29. `GET /api/v1/admin/promocodes`
+Список всех промокодов.
+
+### 30. `PUT /api/v1/admin/promocodes/{id}`
+Редактирование промокода.
+
+### 31. `DELETE /api/v1/admin/promocodes/{id}`
+Удаление промокода.
+
+---
+## ⚙️ Внутренние методы (Internal)
+
+### 32. `POST /api/v1/internal/xray/sync`
+Принудительная синхронизация состояния БД с ядром Xray.
+**Пример запроса:**
+```http
+POST /api/v1/internal/xray/sync HTTP/1.1
+X-API-Key: secret
+```
+
+---
+## 📤 Исходящие вебхуки (Outbound Webhooks)
+
+`xraytool-go` умеет отправлять асинхронные HTTP POST-запросы на адреса, указанные в `config.yaml` (`webhooks`). Вебхуки полезны для мгновенного уведомления Telegram-бота о событиях на бэкенде.
+
+**Формат исходящего вебхука:**
+```json
+{
+  "event_id": "evt_abc123",
+  "event_type": "event.name",
+  "timestamp": "2026-06-11T12:00:00Z",
+  "data": {
+    "key": "value"
+  },
+  "user_metadata": {
+    "telegram_id": 123456
+  }
+}
+```
+
+**Доступные типы событий (`event_type`):**
+
+#### 1. `auth.request_code`
+Генерируется при вызове `/api/v1/users/request_code`. Бот ловит это событие и отправляет код подтверждения пользователю.
+* **Data:** `{"telegram_id": 12345, "code": "843912"}`
+
+#### 2. `payment.completed`
+Генерируется после успешного завершения платежа.
+* **Data:** `{"payment_id": 42, "amount": 159, "telegram_id": 12345}`
+
+#### 3. `referral.reward`
+Генерируется, когда пользователю начислен реферальный процент.
+* **Data:** `{"user_id": "uuid...", "amount": 39, "from_payment_id": 42, "telegram_id": 12345}`
+
+#### 4. `platega.callback`
+Трансляция сырого вебхука от платежки Platega.
+* **Data:** `{"external_id": "...", "status": "completed", ...}`
