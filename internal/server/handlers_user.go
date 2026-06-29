@@ -55,13 +55,13 @@ func findUserByPlatformID(db *gorm.DB, platform, id string) (*database.User, err
 				tgIDInt, id,
 			)
 		} else if platform == "web" {
-			query = db.Where("json_extract(metadata, '$.email') = ?", id)
+			query = db.Where("json_extract(metadata, '$.email') = ? OR username = ?", id, id)
 		}
 	case "postgres":
 		if platform == "telegram" {
 			query = db.Where("metadata::jsonb ->> 'telegram_id' = ?", id)
 		} else if platform == "web" {
-			query = db.Where("metadata::jsonb ->> 'email' = ?", id)
+			query = db.Where("metadata::jsonb ->> 'email' = ? OR username = ?", id, id)
 		}
 	}
 
@@ -73,7 +73,7 @@ func findUserByPlatformID(db *gorm.DB, platform, id string) (*database.User, err
 				tgIDInt, id,
 			)
 		} else if platform == "web" {
-			query = db.Where("json_extract(metadata, '$.email') = ?", id)
+			query = db.Where("json_extract(metadata, '$.email') = ? OR username = ?", id, id)
 		} else {
 			return nil, fmt.Errorf("unsupported platform: %s", platform)
 		}
