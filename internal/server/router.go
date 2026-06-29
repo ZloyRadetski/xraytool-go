@@ -156,6 +156,7 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/admin/users/{email}/set-expire", protected(r.handleAdminSetExpire))
 	r.mux.Handle("POST /api/v1/admin/users/{platform}/{id}/global-ban", protected(r.handleAdminGlobalBan))
 	r.mux.Handle("POST /api/v1/admin/users/{platform}/{id}/global-unban", protected(r.handleAdminGlobalUnban))
+	r.mux.Handle("DELETE /api/v1/admin/users/{platform}/{id}", protected(r.handleAdminDeleteUser))
 	// Anti-Fraud
 	r.mux.Handle("GET /api/v1/admin/antifraud/state", protected(r.handleAdminAntiFraudState))
 	

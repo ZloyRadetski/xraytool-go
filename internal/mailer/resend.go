@@ -81,13 +81,11 @@ func buildHTML(code string) string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ваш код входа — Torvalds VPN</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;700;900&family=Space+Mono:wght@400;700&display=swap');
-
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
       background-color: #0d0d0d;
-      font-family: 'Space Grotesk', Arial, sans-serif;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       color: #f0f0f0;
       padding: 32px 16px;
     }
@@ -177,7 +175,7 @@ func buildHTML(code string) string {
     }
 
     .code-label {
-      font-family: 'Space Mono', monospace;
+      font-family: 'Courier New', Courier, monospace;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 3px;
@@ -187,7 +185,7 @@ func buildHTML(code string) string {
     }
 
     .code-value {
-      font-family: 'Space Mono', 'Courier New', monospace;
+      font-family: 'Courier New', Courier, monospace;
       font-size: 52px;
       font-weight: 700;
       letter-spacing: 14px;
@@ -236,7 +234,7 @@ func buildHTML(code string) string {
       text-align: center;
       font-size: 11px;
       color: #3a3a3a;
-      font-family: 'Space Mono', monospace;
+      font-family: 'Courier New', Courier, monospace;
       letter-spacing: 1px;
       line-height: 1.8;
     }
@@ -253,11 +251,7 @@ func buildHTML(code string) string {
     <!-- Header / Brand -->
     <div class="header">
       <div class="logo-icon">
-        <svg width="26" height="26" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="1" y="1" width="24" height="24" rx="2" stroke="#f5d800" stroke-width="2"/>
-          <path d="M7 13 L13 7 L19 13" stroke="#f5d800" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M13 7 L13 20" stroke="#f5d800" stroke-width="2.5" stroke-linecap="round"/>
-        </svg>
+        <span style="color:#f5d800; font-size:18px; font-weight:900;">T</span>
       </div>
       <div>
         <div class="logo-text">TORVALDS VPN</div>

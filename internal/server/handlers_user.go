@@ -1532,3 +1532,99 @@ func (r *Router) handleAdminAntiFraudState(w http.ResponseWriter, req *http.Requ
 		"active_slaves": snapshot.ActiveSlaves,
 	})
 }
+
+// handleAdminDeleteUser completely removes a user and all associated data from the DB and Xray config.
+func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	platform := req.PathValue("platform")
+	idStr := req.PathValue("id")
+
+	db := database.DB()
+
+	user, err := findUserByPlatformID(db, platform, idStr)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start db transaction")
+		return
+	}
+
+	var subs []database.Subscription
+	if err := tx.Where("user_id = ?", user.ID).Find(&subs).Error; err != nil {
+		tx.Rollback()
+		writeError(w, http.StatusInternalServerError, "failed to find subscriptions")
+		return
+	}
+
+	for _, sub := range subs {
+		// 1. Delete dependent tables
+		tx.Where("subscription_id = ?", sub.ID).Delete(&database.Device{})
+		tx.Where("subscription_id = ?", sub.ID).Delete(&database.SubscriptionNotification{})
+		tx.Where("email = ?", sub.Email).Delete(&database.AntifraudBan{})
+	}
+
+	// 2. Delete subscriptions
+	if err := tx.Where("user_id = ?", user.ID).Delete(&database.Subscription{}).Error; err != nil {
+		tx.Rollback()
+		writeError(w, http.StatusInternalServerError, "failed to delete subscriptions")
+		return
+	}
+
+	// 3. Delete payments and referrals
+	tx.Where("user_id = ?", user.ID).Delete(&database.Payment{})
+	tx.Where("referrer_id = ? OR referred_id = ?", user.ID, user.ID).Delete(&database.ReferralReward{})
+
+	// 4. Delete user
+	if err := tx.Delete(&user).Error; err != nil {
+		tx.Rollback()
+		writeError(w, http.StatusInternalServerError, "failed to delete user")
+		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit().Error; err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
+		return
+	}
+
+	// 5. Remove from Xray config and reload
+	xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
+	if err == nil {
+		for _, sub := range subs {
+			// Remove from runtime
+			apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
+			tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, sub.Email)
+			if len(tags) > 0 {
+				_ = apiClient.RemoveUser(sub.Email, tags)
+			}
+
+			// Remove from config on disk
+			_ = xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
+				return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
+			})
+
+			// Propagate to slaves
+			if r.cfg.IsMaster() {
+				client := slave.NewClient(
+					r.cfg.SlaveAPI.ConnectTimeout,
+					r.cfg.SlaveAPI.RequestTimeout,
+					r.cfg.SlaveAPI.RemotePath,
+				)
+				reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+				go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
+			}
+		}
+	}
+
+	r.log.Warn("admin action", "action", "delete-user", "id", idStr, "caller_ip", getClientIP(req))
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "success", "ok": true, "message": "User permanently deleted"})
+}
+
