@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"xraytool/internal/database"
 	"xraytool/internal/events"
@@ -179,6 +180,9 @@ func startServerCmd() *cobra.Command {
 			cacheManager := subscription.NewCacheManager(cfg)
 			cacheManager.Refresh()
 
+			// Initialize Dispatcher globally for the server to reuse http.Client
+			dispatcher := events.NewDispatcher(cfg)
+
 			subHandler := func(w http.ResponseWriter, r *http.Request) {
 				// 1. Collect request headers
 				headers := make(map[string]string)
@@ -215,8 +219,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				// 5. Execute subscription process directly in memory (No exec.Command)
-				dispatcher := events.NewDispatcher(cfg)
-				subRes := subscription.ProcessSQL(database.DB(), cacheManager, dispatcher, subReq, nil)
+				subRes := subscription.ProcessSQL(r.Context(), database.DB(), cacheManager, dispatcher, subReq, nil)
 
 				subID := subRes.SubID
 				if subID == "" {
@@ -485,7 +488,16 @@ func startServerCmd() *cobra.Command {
 			logger.Infof(" Allowed: %s", strings.Join(apiConfig.AllowedDirs, ", "))
 
 			logger.Infof("API server listening on 127.0.0.1:%d", port)
-			if err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), mux); err != nil {
+			
+			srv := &http.Server{
+				Addr:         fmt.Sprintf("127.0.0.1:%d", port),
+				Handler:      mux,
+				ReadTimeout:  10 * time.Second,
+				WriteTimeout: 20 * time.Second,
+				IdleTimeout:  120 * time.Second,
+			}
+			
+			if err := srv.ListenAndServe(); err != nil {
 				logger.Errorf("API Server failed: %v", err)
 				log.Fatal(err)
 			}

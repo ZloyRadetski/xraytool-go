@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -77,7 +78,7 @@ func TestProcessSQL_AntiFraudBan(t *testing.T) {
 	dispatcher := events.NewDispatcher(cfg)
 
 	// 3. Process
-	res := ProcessSQL(db, cm, dispatcher, req, isBanned)
+	res := ProcessSQL(context.Background(), db, cm, dispatcher, req, isBanned)
 
 	// 4. Verify result is the dummy config
 	assert.Equal(t, 200, res.StatusCode, "Should return 200 OK")
@@ -135,7 +136,7 @@ func TestProcessSQL_Normal(t *testing.T) {
 	dispatcher := events.NewDispatcher(cfg)
 
 	// 3. Process
-	res := ProcessSQL(db, cm, dispatcher, req, isBanned)
+	res := ProcessSQL(context.Background(), db, cm, dispatcher, req, isBanned)
 
 	// 4. Verify result is NOT the dummy config, but real generation
 	// Note: generating real configs will fail inside ProcessSQL because xray_config.json is missing,

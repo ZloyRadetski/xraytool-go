@@ -1,8 +1,10 @@
 package subscription
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,7 +24,7 @@ import (
 //
 // isBanned is a function provided by the antifraud module; pass nil to disable
 // anti-fraud checks (useful for tests or when the module is disabled).
-func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, req *Request, isBanned func(email string) bool) *Response {
+func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, req *Request, isBanned func(email string) bool) *Response {
 	cfg := cm.cfg
 
 	// 1. Resolve Client ID from request (xray_uuid)
@@ -61,15 +63,16 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	var subs []database.Subscription
 	var query *gorm.DB
 	if db.Dialector.Name() == "postgres" {
-		query = db.Where("id = ? OR xray_uuid = ? OR metadata::jsonb ->> 'subfile' = ? OR metadata::jsonb ->> 'subfile' = ?",
+		query = db.WithContext(ctx).Where("id = ? OR xray_uuid = ? OR metadata::jsonb ->> 'subfile' = ? OR metadata::jsonb ->> 'subfile' = ?",
 			clientId, clientId, clientId, clientId+".txt")
 	} else {
-		query = db.Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?",
+		query = db.WithContext(ctx).Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?",
 			clientId, clientId, clientId, clientId+".txt")
 	}
 
 	var user database.User
 	if err := query.Limit(1).Find(&subs).Error; err != nil {
+		logger.Errorf("[ProcessSQL] DB error fetching subscription %s: %v", clientId, err)
 		return failResponse(500, "Database error")
 	}
 
@@ -122,7 +125,11 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	} else {
 		source = "database"
 		sub = subs[0]
-		if err := db.Where("id = ?", sub.UserID).First(&user).Error; err != nil {
+		if err := db.WithContext(ctx).Where("id = ?", sub.UserID).First(&user).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Errorf("[ProcessSQL] DB error fetching user for sub %s: %v", sub.ID, err)
+				return failResponse(500, "Database error")
+			}
 			return failResponse(404, "User not found")
 		}
 	}
@@ -218,7 +225,7 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 
 			now := time.Now()
 
-			err := db.Transaction(func(tx *gorm.DB) error {
+			err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 				var device database.Device
 				res := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).Limit(1).Find(&device)
 
@@ -439,10 +446,9 @@ func ProcessSQL(db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, re
 	jsonPayload = replacer.Replace(jsonPayload)
 
 	// Validate JSON payload
-	var temp interface{}
-	if err := json.Unmarshal([]byte(jsonPayload), &temp); err != nil {
-		logger.Errorf("[ProcessSQL] Invalid template config JSON for sub %s: %v", sub.ID, err)
-		return failResponse(404, "Invalid template config JSON")
+	if !json.Valid([]byte(jsonPayload)) {
+		logger.Errorf("[ProcessSQL] Invalid template config JSON for sub %s", sub.ID)
+		return failResponse(500, "Invalid template config JSON")
 	}
 
 	if isVlessFormat {
