@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -466,34 +467,151 @@ func (r *Router) handleListAdmins(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, ids)
 }
 
+// emailRe is a permissive RFC-5322-like regex for basic email validation.
+// We intentionally keep it simple — the Resend API will reject truly invalid
+// addresses at delivery time.
+var emailRe = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
+// normalizeEmail lower-cases and trims whitespace so that Admin@Mail.com and
+// admin@mail.com resolve to the same account.
+func normalizeEmail(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+// findOrCreateWebUser looks up a user by email. If the user does not exist, it
+// creates a new User + Subscription record inside a single DB transaction.
+// This implements the "open registration" flow (Variant A).
+func (r *Router) findOrCreateWebUser(db *gorm.DB, email string) (*database.User, error) {
+	user, err := findUserByPlatformID(db, "web", email)
+	if err == nil {
+		return user, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("findOrCreateWebUser: db lookup: %w", err)
+	}
+
+	// --- Auto-registration ---
+	var newUser *database.User
+	txErr := db.Transaction(func(tx *gorm.DB) error {
+		userID := uuid.New().String()
+		refCode := generateRefCode(tx)
+
+		u := database.User{
+			ID:      userID,
+			Username: email,
+			Balance: 0,
+			IsAdmin: false,
+			RefCode: refCode,
+			Metadata: database.Metadata{
+				"email":  email,
+				"source": "website",
+			},
+		}
+		if err := tx.Create(&u).Error; err != nil {
+			return fmt.Errorf("create user: %w", err)
+		}
+
+		sub := database.Subscription{
+			ID:         uuid.New().String(),
+			UserID:     userID,
+			Email:      fmt.Sprintf("web_%s", uuid.New().String()[:8]),
+			XrayUUID:   uuid.New().String(),
+			Status:     "inactive",
+			MaxDevices: 3,
+			AutoRenew:  false,
+		}
+		if err := tx.Create(&sub).Error; err != nil {
+			return fmt.Errorf("create subscription: %w", err)
+		}
+
+		newUser = &u
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
+	}
+	r.log.Info("web auto-registration", "email", email, "user_id", newUser.ID)
+	return newUser, nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/users/request_code
-// Body: {"telegram_id":123,"code":"123456"}
+// Body (Telegram bot):  {"telegram_id": 123}
+// Body (Web / email):   {"platform": "web", "email": "user@example.com"}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	var body struct {
-		TelegramID int64 `json:"telegram_id"`
+		Platform   string `json:"platform"`
+		TelegramID int64  `json:"telegram_id"` // kept for bot backwards-compatibility
+		Email      string `json:"email"`
 	}
 	if !readBody(w, req, &body) {
 		return
 	}
-	if body.TelegramID == 0 {
-		writeError(w, http.StatusBadRequest, "telegram_id is required")
+
+	db := database.DB()
+
+	// ── Web / Email flow ──────────────────────────────────────────────────────
+	if body.Platform == "web" {
+		email := normalizeEmail(body.Email)
+		if !emailRe.MatchString(email) {
+			writeError(w, http.StatusBadRequest, "invalid email address")
+			return
+		}
+
+		// Find or auto-create the user account.
+		_, err := r.findOrCreateWebUser(db, email)
+		if err != nil {
+			r.log.Error("request_code: findOrCreateWebUser", "email", email, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to process user")
+			return
+		}
+
+		code, err := requestOTP(email, 5*time.Minute)
+		if err != nil {
+			if errors.Is(err, ErrMaxRequestsReached) {
+				r.log.Warn("request_code: rate limited", "email", email, "ip", req.RemoteAddr)
+				writeError(w, http.StatusTooManyRequests, "too many requests, try again later")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to generate otp")
+			return
+		}
+
+		// Send email asynchronously — do not block the HTTP response.
+		if r.mailer != nil {
+			go func() {
+				if sendErr := r.mailer.SendCode(email, code); sendErr != nil {
+					r.log.Error("request_code: mailer.SendCode failed", "email", email, "err", sendErr)
+				}
+			}()
+		} else {
+			// Fallback for development: log the code instead of sending email.
+			r.log.Warn("request_code: mailer not configured, logging code for debug", "email", email, "code", code)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
 
-	user, err := findUserByPlatformID(database.DB(), "telegram", strconv.FormatInt(body.TelegramID, 10))
+	// ── Telegram flow (backwards-compatible) ──────────────────────────────────
+	if body.TelegramID == 0 {
+		writeError(w, http.StatusBadRequest, "telegram_id or (platform=web + email) is required")
+		return
+	}
+
+	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
+	_, err := findUserByPlatformID(db, "telegram", tgIDStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found. please start the bot first")
 		return
 	}
-	_ = user // Ignore unused var
 
-	code, err := requestOTP(body.TelegramID, 5*time.Minute)
+	code, err := requestOTP(tgIDStr, 5*time.Minute)
 	if err != nil {
 		if errors.Is(err, ErrMaxRequestsReached) {
-			r.log.Warn("auth request rate limited", "telegram_id", body.TelegramID, "ip", req.RemoteAddr)
+			r.log.Warn("request_code: rate limited", "telegram_id", body.TelegramID, "ip", req.RemoteAddr)
 			writeError(w, http.StatusTooManyRequests, "too many requests, try again later")
 			return
 		}
@@ -507,7 +625,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 			"code":        code,
 		}, nil)
 	} else {
-		r.log.Warn("dispatcher is nil, cannot send webhook for request_code")
+		r.log.Warn("request_code: dispatcher is nil, cannot send webhook")
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -515,26 +633,45 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/users/verify_code
-// Body: {"telegram_id":123,"code":"123456"}
+// Body (Telegram bot):  {"telegram_id": 123, "code": "123456"}
+// Body (Web / email):   {"platform": "web", "email": "user@example.com", "code": "123456"}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
 	var body struct {
+		Platform   string `json:"platform"`
 		TelegramID int64  `json:"telegram_id"`
+		Email      string `json:"email"`
 		Code       string `json:"code"`
 	}
 	if !readBody(w, req, &body) {
 		return
 	}
-	if body.TelegramID == 0 || body.Code == "" {
-		writeError(w, http.StatusBadRequest, "telegram_id and code are required")
+	if body.Code == "" {
+		writeError(w, http.StatusBadRequest, "code is required")
 		return
 	}
 
-	ok, err := verifyOTP(body.TelegramID, body.Code)
+	var identifier string
+	if body.Platform == "web" {
+		email := normalizeEmail(body.Email)
+		if !emailRe.MatchString(email) {
+			writeError(w, http.StatusBadRequest, "invalid email address")
+			return
+		}
+		identifier = email
+	} else {
+		if body.TelegramID == 0 {
+			writeError(w, http.StatusBadRequest, "telegram_id or (platform=web + email) is required")
+			return
+		}
+		identifier = strconv.FormatInt(body.TelegramID, 10)
+	}
+
+	ok, err := verifyOTP(identifier, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
-			r.log.Warn("auth brute force detected", "telegram_id", body.TelegramID, "ip", req.RemoteAddr)
+			r.log.Warn("verify_code: brute force detected", "identifier", identifier, "ip", req.RemoteAddr)
 			writeError(w, http.StatusForbidden, "too many failed attempts. please request a new code")
 			return
 		}

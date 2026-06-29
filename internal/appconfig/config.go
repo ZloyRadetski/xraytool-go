@@ -29,6 +29,7 @@ type Config struct {
 	WebhookSecret string           `yaml:"webhook_secret"`
 	Subscription  SubscriptionConf `yaml:"subscription"`
 	AntiFraud     AntiFraudConf    `yaml:"anti_fraud"`
+	Mailer        MailerConf       `yaml:"mailer"`
 }
 
 // WorkerConf holds background worker settings.
@@ -72,6 +73,16 @@ type AntiFraudConf struct {
 	// so that master has a global view across all nodes for fraud detection.
 	// The master node must have anti_fraud.enabled: true.
 	ReportToMaster bool `yaml:"report_to_master"`
+}
+
+// MailerConf holds configuration for transactional email delivery via Resend.
+type MailerConf struct {
+	// Enabled toggles email delivery. When false, codes are only logged (debug mode).
+	Enabled bool `yaml:"enabled"`
+	// ResendAPIKey is the Resend.com API key (starts with "re_").
+	ResendAPIKey string `yaml:"resend_api_key"`
+	// FromEmail is the verified sender address, e.g. "noreply@tvaldsforge.online".
+	FromEmail string `yaml:"from_email"`
 }
 
 // SubscriptionConf holds subscription endpoint settings.
@@ -259,6 +270,11 @@ func defaults() *Config {
 			BanDuration:       "10m",
 			LogRotationSizeMB: 20,
 		},
+		Mailer: MailerConf{
+			Enabled:      false,
+			ResendAPIKey: "",
+			FromEmail:    "",
+		},
 	}
 }
 
@@ -434,6 +450,14 @@ anti_fraud:
   # (slave only) If true, forward observed IP events to master every 5s for global fraud detection.
   # Master must have anti_fraud.enabled: true.
   report_to_master: false
+
+mailer:
+  # Enable transactional email delivery (OTP codes via Resend.com).
+  enabled: false
+  # Resend API key — create one at https://resend.com/api-keys
+  resend_api_key: ""
+  # Verified sender address (must match the domain verified in Resend)
+  from_email: "noreply@yourdomain.tld"
 
 # ============================================================
 # servers.json format (object style):

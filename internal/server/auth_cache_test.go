@@ -5,99 +5,169 @@ import (
 	"time"
 )
 
-func TestRequestOTP(t *testing.T) {
-	telegramID := int64(1111)
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests use string identifiers — both telegram_id strings and email strings.
+// ─────────────────────────────────────────────────────────────────────────────
 
-	// Clean up just in case
-	otpCache.Delete(telegramID)
+func TestRequestOTP_TelegramID(t *testing.T) {
+	id := "1111"
+	otpCache.Delete(id)
 
-	// 1st request - should succeed
-	code1, err := requestOTP(telegramID, 5*time.Minute)
+	// 1st request — must succeed
+	code1, err := requestOTP(id, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if len(code1) != 6 {
-		t.Fatalf("expected 6 digit code, got %s", code1)
+		t.Fatalf("expected 6-digit code, got %q", code1)
 	}
 
-	// 2nd request (resend) - should succeed
-	code2, err := requestOTP(telegramID, 5*time.Minute)
+	// 2nd request (resend) — must succeed with a different code
+	code2, err := requestOTP(id, 5*time.Minute)
 	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+		t.Fatalf("expected nil error on 2nd request, got %v", err)
 	}
 	if code1 == code2 {
-		t.Fatalf("expected different codes")
+		t.Fatal("expected different codes for each request")
 	}
 
-	// 3rd request - should fail (max 2 allowed)
-	_, err = requestOTP(telegramID, 5*time.Minute)
+	// 3rd request — must be rate-limited
+	_, err = requestOTP(id, 5*time.Minute)
+	if err != ErrMaxRequestsReached {
+		t.Fatalf("expected ErrMaxRequestsReached, got %v", err)
+	}
+}
+
+func TestRequestOTP_Email(t *testing.T) {
+	id := "user@example.com"
+	otpCache.Delete(id)
+
+	code1, err := requestOTP(id, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("email OTP request 1 failed: %v", err)
+	}
+	if len(code1) != 6 {
+		t.Fatalf("expected 6-digit code, got %q", code1)
+	}
+
+	code2, err := requestOTP(id, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("email OTP request 2 failed: %v", err)
+	}
+	if code1 == code2 {
+		t.Fatal("expected different codes")
+	}
+
+	_, err = requestOTP(id, 5*time.Minute)
 	if err != ErrMaxRequestsReached {
 		t.Fatalf("expected ErrMaxRequestsReached, got %v", err)
 	}
 }
 
 func TestVerifyOTP_BruteForce(t *testing.T) {
-	telegramID := int64(2222)
-	otpCache.Delete(telegramID)
+	id := "brute@example.com"
+	otpCache.Delete(id)
 
-	code, _ := requestOTP(telegramID, 5*time.Minute)
+	code, _ := requestOTP(id, 5*time.Minute)
 
-	// Attempt 1 - fail
-	ok, err := verifyOTP(telegramID, "000000")
-	if ok || err != nil {
-		t.Fatalf("expected false, nil; got %v, %v", ok, err)
+	for i, wrong := range []string{"000000", "000001", "000002"} {
+		ok, err := verifyOTP(id, wrong)
+		if ok {
+			t.Fatalf("attempt %d: expected ok=false", i+1)
+		}
+		if i < 2 && err != nil {
+			t.Fatalf("attempt %d: expected nil error before max, got %v", i+1, err)
+		}
+		if i == 2 && err != ErrMaxAttemptsReached {
+			t.Fatalf("attempt 3: expected ErrMaxAttemptsReached, got %v", err)
+		}
 	}
 
-	// Attempt 2 - fail
-	ok, err = verifyOTP(telegramID, "000001")
+	// Entry must be deleted — correct code no longer works
+	ok, err := verifyOTP(id, code)
 	if ok || err != nil {
-		t.Fatalf("expected false, nil; got %v, %v", ok, err)
-	}
-
-	// Attempt 3 - fail, should trigger ErrMaxAttemptsReached
-	ok, err = verifyOTP(telegramID, "000002")
-	if ok || err != ErrMaxAttemptsReached {
-		t.Fatalf("expected false, ErrMaxAttemptsReached; got %v, %v", ok, err)
-	}
-
-	// Subsequent attempts should return false, nil (because entry was deleted)
-	// Wait, is it false, nil? Yes, because val, ok := otpCache.Load(telegramID) will return false
-	ok, err = verifyOTP(telegramID, code) // even the correct code won't work anymore
-	if ok || err != nil {
-		t.Fatalf("expected false, nil after deletion; got %v, %v", ok, err)
+		t.Fatalf("expected false,nil after deletion; got %v,%v", ok, err)
 	}
 }
 
-func TestVerifyOTP_Success(t *testing.T) {
-	telegramID := int64(3333)
-	otpCache.Delete(telegramID)
+func TestVerifyOTP_Success_TelegramID(t *testing.T) {
+	id := "3333"
+	otpCache.Delete(id)
 
-	code, _ := requestOTP(telegramID, 5*time.Minute)
+	code, _ := requestOTP(id, 5*time.Minute)
 
-	// Correct attempt
-	ok, err := verifyOTP(telegramID, code)
+	ok, err := verifyOTP(id, code)
 	if !ok || err != nil {
-		t.Fatalf("expected true, nil; got %v, %v", ok, err)
+		t.Fatalf("expected true,nil; got %v,%v", ok, err)
 	}
 
-	// Code is deleted after success
-	_, okLoad := otpCache.Load(telegramID)
-	if okLoad {
-		t.Fatalf("entry should be deleted after successful verify")
+	// Entry must be deleted after successful verify (single-use)
+	_, stillPresent := otpCache.Load(id)
+	if stillPresent {
+		t.Fatal("entry should be deleted after successful verify")
+	}
+}
+
+func TestVerifyOTP_Success_Email(t *testing.T) {
+	id := "success@example.com"
+	otpCache.Delete(id)
+
+	code, _ := requestOTP(id, 5*time.Minute)
+
+	ok, err := verifyOTP(id, code)
+	if !ok || err != nil {
+		t.Fatalf("expected true,nil; got %v,%v", ok, err)
+	}
+
+	_, stillPresent := otpCache.Load(id)
+	if stillPresent {
+		t.Fatal("entry should be deleted after successful verify")
 	}
 }
 
 func TestVerifyOTP_Expired(t *testing.T) {
-	telegramID := int64(4444)
-	otpCache.Delete(telegramID)
+	id := "expired@example.com"
+	otpCache.Delete(id)
 
-	// Set a very short TTL
-	code, _ := requestOTP(telegramID, 1*time.Millisecond)
-
+	code, _ := requestOTP(id, 1*time.Millisecond)
 	time.Sleep(10 * time.Millisecond)
 
-	ok, err := verifyOTP(telegramID, code)
+	ok, err := verifyOTP(id, code)
 	if ok || err != nil {
-		t.Fatalf("expected false, nil for expired code; got %v, %v", ok, err)
+		t.Fatalf("expected false,nil for expired code; got %v,%v", ok, err)
+	}
+}
+
+func TestVerifyOTP_NotFound(t *testing.T) {
+	id := "ghost@example.com"
+	otpCache.Delete(id) // ensure not present
+
+	ok, err := verifyOTP(id, "123456")
+	if ok || err != nil {
+		t.Fatalf("expected false,nil for unknown identifier; got %v,%v", ok, err)
+	}
+}
+
+func TestRequestOTP_ResetsAfterExpiry(t *testing.T) {
+	id := "reset@example.com"
+	otpCache.Delete(id)
+
+	// Exhaust the 2-request limit with a very short TTL
+	_, _ = requestOTP(id, 1*time.Millisecond)
+	_, _ = requestOTP(id, 1*time.Millisecond)
+	_, err := requestOTP(id, 1*time.Millisecond)
+	if err != ErrMaxRequestsReached {
+		t.Fatalf("expected rate limit, got %v", err)
+	}
+
+	// After the TTL expires, counters should reset
+	time.Sleep(10 * time.Millisecond)
+
+	code, err := requestOTP(id, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("expected successful OTP after expiry reset, got %v", err)
+	}
+	if len(code) != 6 {
+		t.Fatalf("expected 6-digit code, got %q", code)
 	}
 }

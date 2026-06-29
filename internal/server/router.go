@@ -41,6 +41,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/antifraud"
 	"xraytool/internal/events"
+	"xraytool/internal/mailer"
 	"xraytool/internal/subscription"
 )
 
@@ -52,6 +53,7 @@ type Router struct {
 	dispatcher   *events.Dispatcher
 	log          *slog.Logger
 	cm           *subscription.CacheManager
+	mailer       mailer.Mailer
 	// antifraud hooks — nil when the module is disabled.
 	isBanned     func(email string) bool
 	forceUnban   func(email string)
@@ -71,6 +73,14 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *R
 		dispatcher: events.NewDispatcher(cfg),
 		log:        slog.Default(),
 		cm:         cm,
+	}
+
+	// Wire up mailer if configured.
+	if cfg.Mailer.Enabled && cfg.Mailer.ResendAPIKey != "" {
+		r.mailer = mailer.New(cfg.Mailer.ResendAPIKey, cfg.Mailer.FromEmail)
+		r.log.Info("mailer: resend email delivery enabled", "from", cfg.Mailer.FromEmail)
+	} else {
+		r.log.Info("mailer: disabled (set mailer.enabled=true in config to enable email delivery)")
 	}
 
 	r.registerRoutes()
