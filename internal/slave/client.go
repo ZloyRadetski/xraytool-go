@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -48,6 +49,11 @@ type Entry struct {
 // Endpoint builds the base URL for this server using remotePath as default path.
 func (e Entry) Endpoint(remotePath string) string {
 	if e.URL != "" {
+		u, err := url.Parse(e.URL)
+		if err == nil && (u.Path == "" || u.Path == "/") {
+			// Append remotePath if URL is just the root domain
+			return strings.TrimRight(e.URL, "/") + "/" + strings.TrimLeft(remotePath, "/")
+		}
 		return strings.TrimRight(e.URL, "/")
 	}
 	domain := firstNonEmpty(e.Domain, e.Host, e.IP)
