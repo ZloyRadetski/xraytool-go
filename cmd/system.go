@@ -73,18 +73,18 @@ func updateGeoCmd() *cobra.Command {
 				}
 			}
 			fmt.Println("[OK] Geo databases updated.")
-			fmt.Println("[INFO] Restarting xray…")
-			systemctlRestart("xray")
+			// fmt.Println("[INFO] Restarting xray…")
+			// systemctlRestart("xray")
 		},
 	}
 }
 
 func diffClients(oldRaw, newRaw xrayconfig.RawClient) []string {
 	var diffs []string
-	
+
 	oldMap := make(map[string]interface{})
 	newMap := make(map[string]interface{})
-	
+
 	for k, v := range oldRaw {
 		var val interface{}
 		if err := json.Unmarshal(v, &val); err == nil {
@@ -97,7 +97,7 @@ func diffClients(oldRaw, newRaw xrayconfig.RawClient) []string {
 			newMap[k] = val
 		}
 	}
-	
+
 	for k, oldVal := range oldMap {
 		newVal, exists := newMap[k]
 		if !exists {
@@ -113,7 +113,7 @@ func diffClients(oldRaw, newRaw xrayconfig.RawClient) []string {
 			diffs = append(diffs, fmt.Sprintf("+ added %q: %v", k, newVal))
 		}
 	}
-	
+
 	return diffs
 }
 
@@ -185,14 +185,14 @@ func migrateCmd() *cobra.Command {
 						fmt.Printf("  [WARN] Re-add failed for %s: %v\n", email, err)
 						continue
 					}
-					
+
 					fmt.Printf("  [MODIFIED] %s\n", email)
 					for _, d := range diffs {
 						fmt.Printf("      %s\n", d)
 					}
 					modifiedCount++
 				}
-				
+
 				fmt.Printf("\n=== Migration summary: %d modified, %d skipped ===\n", modifiedCount, skippedCount)
 				return nil
 			}); err != nil {
@@ -210,4 +210,3 @@ func migrateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&legacy, "legacy", false, "Restart xray after migration")
 	return cmd
 }
-

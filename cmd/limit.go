@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"xraytool/internal/database"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
@@ -72,7 +73,7 @@ func rmOrLimitCmd(action string) *cobra.Command {
 				// Let's just proceed to update SQL status anyway.
 				
 				if action == "rm" {
-					sqlSetStatus(email, "inactive")
+					sqlSetStatus(database.DB(), email, "inactive")
 
 					if cfg.IsMaster() {
 						slaveParams := map[string]string{"email": email}
@@ -127,9 +128,9 @@ func rmOrLimitCmd(action string) *cobra.Command {
 			}
 
 			if action == "limit" {
-				sqlSetStatus(email, "blocked")
+				sqlSetStatus(database.DB(), email, "blocked")
 			} else {
-				sqlSetStatus(email, "inactive") // or whatever makes sense for rmuser
+				sqlSetStatus(database.DB(), email, "inactive") // or whatever makes sense for rmuser
 			}
 
 			// Propagate.

@@ -5,7 +5,9 @@ import (
 
 	"xraytool/internal/convert"
 	"xraytool/internal/xrayconfig"
+	"xraytool/internal/database"
 
+	"gorm.io/gorm"
 	"github.com/spf13/cobra"
 )
 
@@ -57,7 +59,7 @@ func setExpireCmd() *cobra.Command {
 				p.Errorf("user %q not found in xray config", email)
 			}
 
-			sqlSetExpire(email, expireVal)
+			sqlSetExpire(database.DB(), email, expireVal)
 
 			if cfg.IsMaster() {
 				propagate(cfg, "setexpire", map[string]string{
@@ -128,7 +130,7 @@ func updateLimitCmd() *cobra.Command {
 				p.Errorf("user %q not found in xray config", email)
 			}
 
-			sqlSetLimit(email, int(*limitPtr))
+			sqlSetLimit(database.DB(), email, int(*limitPtr))
 
 			if cfg.IsMaster() {
 				propagate(cfg, "setlimit", map[string]string{
@@ -150,14 +152,18 @@ func updateLimitCmd() *cobra.Command {
 	return cmd
 }
 
-func ExecSetExpire(payload map[string]interface{}) (string, error) {
-	email, _ := payload["email"].(string)
+type SetExpireRequest struct {
+	Email  string
+	Name   string
+	Expire string
+}
+
+func ExecSetExpire(db *gorm.DB, req SetExpireRequest) (string, error) {
+	email := req.Email
 	if email == "" {
-		if name, ok := payload["name"].(string); ok {
-			email = name
-		}
+		email = req.Name
 	}
-	expireVal, _ := payload["expire"].(string)
+	expireVal := req.Expire
 
 	if email == "" || expireVal == "" {
 		return "", fmt.Errorf("email and expire are required")
@@ -188,7 +194,7 @@ func ExecSetExpire(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("user %q not found in xray config", email)
 	}
 
-	sqlSetExpire(email, expireVal)
+	sqlSetExpire(db, email, expireVal)
 
 	if cfg.IsMaster() {
 		p := newPrinter(true)
@@ -200,19 +206,21 @@ func ExecSetExpire(payload map[string]interface{}) (string, error) {
 	return fmt.Sprintf("SUCCESS|EXPIRE_SET|%s|%s", email, expireVal), nil
 }
 
-func ExecUpdateLimit(payload map[string]interface{}) (string, error) {
-	email, _ := payload["email"].(string)
+type UpdateLimitRequest struct {
+	Email string
+	Name  string
+	Limit *float64
+}
+
+func ExecUpdateLimit(db *gorm.DB, req UpdateLimitRequest) (string, error) {
+	email := req.Email
 	if email == "" {
-		if name, ok := payload["name"].(string); ok {
-			email = name
-		}
+		email = req.Name
 	}
 
 	var limitStr string
-	if limitFloat, ok := payload["limit"].(float64); ok {
-		limitStr = fmt.Sprintf("%.0f", limitFloat)
-	} else if limitS, ok := payload["limit"].(string); ok {
-		limitStr = limitS
+	if req.Limit != nil {
+		limitStr = fmt.Sprintf("%.0f", *req.Limit)
 	}
 
 	if email == "" || limitStr == "" {
@@ -243,7 +251,7 @@ func ExecUpdateLimit(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("user %q not found in xray config", email)
 	}
 
-	sqlSetLimit(email, int(*limitPtr))
+	sqlSetLimit(db, email, int(*limitPtr))
 
 	if cfg.IsMaster() {
 		p := newPrinter(true)

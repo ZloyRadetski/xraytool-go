@@ -44,7 +44,7 @@ func (r *Router) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Req
 		IsActive:        true,
 	}
 
-	db := database.DB()
+	db := r.db
 	if err := db.Create(&promo).Error; err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			http.Error(w, `{"error": "promo code already exists"}`, http.StatusConflict)
@@ -61,7 +61,7 @@ func (r *Router) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Req
 
 // handleAdminListPromoCodes returns all promo codes.
 func (r *Router) handleAdminListPromoCodes(w http.ResponseWriter, req *http.Request) {
-	db := database.DB()
+	db := r.db
 	var codes []database.PromoCode
 	if err := db.Order("created_at desc").Find(&codes).Error; err != nil {
 		r.log.Error("Failed to list promo codes", "error", err)
@@ -82,7 +82,7 @@ func (r *Router) handleAdminDeletePromoCode(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	res := db.Delete(&database.PromoCode{}, id)
 	if res.Error != nil {
 		r.log.Error("Failed to delete promo code", "error", res.Error)
@@ -121,7 +121,7 @@ func (r *Router) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	var promo database.PromoCode
 	if err := db.First(&promo, id).Error; err != nil {
 		http.Error(w, `{"error": "promo code not found"}`, http.StatusNotFound)

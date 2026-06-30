@@ -6,7 +6,9 @@ import (
 	"xraytool/internal/generate"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
+	"xraytool/internal/database"
 
+	"gorm.io/gorm"
 	"github.com/spf13/cobra"
 )
 
@@ -137,7 +139,7 @@ func newUserCmd() *cobra.Command {
 			if limitPtr != nil {
 				limitInt = int(*limitPtr)
 			}
-			sqlCreateUserIfNotExist(email, uuid, expireVal, limitInt, subfile)
+			sqlCreateUserIfNotExist(database.DB(), email, uuid, expireVal, limitInt, subfile)
 
 			// Propagate to slaves (master only).
 			if cfg.IsMaster() {
@@ -188,12 +190,21 @@ func newUserCmd() *cobra.Command {
 	return cmd
 }
 
-func ExecNewUser(payload map[string]interface{}) (string, error) {
-	email, _ := payload["email"].(string)
+type CreateUserRequest struct {
+	Email   string
+	Name    string
+	UUID    string
+	Subfile string
+	Expire  string
+	Auth    string
+	Limit   *float64
+	Legacy  bool
+}
+
+func ExecNewUser(db *gorm.DB, req CreateUserRequest) (string, error) {
+	email := req.Email
 	if email == "" {
-		if name, ok := payload["name"].(string); ok {
-			email = name
-		}
+		email = req.Name
 	}
 	if email == "" {
 		return "", fmt.Errorf("email is required")
@@ -202,19 +213,17 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -)")
 	}
 
-	forcedUUID, _ := payload["uuid"].(string)
-	forcedSub, _ := payload["subfile"].(string)
-	forcedExpire, _ := payload["expire"].(string)
-	forcedAuth, _ := payload["auth"].(string)
+	forcedUUID := req.UUID
+	forcedSub := req.Subfile
+	forcedExpire := req.Expire
+	forcedAuth := req.Auth
 
 	var limitStr string
-	if limitFloat, ok := payload["limit"].(float64); ok {
-		limitStr = fmt.Sprintf("%.0f", limitFloat)
-	} else if limitS, ok := payload["limit"].(string); ok {
-		limitStr = limitS
+	if req.Limit != nil {
+		limitStr = fmt.Sprintf("%.0f", *req.Limit)
 	}
 
-	legacy, _ := payload["legacy"].(bool)
+	legacy := req.Legacy
 
 
 	xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
@@ -296,7 +305,7 @@ func ExecNewUser(payload map[string]interface{}) (string, error) {
 	if limitPtr != nil {
 		limitInt = int(*limitPtr)
 	}
-	sqlCreateUserIfNotExist(email, uuid, expireVal, limitInt, subfile)
+	sqlCreateUserIfNotExist(db, email, uuid, expireVal, limitInt, subfile)
 
 	// Propagate to slaves
 	if cfg.IsMaster() {

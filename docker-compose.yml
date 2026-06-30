@@ -1,11 +1,12 @@
 services:
   backend:
-    image: ghcr.io/${GITHUB_USER_OR_ORG}/xraytool-go:latest
+    image: ghcr.io/zloyradetski/xraytool-go:latest
     container_name: xraytool_backend
     restart: always
     pid: "host"
     network_mode: "host"
     privileged: true
+    command: ["--run-migrations"]
     volumes:
       # Проброс всей папки с настройками, базой и состояниями
       - ./data:/etc/xraytool
@@ -13,12 +14,14 @@ services:
       - /usr/local/etc/xray/config.json:/usr/local/etc/xray/config.json
       # Проброс /tmp для передачи файлов payloads Xray API на хост
       - /tmp:/tmp
-      # Проброс папки для обновления GeoIP/Geosite баз
+      # Проброс папки для сохранения GeoIP/Geosite баз при апдейте
       - /usr/local/share/xray:/usr/local/share/xray
       # Проброс логов бэкенда
       - /var/log/xraytool:/var/log/xraytool
       # Проброс конфигов Hysteria (если используется)
       - /etc/hysteria:/etc/hysteria
+      # Проброс оперативной памяти для антифрода
+      - /dev/shm:/dev/shm
     # Uncomment and adjust if using Postgres instead of SQLite
     # environment:
     #   - XRAYTOOL_DB_DSN=postgres://user:pass@postgres:5432/xraytool

@@ -351,7 +351,7 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 
 	// Idempotency: if user already exists return it.
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
@@ -424,7 +424,7 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleListUsers(w http.ResponseWriter, req *http.Request) {
-	db := database.DB()
+	db := r.db
 	var users []database.User
 	if result := db.Find(&users); result.Error != nil {
 		r.log.Error("list users", "err", result.Error)
@@ -442,7 +442,7 @@ func (r *Router) handleListUsers(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleListAdmins(w http.ResponseWriter, req *http.Request) {
-	db := database.DB()
+	db := r.db
 	var users []database.User
 	if result := db.Where("is_admin = ?", true).Find(&users); result.Error != nil {
 		r.log.Error("list admins", "err", result.Error)
@@ -550,7 +550,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 
 	// ── Web / Email flow ──────────────────────────────────────────────────────
 	if body.Platform == "web" {
@@ -694,7 +694,7 @@ func (r *Router) handleGetUserByPlatform(w http.ResponseWriter, req *http.Reques
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -715,7 +715,7 @@ func (r *Router) handleGetUserByRef(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	var user database.User
 	if result := db.Where("ref_code = ?", code).First(&user); result.Error != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -744,7 +744,7 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -788,7 +788,7 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -826,7 +826,7 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -883,7 +883,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		body.MaxDevices = 3
 	}
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -990,7 +990,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		// Delete any sent notification flags so they can be re-triggered when this sub nears expiration
 		db.Where("subscription_id = ?", updatedSub.ID).Delete(&database.SubscriptionNotification{})
 		
-		go r.unbanUserInXray(updatedSub)
+		r.unbanUserInXrayAsync(updatedSub)
 	} else {
 		r.log.Error("failed to find subscription after auto-renew for unban", "user_id", user.ID, "err", err)
 	}
@@ -1019,7 +1019,7 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -1064,7 +1064,7 @@ func (r *Router) handleAdminListUsers(w http.ResponseWriter, req *http.Request) 
 		limit = l
 	}
 
-	db := database.DB()
+	db := r.db
 	query := db.Model(&database.User{})
 
 	if search != "" {
@@ -1122,7 +1122,7 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 
 	// Find subscription by email.
 	var sub database.Subscription
@@ -1196,7 +1196,7 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 		_ = json.Unmarshal(data, &body)
 	}
 
-	db := database.DB()
+	db := r.db
 
 	var sub database.Subscription
 	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
@@ -1234,7 +1234,7 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	}
 
 	// 2. Put user back into Xray config & API memory
-	go r.unbanUserInXray(sub)
+	r.unbanUserInXrayAsync(sub)
 
 	r.log.Warn("admin action", "action", "unblock", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1266,7 +1266,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 
 	var sub database.Subscription
 	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
@@ -1297,7 +1297,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	// Delete any sent notification flags so they can be re-triggered
 	db.Where("subscription_id = ?", sub.ID).Delete(&database.SubscriptionNotification{})
 
-	go r.unbanUserInXray(sub)
+	r.unbanUserInXrayAsync(sub)
 
 	r.log.Warn("admin action", "action", "set-expire", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1312,7 +1312,7 @@ func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -1340,7 +1340,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 	deviceIDStr := req.PathValue("device_id")
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -1370,12 +1370,20 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	if count <= int64(sub.MaxDevices) && sub.Status == "blocked" {
 		if sub.EndsAt == nil || sub.EndsAt.After(time.Now()) {
 			db.Model(&sub).Update("status", "active")
-			go r.unbanUserInXray(sub)
+			r.unbanUserInXrayAsync(sub)
 			r.log.Info("auto-unblocked user after device deletion", "email", sub.Email)
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (r *Router) unbanUserInXrayAsync(sub database.Subscription) {
+	r.bgTasks.Add(1)
+	go func() {
+		defer r.bgTasks.Done()
+		r.unbanUserInXray(sub)
+	}()
 }
 
 func (r *Router) unbanUserInXray(sub database.Subscription) {
@@ -1458,7 +1466,7 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -1508,7 +1516,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := database.DB()
+	db := r.db
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -1525,7 +1533,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 	// If the subscription is active, re-add to Xray
 	var sub database.Subscription
 	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err == nil && sub.Email != "" && sub.Status == "active" {
-		go r.unbanUserInXray(sub)
+		r.unbanUserInXrayAsync(sub)
 	}
 
 	r.log.Warn("admin action", "action", "global-unban", "id", idStr, "caller_ip", getClientIP(req))
@@ -1567,7 +1575,7 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := database.DB()
+	db := r.db
 
 	user, err := findUserByPlatformID(db, platform, idStr)
 	if err != nil {

@@ -18,7 +18,7 @@ type PlanResponse struct {
 }
 
 func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
-	db := database.DB()
+	db := r.db
 	var plans []database.Plan
 	if err := db.Where("is_active = ?", true).Order("months asc").Find(&plans).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get plans")
@@ -57,7 +57,7 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	var promo database.PromoCode
 	if err := db.Where("code = ?", code).First(&promo).Error; err != nil {
 		writeError(w, http.StatusNotFound, "promo code not found")

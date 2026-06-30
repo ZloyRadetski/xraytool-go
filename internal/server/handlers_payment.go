@@ -79,7 +79,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 
 	// Find user by telegram_id.
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
@@ -155,12 +155,6 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 						writeError(w, http.StatusBadRequest, "promo code usage limit reached")
 						return
 					}
-					var count int64
-					db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
-					if count > 0 {
-						writeError(w, http.StatusBadRequest, "promo code already used by this user")
-						return
-					}
 					promoCodeID = &promo.ID
 				}
 			}
@@ -195,6 +189,12 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 			} else {
 				tx.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *promoCodeID)
 			}
+			
+			var count int64
+			tx.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status IN (?, ?)", user.ID, *promoCodeID, "completed", "pending_card").Count(&count)
+			if count > 0 {
+				return fmt.Errorf("promo used by user")
+			}
 		}
 		return tx.Create(&payment).Error
 	})
@@ -202,6 +202,10 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	if txErr != nil {
 		if txErr.Error() == "promo limit" {
 			writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+			return
+		}
+		if txErr.Error() == "promo used by user" {
+			writeError(w, http.StatusBadRequest, "promo code already used or pending for this user")
 			return
 		}
 		r.log.Error("create payment", "err", txErr)
@@ -219,7 +223,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
-	db := database.DB()
+	db := r.db
 	query := db.Model(&database.Payment{})
 
 	q := req.URL.Query()
@@ -275,7 +279,7 @@ func (r *Router) handleGetPayment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 	var payment database.Payment
 	if result := db.First(&payment, paymentID); result.Error != nil {
 		writeError(w, http.StatusNotFound, "payment not found")
@@ -311,7 +315,7 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	db := database.DB()
+	db := r.db
 
 	// Atomic conditional update: only succeeds if current status is in expectedStatuses.
 	query := db.Model(&database.Payment{}).Where("id = ?", paymentID)
@@ -482,7 +486,7 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 			mappedStatus = "completed"
 		}
 
-		db := database.DB()
+		db := r.db
 		var payment database.Payment
 		if err := db.Where("external_id = ?", extID).First(&payment).Error; err == nil {
 			if payment.Status != mappedStatus && payment.Status != "completed" {
@@ -520,7 +524,7 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 
 // GET /api/v1/admin/payments/stats
 func (r *Router) handleAdminPaymentsStats(w http.ResponseWriter, req *http.Request) {
-	db := database.DB()
+	db := r.db
 	var payments []database.Payment
 	if err := db.Select("amount", "status", "created_at").Find(&payments).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, "db error")

@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strings"
+	"sync"
 
 	"gorm.io/gorm"
 
@@ -64,6 +65,14 @@ type Router struct {
 	// ingestEvents is called when master receives IP events from a slave node.
 	// nil when the module is disabled or when running in slave mode.
 	ingestEvents func(slaveID string, events []antifraud.SlaveIPEvent)
+
+	bgTasks sync.WaitGroup
+}
+
+// Shutdown waits for all background tasks (like webhooks and xray unbans) to complete.
+func (r *Router) Shutdown() {
+	r.dispatcher.Shutdown()
+	r.bgTasks.Wait()
 }
 
 // New constructs a Router, registers all routes and middleware, and returns the

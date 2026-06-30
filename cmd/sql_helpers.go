@@ -3,14 +3,15 @@ package cmd
 import (
 	"time"
 
+	"gorm.io/gorm"
+
 	"xraytool/internal/convert"
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
 )
 
-func sqlSetStatus(email, status string) {
-	if database.IsReady() {
-		db := database.DB()
+func sqlSetStatus(db *gorm.DB, email, status string) {
+	if database.IsReady() && db != nil {
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err == nil {
 			db.Model(&sub).Updates(map[string]interface{}{
@@ -21,9 +22,8 @@ func sqlSetStatus(email, status string) {
 	}
 }
 
-func sqlSetExpire(email string, expireVal string) {
-	if database.IsReady() {
-		db := database.DB()
+func sqlSetExpire(db *gorm.DB, email string, expireVal string) {
+	if database.IsReady() && db != nil {
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err == nil {
 			updates := map[string]interface{}{
@@ -37,9 +37,8 @@ func sqlSetExpire(email string, expireVal string) {
 	}
 }
 
-func sqlSetLimit(email string, limit int) {
-	if database.IsReady() {
-		db := database.DB()
+func sqlSetLimit(db *gorm.DB, email string, limit int) {
+	if database.IsReady() && db != nil {
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err == nil {
 			db.Model(&sub).Updates(map[string]interface{}{
@@ -50,9 +49,8 @@ func sqlSetLimit(email string, limit int) {
 	}
 }
 
-func sqlCreateUserIfNotExist(email, xrayUUID, expire string, limit int, subfile string) {
-	if database.IsReady() {
-		db := database.DB()
+func sqlCreateUserIfNotExist(db *gorm.DB, email, xrayUUID, expire string, limit int, subfile string) {
+	if database.IsReady() && db != nil {
 		var sub database.Subscription
 		if err := db.Where("email = ?", email).First(&sub).Error; err != nil {
 			// user not found, create

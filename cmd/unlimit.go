@@ -9,6 +9,7 @@ import (
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 
+	"gorm.io/gorm"
 	"github.com/spf13/cobra"
 )
 
@@ -158,7 +159,7 @@ func unlimitCmd() *cobra.Command {
 				systemctlRestart("xray")
 			}
 
-			sqlSetStatus(email, "active")
+			sqlSetStatus(database.DB(), email, "active")
 
 			// Remove AntiFraud ban if it exists
 			database.DB().Where("email = ?", email).Delete(&database.AntifraudBan{})
@@ -203,12 +204,21 @@ func unlimitCmd() *cobra.Command {
 	return cmd
 }
 
-func ExecUnlimit(payload map[string]interface{}) (string, error) {
-	email, _ := payload["email"].(string)
+type UnlimitUserRequest struct {
+	Email   string
+	Name    string
+	UUID    string
+	Subfile string
+	Expire  string
+	Auth    string
+	Limit   *float64
+	Legacy  bool
+}
+
+func ExecUnlimit(db *gorm.DB, req UnlimitUserRequest) (string, error) {
+	email := req.Email
 	if email == "" {
-		if name, ok := payload["name"].(string); ok {
-			email = name
-		}
+		email = req.Name
 	}
 	if email == "" {
 		return "", fmt.Errorf("email is required")
@@ -217,19 +227,17 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("invalid characters in email")
 	}
 
-	forcedUUID, _ := payload["uuid"].(string)
-	forcedSub, _ := payload["subfile"].(string)
-	forcedExpire, _ := payload["expire"].(string)
-	forcedAuth, _ := payload["auth"].(string)
+	forcedUUID := req.UUID
+	forcedSub := req.Subfile
+	forcedExpire := req.Expire
+	forcedAuth := req.Auth
 
 	var limitStr string
-	if limitFloat, ok := payload["limit"].(float64); ok {
-		limitStr = fmt.Sprintf("%.0f", limitFloat)
-	} else if limitS, ok := payload["limit"].(string); ok {
-		limitStr = limitS
+	if req.Limit != nil {
+		limitStr = fmt.Sprintf("%.0f", *req.Limit)
 	}
 
-	legacy, _ := payload["legacy"].(bool)
+	legacy := req.Legacy
 
 
 	xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
@@ -252,7 +260,7 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 	}
 
 	// Remove any anti-fraud ban for this user from DB.
-	database.DB().Where("email = ?", email).Delete(&database.AntifraudBan{})
+	db.Where("email = ?", email).Delete(&database.AntifraudBan{})
 
 	if uuid == "" && isActive {
 		if c, _ := xrayconfig.FindUser(xrayCfg, email); c != nil {
@@ -335,7 +343,7 @@ func ExecUnlimit(payload map[string]interface{}) (string, error) {
 		systemctlRestart("xray")
 	}
 
-	sqlSetStatus(email, "active")
+	sqlSetStatus(db, email, "active")
 
 	if cfg.IsMaster() {
 		sp := map[string]string{
