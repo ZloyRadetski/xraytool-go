@@ -111,8 +111,10 @@ type DatabaseConf struct {
 
 // ServerConf holds server identity information.
 type ServerConf struct {
-	IP     string `yaml:"ip"`
-	Domain string `yaml:"domain"`
+	IP          string   `yaml:"ip"`
+	Domain      string   `yaml:"domain"`
+	APIKey      string   `yaml:"api_key"`
+	AllowedDirs []string `yaml:"allowed_dirs"`
 }
 
 // PortsConf holds the configurable ports used by xraytool.
@@ -151,10 +153,9 @@ type XrayConf struct {
 
 // MasterAPIConf defines how a slave node authenticates and connects to the master.
 type MasterAPIConf struct {
-	URL         string   `yaml:"url"`
-	APIKey      string   `yaml:"api_key"`
-	Insecure    bool     `yaml:"insecure"`
-	AllowedDirs []string `yaml:"allowed_dirs"`
+	URL      string `yaml:"url"`
+	APIKey   string `yaml:"api_key"`
+	Insecure bool   `yaml:"insecure"`
 }
 
 // StatsConf holds traffic statistics settings.
@@ -183,6 +184,12 @@ func defaults() *Config {
 		Mode: "master",
 		Server: ServerConf{
 			Domain: "yourdomain.tld",
+			APIKey: "CHANGE_ME_IN_CONFIG",
+			AllowedDirs: []string{
+				"/etc/xraytool",
+				"/var/www/TorvaldsVPN",
+				"/var/log/xray",
+			},
 		},
 		Paths: PathsConf{
 			XrayConfig:               "/usr/local/etc/xray/config.json",
@@ -208,10 +215,9 @@ func defaults() *Config {
 			RemotePath:     "/api/v1/internal/xray/sync",
 		},
 		MasterAPI: MasterAPIConf{
-			URL:         "",
-			APIKey:      "",
-			Insecure:    false,
-			AllowedDirs: []string{"/etc/xraytool", "/var/www/TorvaldsVPN", "/var/log/xray"},
+			URL:      "",
+			APIKey:   "CHANGE_ME_IN_CONFIG",
+			Insecure: false,
 		},
 		Ports: PortsConf{
 			APIServer: 8080,
@@ -298,6 +304,15 @@ server:
   ip: "1.2.3.4"
   # Domain for subscription links: https://<domain>/client?id=<subfile>
   domain: "yourdomain.tld"
+  # Authentication key for INCOMING API requests to this server.
+  # If mode=master, this protects master's admin API.
+  # If mode=slave, this authenticates incoming commands from the master.
+  api_key: "CHANGE_ME_IN_CONFIG"
+  # Directories allowed for the /api/download and /api/upload endpoints
+  allowed_dirs:
+    - "/etc/xraytool"
+    - "/var/www/TorvaldsVPN"
+    - "/var/log/xray"
 
 paths:
   # Xray-core main config
@@ -347,13 +362,8 @@ slave_api:
 master_api:
   # Master URL (used by slave to send events/stats back)
   url: "https://master.domain.com/api/v1/internal/xray/sync"
-  # Authentication key used to protect master's internal endpoints AND file download endpoints
-  api_key: "your_secret_api_key"
-  # Directories allowed for the /api/download and /api/upload endpoints
-  allowed_dirs:
-    - "/etc/xraytool"
-    - "/var/www/TorvaldsVPN"
-    - "/var/log/xray"
+  # Authentication key used to connect TO the master (must match a key in master's slave_servers OR master's server.api_key)
+  api_key: "your_master_or_slave_secret_key"
   # Ignore self-signed certificates when connecting to master
   insecure: false
 
@@ -455,10 +465,10 @@ mailer:
   from_email: "noreply@yourdomain.tld"
 
 slave_servers:
-  # "slave-1":
+  # slave-1:
   #   url: "https://slave.example.com/api/v1/internal/xray/sync"
-  #   api_key: "secret"             # sent as X-API-Key header
-  #   insecure: false               # skip TLS verification
+  #   api_key: "slave_1_unique_secret" # sent as X-API-Key header to the slave
+  #   insecure: false                  # skip TLS verification
 `
 
 // Load reads and parses the config file at the given path.
@@ -598,6 +608,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.AntiFraud.LogRotationSizeMB == 0 {
 		cfg.AntiFraud.LogRotationSizeMB = defs.AntiFraud.LogRotationSizeMB
+	}
+	if len(cfg.Server.AllowedDirs) == 0 {
+		cfg.Server.AllowedDirs = defs.Server.AllowedDirs
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -185,7 +185,18 @@ func (r *Router) registerRoutes() {
 func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		key := req.Header.Get("X-API-Key")
-		if subtle.ConstantTimeCompare([]byte(key), []byte(r.apiKey)) != 1 {
+		
+		isValid := subtle.ConstantTimeCompare([]byte(key), []byte(r.apiKey)) == 1
+		if !isValid && r.cfg != nil {
+			for _, srv := range r.cfg.SlaveServers {
+				if srv.APIKey != "" && subtle.ConstantTimeCompare([]byte(key), []byte(srv.APIKey)) == 1 {
+					isValid = true
+					break
+				}
+			}
+		}
+
+		if !isValid {
 			r.logIntruder(req, "invalid or missing X-API-Key")
 			http.NotFound(w, req)
 			return
@@ -193,6 +204,7 @@ func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 		next(w, req)
 	})
 }
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────

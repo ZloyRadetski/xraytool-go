@@ -63,7 +63,7 @@ func isPathAllowed(cfg *appconfig.Config, path string) bool {
 		}
 	}
 
-	for _, dir := range cfg.MasterAPI.AllowedDirs {
+	for _, dir := range cfg.Server.AllowedDirs {
 		realDir, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			realDir, err = filepath.Abs(dir)
@@ -97,8 +97,8 @@ func startServerCmd() *cobra.Command {
 				osExit(1)
 				return
 			}
-			if cfg.MasterAPI.APIKey == "" {
-				fmt.Printf("FATAL: master_api.api_key не может быть пустым в xraytool.yml\n")
+			if cfg.Server.APIKey == "" || cfg.Server.APIKey == "CHANGE_ME_IN_CONFIG" {
+				fmt.Printf("FATAL: server.api_key не может быть пустым или дефолтным в xraytool.yml\n")
 				osExit(1)
 				return
 			}
@@ -217,6 +217,19 @@ func startServerCmd() *cobra.Command {
 				}
 			}
 
+			// Helper to validate incoming API keys against this server's APIKey and any SlaveServer keys
+			isValidAPIKey := func(reqKey string) bool {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.Server.APIKey)) == 1 {
+					return true
+				}
+				for _, srv := range cfg.SlaveServers {
+					if srv.APIKey != "" && subtle.ConstantTimeCompare([]byte(reqKey), []byte(srv.APIKey)) == 1 {
+						return true
+					}
+				}
+				return false
+			}
+
 			mux.HandleFunc("/client", subHandler)
 			mux.HandleFunc("/api/v1/sub", subHandler)
 
@@ -228,7 +241,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.MasterAPI.APIKey)) != 1 {
+				if !isValidAPIKey(reqKey) {
 					logIntruder(r, "Invalid or Missing API Key on update-links")
 					http.NotFound(w, r)
 					return
@@ -305,7 +318,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.MasterAPI.APIKey)) != 1 {
+				if !isValidAPIKey(reqKey) {
 					logIntruder(r, "Invalid or Missing API Key on Upload")
 					http.NotFound(w, r)
 					return
@@ -374,7 +387,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.MasterAPI.APIKey)) != 1 {
+				if !isValidAPIKey(reqKey) {
 					logIntruder(r, "Invalid or Missing API Key on Download")
 					http.NotFound(w, r)
 					return
@@ -411,7 +424,7 @@ func startServerCmd() *cobra.Command {
 			// Existing /client and /api/v1/sub are already registered above and take
 			// priority due to Go 1.22+ most-specific-match routing — no conflict.
 			if dbReady {
-				apiRouter := server.New(cfg, cfg.MasterAPI.APIKey, cacheManager, database.DB())
+				apiRouter := server.New(cfg, cfg.Server.APIKey, cacheManager, database.DB())
 
 				// 🟢 Anti-Fraud Module 🟢──────────────────────────────────────────────
 				if cfg.AntiFraud.Enabled {
@@ -452,7 +465,7 @@ func startServerCmd() *cobra.Command {
 
 			logger.Infof(" Server:  127.0.0.1:%d", port)
 			logger.Infof(" Script:  %s", xraytoolPath)
-			logger.Infof(" Allowed: %s", strings.Join(cfg.MasterAPI.AllowedDirs, ", "))
+			logger.Infof(" Allowed: %s", strings.Join(cfg.Server.AllowedDirs, ", "))
 
 			logger.Infof("API server listening on 127.0.0.1:%d", port)
 

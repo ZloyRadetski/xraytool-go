@@ -3,6 +3,7 @@ mode: master
 server:
   ip: "1.2.3.4"
   domain: "testdomain.com"
+  api_key: "test-api-key"
 
 paths:
   xray_config: "tests/xray_config.json"
