@@ -15,27 +15,24 @@ func TestSystemCmds(t *testing.T) {
 	// We are on Windows so bash doesn't exist, it will fail.
 	// Update Xray (fails on windows without bash)
 	rootCmd.SetArgs([]string{"update-xray", "--config=test_config.yaml"})
-	out := captureOutput(func() { rootCmd.Execute() })
-	if (!strings.Contains(out, "Update failed") && !strings.Contains(out, "Failed to download script")) || !exitCalled {
-		t.Errorf("expected update to fail on windows, got %v", out)
+	err := rootCmd.Execute()
+	if err == nil || (!strings.Contains(err.Error(), "Update failed") && !strings.Contains(err.Error(), "Failed to download script")) {
+		t.Errorf("expected update to fail on windows, got %v", err)
 	}
 
-	exitCalled = false
 	rootCmd.SetArgs([]string{"update-geo", "--config=test_config.yaml"})
-	out = captureOutput(func() { rootCmd.Execute() })
-	if !strings.Contains(out, "Geo databases updated") {
-		t.Errorf("expected geo update success, got %v", out)
+	err = rootCmd.Execute()
+	if err != nil {
+		t.Errorf("expected geo update success, got error %v", err)
 	}
 
-	exitCalled = false
 	// Test migrate failure (this covers the migration start and error handling)
 
 	// Test migrate failure
 	os.WriteFile("test_xray_config.json", []byte("invalid json"), 0644)
-	exitCalled = false
 	rootCmd.SetArgs([]string{"migrate", "--config=test_config.yaml"})
-	out = captureOutput(func() { rootCmd.Execute() })
-	if !strings.Contains(out, "ERROR|migrate:") || !exitCalled {
-		t.Errorf("expected migrate to fail, got %v", out)
+	err = rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "ERROR|migrate:") {
+		t.Errorf("expected migrate to fail, got %v", err)
 	}
 }

@@ -89,8 +89,11 @@ func Init(cfg Config) error {
 	if cfg.Driver == "sqlite" || cfg.Driver == "" {
 		sqlDB, err := conn.DB()
 		if err == nil {
-			sqlDB.SetMaxOpenConns(1)
+			// Set a reasonable pool size. WAL mode supports concurrent readers and one writer.
+			sqlDB.SetMaxOpenConns(1) // Single connection to avoid locked databases in concurrent writes
 		}
+		conn.Exec("PRAGMA journal_mode = WAL;")
+		conn.Exec("PRAGMA busy_timeout = 15000;")
 	}
 
 	db = conn

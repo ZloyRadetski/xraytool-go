@@ -70,7 +70,10 @@ func XrayJSONToShareText(xrayJSON string) (string, error) {
 						if !ok {
 							continue
 						}
-						proto, _ := ob["protocol"].(string)
+						proto, ok := ob["protocol"].(string)
+						if !ok {
+							continue
+						}
 						protoLower := strings.ToLower(proto)
 						if protoLower == "freedom" || protoLower == "blackhole" || protoLower == "dns" {
 							continue

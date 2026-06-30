@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 
 	"xraytool/internal/appconfig"
@@ -49,6 +50,7 @@ type analyzer struct {
 type deviceLimitCache struct {
 	mu     sync.RWMutex
 	limits map[string]int // email → MaxDevices (0 means "not found in DB")
+	sg     singleflight.Group
 }
 
 func newAnalyzer(
@@ -217,15 +219,15 @@ func (a *analyzer) getDeviceLimit(email string) int {
 	}
 
 	// Cache miss — schedule a background fetch so the event loop is not blocked.
-	// Pre-populate with the safe default so we don't spawn redundant goroutines
-	// for the same email when multiple events arrive before the fetch completes.
+	// We use singleflight to ensure even if multiple goroutines or loop iterations
+	// bypass the cache somehow, only one query hits the DB.
 	a.deviceCache.mu.Lock()
 	if _, alreadySet := a.deviceCache.limits[email]; !alreadySet {
 		a.deviceCache.limits[email] = 1 // temporary safe default
 	}
 	a.deviceCache.mu.Unlock()
 
-	go func() {
+	go a.deviceCache.sg.Do(email, func() (interface{}, error) {
 		var sub database.Subscription
 		val := 1
 		if err := a.db.Select("max_devices").Where("email = ?", email).Limit(1).Find(&sub).Error; err == nil && sub.MaxDevices > 0 {
@@ -234,7 +236,8 @@ func (a *analyzer) getDeviceLimit(email string) int {
 		a.deviceCache.mu.Lock()
 		a.deviceCache.limits[email] = val
 		a.deviceCache.mu.Unlock()
-	}()
+		return val, nil
+	})
 
 	return 1
 }
@@ -355,8 +358,13 @@ func newSlaveReporter(cfg *appconfig.Config, log *slog.Logger) *slaveReporter {
 // add enqueues an event for the next flush. Thread-safe.
 func (r *slaveReporter) add(e event) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Hard limit to prevent OOM if master is down for a long time
+	if len(r.buf) >= 10000 {
+		return
+	}
 	r.buf = append(r.buf, SlaveIPEvent{Email: e.email, IP: e.ip})
-	r.mu.Unlock()
 }
 
 // run flushes the buffer every 5 seconds until ctx is cancelled.
@@ -386,8 +394,8 @@ func (r *slaveReporter) flush() {
 		r.mu.Unlock()
 		return
 	}
-	batch := r.buf
-	r.buf = make([]SlaveIPEvent, 0, 64) // reset for next window
+	batch := make([]SlaveIPEvent, len(r.buf))
+	copy(batch, r.buf)
 	r.mu.Unlock()
 
 	payload, err := json.Marshal(struct {
@@ -400,6 +408,9 @@ func (r *slaveReporter) flush() {
 
 	if r.cfg.MasterAPI.URL == "" {
 		r.log.Warn("antifraud slave reporter: master_api.url is not configured, cannot forward events")
+		r.mu.Lock()
+		r.buf = r.buf[:0]
+		r.mu.Unlock()
 		return
 	}
 
@@ -418,7 +429,23 @@ func (r *slaveReporter) flush() {
 	_, err = client.Call(entry, "antifraud-events", map[string]string{"payload": string(payload)})
 	if err != nil {
 		r.log.Warn("antifraud slave reporter: failed to reach master", slog.String("err", err.Error()))
+		return
 	}
+
+	r.mu.Lock()
+	// Only remove the events we just successfully sent
+	// Since batch contains all elements from buf at the time of copy,
+	// if there are no new elements appended during the request, we can just reset.
+	// Otherwise, we keep the newly added elements.
+	if len(r.buf) == len(batch) {
+		r.buf = r.buf[:0]
+	} else {
+		// New events arrived while network call was happening.
+		// We shift them to the beginning.
+		n := copy(r.buf, r.buf[len(batch):])
+		r.buf = r.buf[:n]
+	}
+	r.mu.Unlock()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,17 +513,7 @@ func (uc *unbanCleaner) processExpired() {
 func (uc *unbanCleaner) tryUnban(ban database.AntifraudBan) {
 	email := ban.Email
 
-	// Step 1: Remove ban record (intent declared first).
-	if err := uc.db.Delete(&ban).Error; err != nil {
-		uc.log.Error("antifraud unban: failed to delete ban record",
-			slog.String("email", email), slog.String("err", err.Error()))
-		return
-	}
-
-	// Clear in-memory ban entry.
-	uc.banStore.clearBan(email)
-
-	// Step 2: Check if user still exists in xrayconfig.json.
+	// Step 1: Check if user still exists in xrayconfig.json.
 	xrayCfg, err := xrayconfig.Read(uc.cfg.Paths.XrayConfig)
 	if err != nil {
 		uc.log.Error("antifraud unban: cannot read xray config",
@@ -552,12 +569,21 @@ func (uc *unbanCleaner) tryUnban(ban database.AntifraudBan) {
 	if err := apiClient.AddUser(payload, uc.cfg.Paths.XrayConfig); err != nil {
 		uc.log.Error("antifraud unban: hot-add failed",
 			slog.String("email", email), slog.String("err", err.Error()))
-		// Non-fatal: the user's subscription page will still show real nodes
-		// (ban is cleared). They'll reconnect on the next Xray config sync or restart.
+		return // Do not delete ban if Xray failed
 	} else {
 		uc.log.Info("antifraud unban: user restored to Xray runtime",
 			slog.String("email", email))
 	}
+
+	// Step 5: Remove ban record (only after successful Xray unban)
+	if err := uc.db.Delete(&ban).Error; err != nil {
+		uc.log.Error("antifraud unban: failed to delete ban record",
+			slog.String("email", email), slog.String("err", err.Error()))
+		return
+	}
+
+	// Clear in-memory ban entry.
+	uc.banStore.clearBan(email)
 
 	// Step 5: Propagate to slaves (fire-and-forget).
 	if uc.cfg.IsMaster() {

@@ -16,8 +16,8 @@ func updateXrayCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update-xray",
 		Short: "Update xray-core to the latest version",
-		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := requireRoot(); err != nil { return err }
 			fmt.Println("[INFO] Downloading xray update script…")
 			scriptURL := "https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
 			scriptPath := "/tmp/install-release-xray.sh"
@@ -26,18 +26,17 @@ func updateXrayCmd() *cobra.Command {
 			dlCmd.Stdout = os.Stdout
 			dlCmd.Stderr = os.Stderr
 			if err := dlCmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "[ERROR] Failed to download script: %v\n", err)
-				osExit(1)
+				return fmt.Errorf("[ERROR] Failed to download script: %v", err)
 			}
 			defer os.Remove(scriptPath)
 
 			fmt.Println("[INFO] Running xray update script…")
 			c := exec.Command("bash", scriptPath, "install")
 			if err := c.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "[ERROR] Update failed: %v\n", err)
-				osExit(1)
+				return fmt.Errorf("[ERROR] Update failed: %v", err)
 			}
 			fmt.Println("[OK] Xray updated.")
+			return nil
 		},
 	}
 }
@@ -47,7 +46,7 @@ func updateGeoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update-geo",
 		Short: "Update geoip.dat and geosite.dat files",
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			requireRoot()
 			fmt.Println("[INFO] Updating geo databases…")
 			geoFiles := []struct {
@@ -75,6 +74,7 @@ func updateGeoCmd() *cobra.Command {
 			fmt.Println("[OK] Geo databases updated.")
 			// fmt.Println("[INFO] Restarting xray…")
 			// systemctlRestart("xray")
+			return nil
 		},
 	}
 }
@@ -125,7 +125,7 @@ func migrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "Clean legacy fields from config.json and sync all users with current templates",
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			requireRoot()
 
 			if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(xrayCfg xrayconfig.RawConfig) error {
@@ -196,14 +196,14 @@ func migrateCmd() *cobra.Command {
 				fmt.Printf("\n=== Migration summary: %d modified, %d skipped ===\n", modifiedCount, skippedCount)
 				return nil
 			}); err != nil {
-				fmt.Fprintf(os.Stderr, "ERROR|migrate: %v\n", err)
-				osExit(1)
+				return fmt.Errorf("ERROR|migrate: %v", err)
 			}
 
 			if legacy {
 				systemctlRestart("xray")
 			}
 			fmt.Println("[OK] Migration complete. Review config.json before restarting.")
+			return nil
 		},
 	}
 

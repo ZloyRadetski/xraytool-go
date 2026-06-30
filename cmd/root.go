@@ -9,6 +9,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/logger"
+	"xraytool/internal/user"
 
 	"github.com/spf13/cobra"
 )
@@ -26,17 +27,17 @@ var rootCmd = &cobra.Command{
 	// Silence default error printing — our printer handles it.
 	SilenceErrors: true,
 	SilenceUsage:  true,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return loadConfig()
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()
 	},
 }
 
 // Execute runs the root command.
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		osExit(1)
-	}
+func Execute() error {
+	return rootCmd.Execute()
 }
 
 func init() {
@@ -46,17 +47,22 @@ func init() {
 	)
 
 	// loadConfig is run before every subcommand.
-	cobra.OnInitialize(loadConfig)
+	// Config loading is now handled in PersistentPreRunE
+	// cobra.OnInitialize(loadConfig)
+
+	getUserSvc := func() *user.Service {
+		return user.NewService(database.DB(), cfg)
+	}
 
 	rootCmd.AddCommand(
-		newUserCmd(),
-		rmUserCmd(),
-		limitCmd(),
-		unlimitCmd(),
-		setExpireCmd(),
-		updateLimitCmd(),
-		userListCmd(),
-		shareLinkCmd(),
+		newUserCmd(getUserSvc),
+		rmUserCmd(getUserSvc),
+		limitCmd(getUserSvc),
+		unlimitCmd(getUserSvc),
+		setExpireCmd(getUserSvc),
+		updateLimitCmd(getUserSvc),
+		userListCmd(getUserSvc),
+		shareLinkCmd(getUserSvc),
 		statsCmd(),
 		syncStatesCmd(),
 
@@ -72,21 +78,12 @@ func init() {
 	)
 }
 
-func loadConfig() {
-	// Skip if no subcommand was given (just --help, etc.)
-	if len(os.Args) < 2 {
-		return
-	}
-	// Skip config load for help flags
-	if len(os.Args) == 2 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "help") {
-		return
-	}
+func loadConfig() error {
 
 	var err error
 	cfg, err = appconfig.Load(cfgFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR|failed to load config %q: %v\n", cfgFile, err)
-		osExit(1)
+		return fmt.Errorf("failed to load config %q: %v", cfgFile, err)
 	}
 
 	if err := logger.Init(cfg); err != nil {
@@ -94,32 +91,37 @@ func loadConfig() {
 	}
 
 	isServerOrMigrate := false
-	if len(os.Args) > 1 && (os.Args[1] == "start-server" || os.Args[1] == "migrate" || os.Args[1] == "db-migrate") {
-		isServerOrMigrate = true
+	for _, arg := range os.Args {
+		if arg == "start-server" || arg == "migrate" || arg == "db-migrate" {
+			isServerOrMigrate = true
+			break
+		}
 	}
 
 	if err := database.Init(database.Config{
-		Driver:     cfg.Database.Driver,
-		DSN:        cfg.Database.DSN,
-		SQLitePath: cfg.Database.SQLitePath,
-		Silent:     !isServerOrMigrate,
+		Driver:      cfg.Database.Driver,
+		DSN:         cfg.Database.DSN,
+		SQLitePath:  cfg.Database.SQLitePath,
+		AutoMigrate: isServerOrMigrate,
+		Silent:      !isServerOrMigrate,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "WARN|failed to initialize database: %v\n", err)
+		return fmt.Errorf("failed to initialize database: %v", err)
 	}
+	return nil
 }
 
 var geteuid = func() int { return os.Geteuid() }
 var currentGOOS = runtime.GOOS
 
-// requireRoot exits if the process is not running as root.
-func requireRoot() {
+// requireRoot checks if the process is running as root.
+func requireRoot() error {
 	if currentGOOS == "windows" {
-		return
+		return nil
 	}
 	if geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "ERROR|Script must be run as root")
-		osExit(1)
+		return fmt.Errorf("Script must be run as root")
 	}
+	return nil
 }
 
 const banner = `

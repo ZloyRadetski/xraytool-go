@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -10,6 +9,8 @@ import (
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/slave"
+	"xraytool/internal/user"
+	"xraytool/internal/xrayconfig"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,21 +26,21 @@ type Printer struct {
 
 func newPrinter(batch bool) *Printer { return &Printer{Batch: batch} }
 
-var osExit = os.Exit
 
-// Error prints an error message and exits with code 1.
-func (p *Printer) Error(msg string) {
+
+// Error prints an error message and returns it as an error object.
+func (p *Printer) Error(msg string) error {
 	if p.Batch {
 		fmt.Println("ERROR|" + msg)
 	} else {
 		fmt.Fprintf(os.Stderr, "\n\033[0;31m[ERROR] %s\033[0m\n", msg)
 	}
-	osExit(1)
+	return fmt.Errorf("command failed: %s", msg)
 }
 
 // Errorf is Error with printf formatting.
-func (p *Printer) Errorf(format string, args ...interface{}) {
-	p.Error(fmt.Sprintf(format, args...))
+func (p *Printer) Errorf(format string, args ...interface{}) error {
+	return p.Error(fmt.Sprintf(format, args...))
 }
 
 // Success prints a success message (batch only; interactive callers print inline).
@@ -158,18 +159,37 @@ func subfileID(subfile string) string {
 	return subfile
 }
 
+// resolveEmail handles the duplicated logic of selecting an email from flags, interactive menu,
+// or stdin, and validates it. It calls p.Error (which prints error) if validation fails.
+func resolveEmail(email, emailAlias string, allowMenu bool, promptText string, p *Printer) (string, error) {
+	if email == "" {
+		email = emailAlias
+	}
+
+	if email == "" && !p.Batch {
+		if allowMenu {
+			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
+			if err != nil {
+				return "", p.Errorf("reading xray config: %v", err)
+			}
+			email = selectUserInteractive(xrayCfg, p)
+		} else {
+			fmt.Print(promptText)
+			fmt.Scanln(&email)
+		}
+	}
+
+	if email == "" {
+		return "", p.Error("email is required")
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9@._-]+$`).MatchString(email) {
+		return "", p.Error("invalid email format")
+	}
+	return email, nil
+}
+
 // limitPtrFromStr parses a string into a *float64.
 // Returns nil if the string is empty.
 func limitPtrFromStr(s string) (*float64, error) {
-	if s == "" {
-		return nil, nil
-	}
-	var v float64
-	if _, err := fmt.Sscanf(s, "%f", &v); err != nil {
-		return nil, fmt.Errorf("invalid limit %q: %w", s, err)
-	}
-	if v < 1 || v != math.Trunc(v) || v > 10000 {
-		return nil, fmt.Errorf("limit must be a positive integer between 1 and 10000 (got %v)", v)
-	}
-	return &v, nil
+	return user.ParseLimit(s)
 }

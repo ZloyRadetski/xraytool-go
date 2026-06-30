@@ -8,20 +8,16 @@ import (
 	"xraytool/internal/database"
 )
 
-var exitCalled bool
-
 func setupTest(t *testing.T) {
-	exitCalled = false
-	osExit = func(code int) {
-		exitCalled = true
-		panic("exit")
-	}
 	// Ensure global DB state is reset before each test
 	database.Close()
+	os.WriteFile("test_config.yaml", []byte("database:\n  driver: sqlite\n  sqlite_path: test.db\npaths:\n  xray_config: test_xray_config.json\n"), 0644)
 }
 
 func teardownTest() {
-	osExit = os.Exit
+	os.Remove("test_config.yaml")
+	os.Remove("test.db")
+	os.Remove("test_xray_config.json")
 }
 
 func captureOutput(f func()) string {

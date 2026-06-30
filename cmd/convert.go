@@ -16,7 +16,7 @@ func convertCmd() *cobra.Command {
 		Use:   "convert [input]",
 		Short: "Convert Xray JSON to share links or vice versa",
 		Long:  `Convert Xray JSON configuration to subscription links, or parse subscription links to Xray JSON. Input can be specified as a positional argument, via --input flag, or read from stdin using '-'.`,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			var rawInput string
 
 			// Resolve raw input from flag, args, or stdin
@@ -31,40 +31,37 @@ func convertCmd() *cobra.Command {
 					rawInput = "-"
 				} else {
 					_ = cmd.Help()
-					return
+					return nil
 				}
 			}
 
 			input, _, err := convert.ResolveInput(rawInput)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "ERROR|failed to resolve input: %v\n", err)
-				osExit(1)
+				return fmt.Errorf("failed to resolve input: %v", err)
 			}
 
 			// Normalize and check if input is JSON
 			normalizedJSON, isJSON, err := convert.NormalizeJSONInput(input)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "ERROR|invalid input format: %v\n", err)
-				osExit(1)
+				return fmt.Errorf("invalid input format: %v", err)
 			}
 
 			if isJSON {
 				// Convert JSON to Share Links
 				shareLinks, err := convert.XrayJSONToShareText(normalizedJSON)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR|failed to convert JSON to share links: %v\n", err)
-					osExit(1)
+					return fmt.Errorf("failed to convert JSON to share links: %v", err)
 				}
 				fmt.Print(shareLinks)
 			} else {
 				// Convert Share Link to Xray JSON
 				xrayJSON, err := convert.ShareLinkToXrayJSON(input)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR|failed to convert share links to JSON: %v\n", err)
-					osExit(1)
+					return fmt.Errorf("failed to convert share links to JSON: %v", err)
 				}
 				fmt.Print(xrayJSON)
 			}
+			return nil
 		},
 	}
 

@@ -30,10 +30,19 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 	// 3. Get remote IP
 	remoteAddr := req.Header.Get("X-Real-IP")
 	if remoteAddr == "" {
-		remoteAddr = req.RemoteAddr
+		remoteAddr = getClientIP(req)
 	}
 
-	isBot := strings.Contains(strings.ToLower(req.UserAgent()), "megasupersecretua")
+	ua := strings.ToLower(req.UserAgent())
+	isBot := false
+	if r.cfg != nil {
+		for _, w := range r.cfg.Subscription.UserAgentNoChecks {
+			if strings.Contains(ua, strings.ToLower(w)) {
+				isBot = true
+				break
+			}
+		}
+	}
 	if isBot {
 		r.log.Debug("Incoming SQL subscription request", "ip", remoteAddr, "ua", req.UserAgent(), "url", req.URL.String())
 	} else {

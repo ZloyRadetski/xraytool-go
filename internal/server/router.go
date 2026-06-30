@@ -67,6 +67,7 @@ type Router struct {
 	ingestEvents func(slaveID string, events []antifraud.SlaveIPEvent)
 
 	bgTasks sync.WaitGroup
+	webRegMu sync.Mutex
 }
 
 // Shutdown waits for all background tasks (like webhooks and xray unbans) to complete.
@@ -131,6 +132,11 @@ func (r *Router) registerRoutes() {
 
 	// ── Protected routes ─────────────────────────────────────────────────────
 	protected := r.authMiddleware
+
+	// Files & Webhooks
+	r.mux.Handle("POST /api/rest/update-links", protected(r.handleUpdateLinks))
+	r.mux.Handle("POST /api/rest/upload", protected(r.handleUpload))
+	r.mux.Handle("GET /api/rest/download", protected(r.handleDownload))
 
 	// Users
 	r.mux.Handle("POST /api/v1/users/register", protected(r.handleRegisterUser))

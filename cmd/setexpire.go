@@ -3,15 +3,13 @@ package cmd
 import (
 	"fmt"
 
-	"xraytool/internal/convert"
 	"xraytool/internal/xrayconfig"
-	"xraytool/internal/database"
+	"xraytool/internal/user"
 
-	"gorm.io/gorm"
 	"github.com/spf13/cobra"
 )
 
-func setExpireCmd() *cobra.Command {
+func setExpireCmd(getUserSvc func() *user.Service) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -21,57 +19,41 @@ func setExpireCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setexpire",
 		Short: "Update a user's expiry date",
-		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
-
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := requireRoot(); err != nil { return err }
 			if email == "" {
 				email = emailAlias
 			}
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			if email == "" || expireVal == "" {
-				p.Error("--email and --expire are required")
+			email, err := resolveEmail(email, emailAlias, true, "", p)
+			if err != nil { return err }
+
+			if expireVal == "" {
+				fmt.Print("Enter new expiry date (DD-MM-YYYY) or offset (+30): ")
+				fmt.Scanln(&expireVal)
 			}
-			if !validEmail(email) {
-				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
-			}
-			if _, err := convert.ParseExpiryDate(expireVal); err != nil {
-				p.Errorf("invalid expire date format (supports DD.MM.YYYY, RFC3339, etc): %v", err)
+			if expireVal == "" {
+				return p.Error("expire date is required")
 			}
 
-			updatedActive := false
-			if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
-				exists, err := xrayconfig.UserExists(c, email)
-				if err != nil {
-					return err
-				}
-				if !exists {
-					return nil
-				}
-				updatedActive = true
-				return xrayconfig.UpdateStringField(c, email, "expire", expireVal)
-			}); err != nil {
-				p.Errorf("updating expire: %v", err)
+			req := user.SetExpireRequest{
+				Email:  email,
+				Expire: expireVal,
 			}
 
-			if !updatedActive {
-				p.Errorf("user %q not found in xray config", email)
-			}
-
-			sqlSetExpire(database.DB(), email, expireVal)
-
-			if cfg.IsMaster() {
-				propagate(cfg, "setexpire", map[string]string{
-					"email": email, "expire": expireVal,
-				}, p)
+			svc := getUserSvc()
+			if err := svc.SetExpire(req); err != nil {
+				return p.Errorf("error: %v", err)
 			}
 
 			if isBatch {
 				fmt.Printf("SUCCESS|EXPIRE_SET|%s|%s\n", email, expireVal)
 			} else {
-				p.OK("Expiry for %s set to %s.", email, expireVal)
+				p.OK("User %s expire updated to %s", email, expireVal)
 			}
+			return nil
 		},
 	}
 
@@ -81,7 +63,7 @@ func setExpireCmd() *cobra.Command {
 	return cmd
 }
 
-func updateLimitCmd() *cobra.Command {
+func updateLimitCmd(getUserSvc func() *user.Service) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -92,57 +74,49 @@ func updateLimitCmd() *cobra.Command {
 		Use:     "setlimit",
 		Aliases: []string{"updatelimit", "set-limit"},
 		Short:   "Update a user's device connection limit",
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			requireRoot()
-
 			if email == "" {
 				email = emailAlias
 			}
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			if email == "" || limitStr == "" {
-				p.Error("--email and --limit are required")
+			if email == "" {
+				xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
+				if err != nil {
+					p.Errorf("reading xray config: %v", err)
+				}
+				email = selectUserInteractive(xrayCfg, p)
+			}
+			if email == "" {
+				p.Error("email is required")
 			}
 			if !validEmail(email) {
-				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
+				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -)")
 			}
 
 			limitPtr, err := limitPtrFromStr(limitStr)
 			if err != nil || limitPtr == nil {
-				p.Errorf("invalid limit: %q", limitStr)
+				return p.Errorf("invalid limit: %v", err)
 			}
 
-			updatedActive := false
-			// Update in active config.
-			if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
-				exists, _ := xrayconfig.UserExists(c, email)
-				if !exists {
-					return nil // no-op; will try limited DB
-				}
-				updatedActive = true
-				return xrayconfig.UpdateNumberField(c, email, "limit", *limitPtr)
-			}); err != nil {
-				p.Errorf("updating active config: %v", err)
+			req := user.UpdateLimitRequest{
+				Email: email,
+				Limit: limitPtr,
 			}
 
-			if !updatedActive {
-				p.Errorf("user %q not found in xray config", email)
-			}
-
-			sqlSetLimit(database.DB(), email, int(*limitPtr))
-
-			if cfg.IsMaster() {
-				propagate(cfg, "setlimit", map[string]string{
-					"email": email, "limit": limitStr,
-				}, p)
+			svc := getUserSvc()
+			if err := svc.UpdateLimit(req); err != nil {
+				return p.Errorf("error: %v", err)
 			}
 
 			if isBatch {
-				fmt.Printf("SUCCESS|LIMIT_UPDATED|%s|%s\n", email, limitStr)
+				fmt.Printf("SUCCESS|LIMIT_UPDATED|%s|%.0f\n", email, *limitPtr)
 			} else {
-				p.OK("Device limit for %s set to %s.", email, limitStr)
+				p.OK("User %s limit updated to %.0f", email, *limitPtr)
 			}
+			return nil
 		},
 	}
 
@@ -152,113 +126,4 @@ func updateLimitCmd() *cobra.Command {
 	return cmd
 }
 
-type SetExpireRequest struct {
-	Email  string
-	Name   string
-	Expire string
-}
 
-func ExecSetExpire(db *gorm.DB, req SetExpireRequest) (string, error) {
-	email := req.Email
-	if email == "" {
-		email = req.Name
-	}
-	expireVal := req.Expire
-
-	if email == "" || expireVal == "" {
-		return "", fmt.Errorf("email and expire are required")
-	}
-	if !validEmail(email) {
-		return "", fmt.Errorf("invalid characters in email")
-	}
-	if _, err := convert.ParseExpiryDate(expireVal); err != nil {
-		return "", fmt.Errorf("invalid expire date format: %v", err)
-	}
-
-	updatedActive := false
-	if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
-		exists, err := xrayconfig.UserExists(c, email)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return nil
-		}
-		updatedActive = true
-		return xrayconfig.UpdateStringField(c, email, "expire", expireVal)
-	}); err != nil {
-		return "", fmt.Errorf("updating expire: %v", err)
-	}
-
-	if !updatedActive {
-		return "", fmt.Errorf("user %q not found in xray config", email)
-	}
-
-	sqlSetExpire(db, email, expireVal)
-
-	if cfg.IsMaster() {
-		p := newPrinter(true)
-		propagate(cfg, "setexpire", map[string]string{
-			"email": email, "expire": expireVal,
-		}, p)
-	}
-
-	return fmt.Sprintf("SUCCESS|EXPIRE_SET|%s|%s", email, expireVal), nil
-}
-
-type UpdateLimitRequest struct {
-	Email string
-	Name  string
-	Limit *float64
-}
-
-func ExecUpdateLimit(db *gorm.DB, req UpdateLimitRequest) (string, error) {
-	email := req.Email
-	if email == "" {
-		email = req.Name
-	}
-
-	var limitStr string
-	if req.Limit != nil {
-		limitStr = fmt.Sprintf("%.0f", *req.Limit)
-	}
-
-	if email == "" || limitStr == "" {
-		return "", fmt.Errorf("email and limit are required")
-	}
-	if !validEmail(email) {
-		return "", fmt.Errorf("invalid characters in email")
-	}
-
-	limitPtr, err := limitPtrFromStr(limitStr)
-	if err != nil || limitPtr == nil {
-		return "", fmt.Errorf("invalid limit: %q", limitStr)
-	}
-
-	updatedActive := false
-	if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
-		exists, _ := xrayconfig.UserExists(c, email)
-		if !exists {
-			return nil
-		}
-		updatedActive = true
-		return xrayconfig.UpdateNumberField(c, email, "limit", *limitPtr)
-	}); err != nil {
-		return "", fmt.Errorf("updating active config: %v", err)
-	}
-
-	if !updatedActive {
-		return "", fmt.Errorf("user %q not found in xray config", email)
-	}
-
-	sqlSetLimit(db, email, int(*limitPtr))
-
-	if cfg.IsMaster() {
-		p := newPrinter(true)
-		propagate(cfg, "setlimit", map[string]string{
-			"email": email, "limit": limitStr,
-		}, p)
-	}
-
-	return fmt.Sprintf("SUCCESS|LIMIT_UPDATED|%s|%s", email, limitStr), nil
-}

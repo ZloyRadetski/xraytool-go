@@ -1,7 +1,12 @@
 package main
 
-import "xraytool/cmd"
+import (
+	"os"
+	"xraytool/cmd"
+)
 
 func main() {
-	cmd.Execute()
+	if err := cmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }

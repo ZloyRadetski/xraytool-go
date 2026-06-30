@@ -3,8 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"xraytool/internal/database"
-	"xraytool/internal/xrayapi"
+	"xraytool/internal/user"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
@@ -13,16 +12,16 @@ import (
 // rmUserCmd and limitCmd share the same core logic; the difference is whether
 // the removed user is saved to limited_users.db.
 
-func rmUserCmd() *cobra.Command {
-	return rmOrLimitCmd("rm")
+func rmUserCmd(getUserSvc func() *user.Service) *cobra.Command {
+	return rmOrLimitCmd("rm", getUserSvc)
 }
 
-func limitCmd() *cobra.Command {
-	return rmOrLimitCmd("limit")
+func limitCmd(getUserSvc func() *user.Service) *cobra.Command {
+	return rmOrLimitCmd("limit", getUserSvc)
 }
 
 // rmOrLimitCmd builds either the "rmuser" or "limit" cobra command.
-func rmOrLimitCmd(action string) *cobra.Command {
+func rmOrLimitCmd(action string, getUserSvc func() *user.Service) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -37,113 +36,26 @@ func rmOrLimitCmd(action string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			requireRoot()
 
-			if email == "" {
-				email = emailAlias
-			}
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			// Interactive: pick from list.
-			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
+			email, err := resolveEmail(email, emailAlias, true, "", p)
 			if err != nil {
-				p.Errorf("reading xray config: %v", err)
+				return err
 			}
 
-			if email == "" {
-				email = selectUserInteractive(xrayCfg, p)
-			}
-			if email == "" {
-				p.Error("email is required")
-			}
-			if !validEmail(email) {
-				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
+			req := user.ModifyUserRequest{
+				Email:  email,
+				Action: action,
+				Legacy: legacy,
 			}
 
-			// Verify the user exists.
-			client, err := xrayconfig.FindUser(xrayCfg, email)
-			var subfile string
-
-			if err != nil || client == nil {
-				// No legacy DB check needed, just say user not found if not in xray config
-				// UNLESS they are trying to remove a user that is only in SQL.
-				// But limit.go operates on Xray config mostly.
-				// Let's just proceed to update SQL status anyway.
-				
-				if action == "rm" {
-					sqlSetStatus(database.DB(), email, "inactive")
-
-					if cfg.IsMaster() {
-						slaveParams := map[string]string{"email": email}
-						if legacy {
-							slaveParams["legacy"] = "true"
-						}
-						propagate(cfg, "rmuser", slaveParams, p)
-					}
-
-					if isBatch {
-						fmt.Printf("SUCCESS|%sED|%s\n", action, email)
-					} else {
-						p.OK("User %s: %s completed.", email, action)
-					}
-					return
-				} else {
-					p.Error("user is already limited/blocked or not in xray config")
-				}
-			}
-
-			// Collect the user's subfile & limit before removing.
-			subfile = client.GetString("subfile")
-			if subfile == "" {
-				subfile = "unknown.txt"
-			}
-
-			// Hot-remove via xray API.
-			if !legacy {
-				tags, tagsErr := xrayconfig.InboundTagsForUser(xrayCfg, email)
-				if tagsErr != nil {
-					p.Errorf("getting inbound tags for %s: %v", email, tagsErr)
-				}
-				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
-				if err := apiClient.RemoveUser(email, tags); err != nil {
-					p.Warn("xray API hot-remove failed: %v\n\nUse --legacy flag to restart xray instead.", err)
-				}
-			}
-
-			// Remove from config then write atomically FIRST.
-			if err := xrayconfig.RemoveUserFromAllInbounds(xrayCfg, email); err != nil {
-				p.Errorf("removing from xray config: %v", err)
-			}
-			if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-				p.Errorf("writing xray config: %v", err)
-			}
-
-			// Save to limited DB if this is a "limit" (block) action.
-			// (Removed legacy limited_users.db code. The SQL DB is updated below.)
-
-			if legacy {
-				systemctlRestart("xray")
-			}
-
-			if action == "limit" {
-				sqlSetStatus(database.DB(), email, "blocked")
-			} else {
-				sqlSetStatus(database.DB(), email, "inactive") // or whatever makes sense for rmuser
-			}
-
-			// Propagate.
-			if cfg.IsMaster() {
-				slaveCmd := action // "limit" or "rmuser"
-				if action == "rm" {
-					slaveCmd = "rmuser"
-				}
-				slaveParams := map[string]string{"email": email}
-				if legacy {
-					slaveParams["legacy"] = "true"
-				}
-				propagate(cfg, slaveCmd, slaveParams, p)
+			svc := getUserSvc()
+			if err := svc.BlockOrRemoveUser(req); err != nil {
+				return p.Errorf("error: %v", err)
 			}
 
 			if isBatch {
@@ -151,6 +63,7 @@ func rmOrLimitCmd(action string) *cobra.Command {
 			} else {
 				p.OK("User %s: %s completed.", email, action)
 			}
+			return nil
 		},
 	}
 

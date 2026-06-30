@@ -5,29 +5,30 @@ import (
 	"sort"
 
 	"xraytool/internal/database"
+	"xraytool/internal/user"
 	"xraytool/internal/xrayconfig"
 
 	"github.com/spf13/cobra"
 )
 
-func userListCmd() *cobra.Command {
+func userListCmd(getUserSvc func() *user.Service) *cobra.Command {
 	var batchMode bool
 
 	cmd := &cobra.Command{
 		Use:   "userlist",
 		Short: "List active and blocked users",
-		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := requireRoot(); err != nil { return err }
 			p := newPrinter(batchMode)
 
 			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
 			if err != nil {
-				p.Errorf("reading xray config: %v", err)
+				return p.Errorf("reading xray config: %v", err)
 			}
 
 			users, err := xrayconfig.ListUsers(xrayCfg)
 			if err != nil {
-				p.Errorf("listing users: %v", err)
+				return p.Errorf("listing users: %v", err)
 			}
 
 			// Sort by email.
@@ -68,7 +69,7 @@ func userListCmd() *cobra.Command {
 				for _, e := range limited {
 					fmt.Printf("BLOCKED|%s|%s\n", e.Email, e.Subfile)
 				}
-				return
+				return nil
 			}
 
 			// Interactive output with colors.
@@ -106,6 +107,7 @@ func userListCmd() *cobra.Command {
 					)
 				}
 			}
+			return nil
 		},
 	}
 
@@ -113,7 +115,7 @@ func userListCmd() *cobra.Command {
 	return cmd
 }
 
-func shareLinkCmd() *cobra.Command {
+func shareLinkCmd(getUserSvc func() *user.Service) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -122,46 +124,34 @@ func shareLinkCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sharelink",
 		Short: "Get the subscription link for a user",
-		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := requireRoot(); err != nil { return err }
 
-			if email == "" {
-				email = emailAlias
-			}
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			if email != "" && !validEmail(email) {
-				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
-			}
-
-			// Interactive: pick user.
-			if email == "" {
-				xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-				if err != nil {
-					p.Errorf("reading xray config: %v", err)
-				}
-				email = selectUserInteractive(xrayCfg, p)
-			}
+			email, err := resolveEmail(email, emailAlias, true, "", p)
+			if err != nil { return err }
 
 			// Try active users first.
 			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
 			if err != nil {
-				p.Errorf("reading xray config: %v", err)
+				return p.Errorf("reading xray config: %v", err)
 			}
 
 			client, _ := xrayconfig.FindUser(xrayCfg, email)
 			if client != nil {
 				sub := client.GetString("subfile")
 				if sub != "" {
-					link := fmt.Sprintf("https://%s/client?id=%s", cfg.Server.Domain, subfileID(sub))
+					svc := getUserSvc()
+					link := svc.GenerateShareLink("", subfileID(sub))
 					if isBatch {
 						fmt.Printf("SUCCESS|LINK|%s\n", link)
 					} else {
 						p.OK("Link found:")
 						fmt.Printf("\033[1m%s\033[0m\n", link)
 					}
-					return
+					return nil
 				}
 			}
 
@@ -171,7 +161,8 @@ func shareLinkCmd() *cobra.Command {
 				var sub database.Subscription
 				if err := db.Where("email = ?", email).First(&sub).Error; err == nil && sub.Metadata != nil {
 					if sf, ok := sub.Metadata["subfile"].(string); ok && sf != "" {
-						link := fmt.Sprintf("https://%s/client?id=%s", cfg.Server.Domain, subfileID(sf))
+						svc := getUserSvc()
+						link := svc.GenerateShareLink("", subfileID(sf))
 						status := sub.Status
 						if isBatch {
 							fmt.Printf("SUCCESS|LINK|%s|(%s)\n", link, status)
@@ -181,12 +172,12 @@ func shareLinkCmd() *cobra.Command {
 							}
 							fmt.Printf("Link: %s\n", link)
 						}
-						return
+						return nil
 					}
 				}
 			}
 
-			p.Error("user not found")
+			return p.Error("user not found")
 		},
 	}
 

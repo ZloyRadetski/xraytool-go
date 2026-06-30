@@ -59,10 +59,10 @@ func TestSyncMasterUUIDsFromDB(t *testing.T) {
 		XrayConfig: "test_xray_config.json",
 	}
 
-	xrayCfg, _ := xrayconfig.Read("test_xray_config.json")
+	// Not using xrayCfg directly here
 
 	// 3. Run sync
-	changed, err := syncMasterUUIDsFromDB(xrayCfg)
+	changed, err := syncMasterUUIDsFromDB()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,9 +124,9 @@ func TestSyncMasterUUIDsFromDB_NoChange(t *testing.T) {
 		XrayConfig: "test_xray_config2.json",
 	}
 
-	xrayCfg, _ := xrayconfig.Read("test_xray_config2.json")
+	// Not using xrayCfg directly here
 
-	changed, err := syncMasterUUIDsFromDB(xrayCfg)
+	changed, err := syncMasterUUIDsFromDB()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

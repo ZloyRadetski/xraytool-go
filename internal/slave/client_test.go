@@ -81,7 +81,7 @@ func TestClientCall(t *testing.T) {
 		var req map[string]string
 		json.NewDecoder(r.Body).Decode(&req)
 
-		if r.URL.Path == "/" {
+		if r.URL.Path == "/sync" {
 			if req["action"] == "sync" {
 				w.Write([]byte(`{"status":"success","output":"test_ok"}`))
 				return

@@ -13,6 +13,7 @@ import (
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
+	usersvc "xraytool/internal/user"
 	"log/slog"
 
 	"gorm.io/gorm"
@@ -407,7 +408,8 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 		return failResponse(500, "No templates found in subscription config")
 	}
 
-	canonicalSubLink := fmt.Sprintf("https://%s/client?id=%s", getRequestHost(req, cfg.Server.Domain), clientId)
+	svc := usersvc.NewService(nil, cfg)
+	canonicalSubLink := svc.GenerateShareLink(getRequestHost(req, cfg.Server.Domain), clientId)
 	renderedHeader := generateHeader(email, canonicalSubLink, subHeader, fmt.Sprintf("%d", expireTs), fmt.Sprintf("%d", downloadBytes), isBlockedUser, deviceLimit)
 
 	meta := parseHeaderMetadata(renderedHeader)

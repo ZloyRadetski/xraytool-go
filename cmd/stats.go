@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -26,16 +28,18 @@ func statsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cli-stats",
 		Short: "Show per-user traffic statistics",
-		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := requireRoot(); err != nil {
+				return err
+			}
 			p := newPrinter(apiMode)
 
 			if emailFilter == "" {
 				emailFilter = nameFilter
 			}
 
-			if emailFilter != "" && !validEmail(emailFilter) {
-				p.Error("invalid characters in email filter (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
+			if emailFilter != "" && !regexp.MustCompile(`^[a-zA-Z0-9@._-]+$`).MatchString(emailFilter) {
+				return p.Error("invalid characters in email filter (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
 			}
 
 			statePath := cfg.Paths.StatsState
@@ -51,13 +55,13 @@ func statsCmd() *cobra.Command {
 					} else {
 						p.Warn("Stats update failed: %v", err)
 					}
-					return
+					return nil
 				}
 			}
 
 			state, err := stats.Load(statePath, cfg.DetailedRetentionSeconds())
 			if err != nil {
-				p.Errorf("loading stats state: %v", err)
+				return p.Errorf("loading stats state: %v", err)
 			}
 
 			localUsers := stats.Cumulative(state)
@@ -73,8 +77,10 @@ func statsCmd() *cobra.Command {
 			merged := mergeWithSlaves(localUsers, slaveTotals)
 
 			if emailFilter != "" {
+				found := false
 				for _, u := range merged {
 					if u.Email == emailFilter {
+						found = true
 						if apiMode {
 							printJSON(map[string]interface{}{
 								"ok":           true,
@@ -85,15 +91,16 @@ func statsCmd() *cobra.Command {
 						} else {
 							printUserStatsTable(u)
 						}
-						return
+						return nil
 					}
 				}
 				if apiMode {
 					printJSON(map[string]interface{}{"ok": false, "error": "USER_NOT_FOUND", "email": emailFilter})
-				} else {
-					p.Errorf("user not found: %s", emailFilter)
 				}
-				return
+				if !found {
+					return p.Errorf("user not found: %s", emailFilter)
+				}
+				return nil
 			}
 
 			// Filter zero-traffic entries for interactive display.
@@ -121,7 +128,7 @@ func statsCmd() *cobra.Command {
 						"cluster": map[string]int64{"combined": clTotal},
 					},
 				})
-				return
+				return nil
 			}
 
 			// Print slave status.
@@ -135,6 +142,7 @@ func statsCmd() *cobra.Command {
 			}
 
 			printAllStatsTable(merged)
+			return nil
 		},
 	}
 
@@ -176,6 +184,28 @@ func updateStatsStorage(statePath string) error {
 		}
 	}
 
+	lockPath := statePath + ".lock"
+	for i := 0; i < 50; i++ {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL, 0666)
+		if err == nil {
+			f.Close()
+			defer os.Remove(lockPath)
+			goto acquired
+		}
+		if os.IsExist(err) {
+			if stat, err := os.Stat(lockPath); err == nil {
+				if time.Since(stat.ModTime()) > 30*time.Second {
+					os.Remove(lockPath) // Stale lock
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return fmt.Errorf("failed to create lock file: %w", err)
+	}
+	return fmt.Errorf("timeout waiting for stats lock file")
+
+acquired:
 	state, err := stats.Load(statePath, cfg.DetailedRetentionSeconds())
 	if err != nil {
 		return err

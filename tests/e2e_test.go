@@ -112,6 +112,7 @@ func TestMain(m *testing.M) {
 server:
   ip: "127.0.0.1"
   domain: "localhost:18080"
+  api_key: "%s"
 paths:
   xray_config: %q
   stats_state: %q
@@ -134,7 +135,7 @@ logging:
   level: "debug"
   format: "console"
 `,
-		xrayConfigAbs, statsStateAbs, inferredStatsAbs,
+		apiKey, xrayConfigAbs, statsStateAbs, inferredStatsAbs,
 		jsonSubAbs, routingAbs, routingRuAbs,
 		hy2ConfigAbs, geoipAbs, geositeAbs, apiKey, tempDBPath)
 
@@ -244,8 +245,19 @@ func apiRequest(method, path string, body interface{}, useAPIKey bool) (int, str
 	return resp.StatusCode, string(respBody), nil
 }
 
+var e2eDB *gorm.DB
+var e2eDBMutex sync.Mutex
+
 func getDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(tempDBPath), &gorm.Config{})
+	e2eDBMutex.Lock()
+	defer e2eDBMutex.Unlock()
+
+	if e2eDB != nil {
+		return e2eDB
+	}
+
+	dsn := tempDBPath + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("Failed to open SQLite database: %v", err)
 	}
@@ -262,9 +274,10 @@ func getDB(t *testing.T) *gorm.DB {
 		&database.PromoCode{},
 	)
 	if err != nil {
-		t.Fatalf("Failed to auto-migrate database: %v", err)
+		t.Fatalf("Failed to migrate database: %v", err)
 	}
-	
+
+	e2eDB = db
 	return db
 }
 
@@ -285,6 +298,10 @@ func TestE2ESuite(t *testing.T) {
 	if err := serverCmd.Start(); err != nil {
 		t.Fatalf("Failed to start server subprocess: %v", err)
 	}
+
+	// Initialize the DB schema before running any tests
+	getDB(t)
+
 	defer func() {
 		if serverCmd.Process != nil {
 			_ = serverCmd.Process.Kill()
@@ -1181,7 +1198,11 @@ func TestE2ESuite(t *testing.T) {
 			_, getResp, _ := apiRequest("POST", "/api/v1/users/register", body, true)
 			var userMap map[string]interface{}
 			_ = json.Unmarshal([]byte(getResp), &userMap)
-			ref := userMap["ref_code"].(string)
+			refVal, ok := userMap["ref_code"].(string)
+			if !ok {
+				t.Fatalf("ref_code missing in response: %v", getResp)
+			}
+			ref := refVal
 			if generated[ref] {
 				t.Fatalf("Collision detected! Secret %s generated twice.", ref)
 			}

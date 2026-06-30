@@ -3,16 +3,12 @@ package cmd
 import (
 	"fmt"
 
-	"xraytool/internal/generate"
-	"xraytool/internal/xrayapi"
-	"xraytool/internal/xrayconfig"
-	"xraytool/internal/database"
+	"xraytool/internal/user"
 
-	"gorm.io/gorm"
 	"github.com/spf13/cobra"
 )
 
-func newUserCmd() *cobra.Command {
+func newUserCmd(getUserSvc func() *user.Service) *cobra.Command {
 	var (
 		email        string
 		emailAlias   string
@@ -27,150 +23,48 @@ func newUserCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "newuser",
 		Short: "Create a new user",
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			requireRoot()
 
-			// Reconcile --name / --email aliases.
-			if email == "" {
-				email = emailAlias
-			}
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			// Interactive: prompt for email.
-			if email == "" {
-				fmt.Print("Enter name (email): ")
-				fmt.Scanln(&email)
-			}
-			if email == "" {
-				p.Error("email is required")
-			}
-			if !validEmail(email) {
-				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -)")
-			}
-
-
-
-			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
+			email, err := resolveEmail(email, emailAlias, false, "Enter name (email): ", p)
 			if err != nil {
-				p.Errorf("reading xray config: %v", err)
-			}
-			exists, existsErr := xrayconfig.UserExists(xrayCfg, email)
-			if existsErr != nil {
-				p.Errorf("checking user existence: %v", existsErr)
-			}
-			if exists {
-				p.Error("user already exists")
+				return err
 			}
 
-
-			// --- Generate or use forced values ---
-			uuid := forcedUUID
-			if uuid == "" {
-				if uuid, err = generate.UUID(); err != nil {
-					p.Errorf("generating UUID: %v", err)
-				}
-			}
-			subfile := forcedSub
-			if subfile == "" {
-				subfile = generate.Subfile()
-			}
-			expireVal := forcedExpire
-			if expireVal == "" {
-				expireVal = defaultExpireDate()
-			}
-			auth := forcedAuth
-			if auth == "" {
-				auth = generate.Secret(32)
-			}
 			limitPtr, err := limitPtrFromStr(limitStr)
 			if err != nil {
-				p.Errorf("%v", err)
+				return p.Errorf("%v", err)
 			}
 
-			params := xrayconfig.ClientParams{
+			req := user.CreateUserRequest{
 				Email:   email,
-				UUID:    uuid,
-				Auth:    auth,
-				Subfile: subfile,
-				Expire:  expireVal,
+				UUID:    forcedUUID,
+				Subfile: forcedSub,
+				Expire:  forcedExpire,
+				Auth:    forcedAuth,
 				Limit:   limitPtr,
+				Legacy:  legacy,
 			}
 
-			payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
+			svc := getUserSvc()
+			resp, err := svc.CreateUser(req)
 			if err != nil {
-				p.Errorf("building client payload: %v", err)
-			}
-			if len(payload) == 0 {
-				p.Error("no client inbounds found in xray config — check that inbounds have settings.clients or settings.users arrays")
+				return p.Errorf("error creating user: %v", err)
 			}
 
-			p.Info("Adding %s (expire: %s, limit: %s)…", email, expireVal, func() string {
-				if limitPtr != nil {
-					return fmt.Sprintf("%.0f", *limitPtr)
-				}
-				return "unset"
-			}())
-
-			// Apply to in-memory config.
-			if err := xrayconfig.AddUserToInbounds(xrayCfg, payload); err != nil {
-				p.Errorf("updating xray config: %v", err)
-			}
-
-			// Write config atomically FIRST — so disk state is consistent even
-			// if the subsequent hot-add fails (xray will pick it up on restart).
-			if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-				p.Errorf("writing xray config: %v", err)
-			}
-
-			// Hot-add via xray API.
-			if !legacy {
-				apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
-				if err := apiClient.AddUser(payload, cfg.Paths.XrayConfig); err != nil {
-					p.Warn("xray API hot-add failed: %v\n\nUse --legacy flag to restart xray instead.", err)
-				}
-			}
-
-			if legacy {
-				systemctlRestart("xray")
-			}
-
-			limitInt := 3
-			if limitPtr != nil {
-				limitInt = int(*limitPtr)
-			}
-			sqlCreateUserIfNotExist(database.DB(), email, uuid, expireVal, limitInt, subfile)
-
-			// Propagate to slaves (master only).
-			if cfg.IsMaster() {
-				slaveParams := map[string]string{
-					"email":   email,
-					"uuid":    uuid,
-					"subfile": subfile,
-					"expire":  expireVal,
-					"auth":    auth,
-				}
-				if limitPtr != nil {
-					slaveParams["limit"] = fmt.Sprintf("%.0f", *limitPtr)
-				}
-				if legacy {
-					slaveParams["legacy"] = "true"
-				}
-				if !isBatch {
-					p.Info("Propagating to slave servers…")
-				}
-				propagate(cfg, "newuser", slaveParams, p)
-			}
-
-			id := subfileID(subfile)
-			link := fmt.Sprintf("https://%s/client?id=%s", cfg.Server.Domain, id)
+			// Service propagates internally via API if it's master.
+			// No need to manually propagate here.
 
 			if isBatch {
-				fmt.Printf("SUCCESS|CREATED|%s\n", link)
+				fmt.Printf("SUCCESS|CREATED|%s\n", resp.Link)
 			} else {
-				p.OK("User %s created.", email)
-				fmt.Printf("Link: \033[1m%s\033[0m\n", link)
+				p.OK("User %s created.", resp.Email)
+				fmt.Printf("Link: \033[1m%s\033[0m\n", resp.Link)
 			}
+			return nil
 		},
 	}
 
@@ -190,145 +84,4 @@ func newUserCmd() *cobra.Command {
 	return cmd
 }
 
-type CreateUserRequest struct {
-	Email   string
-	Name    string
-	UUID    string
-	Subfile string
-	Expire  string
-	Auth    string
-	Limit   *float64
-	Legacy  bool
-}
 
-func ExecNewUser(db *gorm.DB, req CreateUserRequest) (string, error) {
-	email := req.Email
-	if email == "" {
-		email = req.Name
-	}
-	if email == "" {
-		return "", fmt.Errorf("email is required")
-	}
-	if !validEmail(email) {
-		return "", fmt.Errorf("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -)")
-	}
-
-	forcedUUID := req.UUID
-	forcedSub := req.Subfile
-	forcedExpire := req.Expire
-	forcedAuth := req.Auth
-
-	var limitStr string
-	if req.Limit != nil {
-		limitStr = fmt.Sprintf("%.0f", *req.Limit)
-	}
-
-	legacy := req.Legacy
-
-
-	xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-	if err != nil {
-		return "", fmt.Errorf("reading xray config: %v", err)
-	}
-	exists, existsErr := xrayconfig.UserExists(xrayCfg, email)
-	if existsErr != nil {
-		return "", fmt.Errorf("checking user existence: %v", existsErr)
-	}
-	if exists {
-		return "", fmt.Errorf("user already exists")
-	}
-
-
-
-	uuid := forcedUUID
-	if uuid == "" {
-		if uuid, err = generate.UUID(); err != nil {
-			return "", fmt.Errorf("generating UUID: %v", err)
-		}
-	}
-	subfile := forcedSub
-	if subfile == "" {
-		subfile = generate.Subfile()
-	}
-	expireVal := forcedExpire
-	if expireVal == "" {
-		expireVal = defaultExpireDate()
-	}
-	auth := forcedAuth
-	if auth == "" {
-		auth = generate.Secret(32)
-	}
-	limitPtr, err := limitPtrFromStr(limitStr)
-	if err != nil {
-		return "", err
-	}
-
-	params := xrayconfig.ClientParams{
-		Email:   email,
-		UUID:    uuid,
-		Auth:    auth,
-		Subfile: subfile,
-		Expire:  expireVal,
-		Limit:   limitPtr,
-	}
-
-	clientsPayload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
-	if err != nil {
-		return "", fmt.Errorf("building client payload: %v", err)
-	}
-	if len(clientsPayload) == 0 {
-		return "", fmt.Errorf("no client inbounds found in xray config")
-	}
-
-	// Apply to in-memory config
-	if err := xrayconfig.AddUserToInbounds(xrayCfg, clientsPayload); err != nil {
-		return "", fmt.Errorf("updating xray config: %v", err)
-	}
-
-	// Write config atomically FIRST — disk state is consistent even if hot-add fails.
-	if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-		return "", fmt.Errorf("writing xray config: %v", err)
-	}
-
-	// Hot-add via xray API
-	if !legacy {
-		apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
-		if err := apiClient.AddUser(clientsPayload, cfg.Paths.XrayConfig); err != nil {
-			return "", fmt.Errorf("xray API hot-add failed: %v", err)
-		}
-	}
-	if legacy {
-		systemctlRestart("xray")
-	}
-
-	limitInt := 3
-	if limitPtr != nil {
-		limitInt = int(*limitPtr)
-	}
-	sqlCreateUserIfNotExist(db, email, uuid, expireVal, limitInt, subfile)
-
-	// Propagate to slaves
-	if cfg.IsMaster() {
-		slaveParams := map[string]string{
-			"email":   email,
-			"uuid":    uuid,
-			"subfile": subfile,
-			"expire":  expireVal,
-			"auth":    auth,
-		}
-		if limitPtr != nil {
-			slaveParams["limit"] = fmt.Sprintf("%.0f", *limitPtr)
-		}
-		if legacy {
-			slaveParams["legacy"] = "true"
-		}
-
-		p := newPrinter(true)
-		propagate(cfg, "newuser", slaveParams, p)
-	}
-
-	id := subfileID(subfile)
-	link := fmt.Sprintf("https://%s/client?id=%s", cfg.Server.Domain, id)
-
-	return fmt.Sprintf("SUCCESS|CREATED|%s\nLink: %s", link, link), nil
-}

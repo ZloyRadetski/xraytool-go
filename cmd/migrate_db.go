@@ -35,28 +35,9 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 				return fmt.Errorf("config not loaded; pass --config <path>")
 			}
 
-			// ── 2. Initialise target database ──────────────────────────────────
-			if err := database.Init(database.Config{
-				Driver:      cfg.Database.Driver,
-				DSN:         cfg.Database.DSN,
-				SQLitePath:  cfg.Database.SQLitePath,
-				AutoMigrate: true,
-			}); err != nil {
-				return fmt.Errorf("target db init: %w", err)
-			}
-			
-			// Force AutoMigrate regardless of global init state
-			if err := database.DB().AutoMigrate(
-				&database.User{},
-				&database.Subscription{},
-				&database.Device{},
-				&database.Payment{},
-				&database.ReferralReward{},
-				&database.SubscriptionNotification{},
-				&database.Plan{},
-				&database.PromoCode{},
-			); err != nil {
-				return fmt.Errorf("force auto-migrate failed: %w", err)
+			// ── 2. Check target database ──────────────────────────────────
+			if database.DB() == nil {
+				return fmt.Errorf("target db not initialized")
 			}
 
 			// ── 3. Open source (legacy) SQLite database ────────────────────────

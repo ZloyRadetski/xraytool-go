@@ -35,27 +35,24 @@ func TestConvertCmd(t *testing.T) {
 
 	// 3. Invalid JSON format
 	cmd.SetArgs([]string{"--input", "invalid json!!"})
-	exitCalled = false
-	out = captureOutput(func() { cmd.Execute() })
+	err := cmd.Execute()
 	// It will fall back to Share text! Let's check for "failed to convert share links to JSON" instead.
-	if !strings.Contains(out, "failed to convert share links to JSON") || !exitCalled {
-		t.Errorf("expected share link format error exit, got %v", out)
+	if err == nil || !strings.Contains(err.Error(), "failed to convert share links to JSON") {
+		t.Errorf("expected share link format error exit, got %v", err)
 	}
 
 	// 4. Valid JSON to Share text (no outbounds)
 	cmd.SetArgs([]string{"--input", `{"inbounds":[]}`})
-	exitCalled = false
-	out = captureOutput(func() { cmd.Execute() })
-	if !strings.Contains(out, "no valid outbounds") || !exitCalled {
-		t.Errorf("expected no valid outbounds, got exit %v", out)
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "no valid outbounds") {
+		t.Errorf("expected no valid outbounds, got exit %v", err)
 	}
 
 	// 5. Valid Share text to JSON
 	cmd.SetArgs([]string{"--input", "vless://123@example.com:443?encryption=none#name"})
-	exitCalled = false
-	out = captureOutput(func() { cmd.Execute() })
-	if exitCalled {
-		t.Errorf("expected success, got exit %v", out)
+	err = cmd.Execute()
+	if err != nil {
+		t.Errorf("expected success, got err %v", err)
 	}
 
 	// 6. Valid JSON but XrayJSONToShareText fails (simulated by invalid json content without inbounds?)

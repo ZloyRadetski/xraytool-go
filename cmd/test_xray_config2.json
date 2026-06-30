@@ -1,0 +1,15 @@
+{
+  "inbounds": [
+    {
+      "tag": "vless-tcp",
+      "settings": {
+        "clients": [
+          {
+            "id": "perfect-uuid",
+            "email": "test@example.com"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -331,63 +331,63 @@
             "email": "bot_client_10003",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "a5bfee06-4177-4927-8f96-1a42ab21f27b",
+            "id": "67296bcf-07e5-4217-a5f0-718d3a6ea3cf",
             "limit": 3
           },
           {
             "email": "bot_client_10004",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "ab8fadaa-76a8-46f4-9f2a-6d70cfc8e068",
+            "id": "58814197-961d-42df-b21c-54ec738ee0bc",
             "limit": 3
           },
           {
             "email": "bot_client_10006",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "bbf95a22-c0ad-412c-a966-129f8ac095ed",
+            "id": "6d92537f-e057-4ce5-8fc8-87e9df0296a4",
             "limit": 3
           },
           {
             "email": "bot_client_50004",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "cd9b18f7-ad85-4985-b8d8-a483704e71c8",
+            "id": "c10b6707-3604-4e69-a591-c57dbebff231",
             "limit": 3
           },
           {
             "email": "bot_client_60002",
             "expire": "30.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "8d45c1b3-69a6-4e0b-8332-a9b39078e550",
+            "id": "6ce0718b-0efd-4829-a2d7-b8c1503f67af",
             "limit": 3
           },
           {
             "email": "bot_client_60003",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "a261e37f-e255-4f7e-90d8-b079f981fcfa",
+            "id": "bd0479e8-6cfb-4e05-9cb9-f4028a795861",
             "limit": 3
           },
           {
             "email": "bot_client_70001",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "3489c38d-d52c-40d7-b141-24814e2a28f2",
+            "id": "ee79e474-bbf8-45b7-86a9-5b7dffc6572c",
             "limit": 3
           },
           {
             "email": "bot_client_80001",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "443ce5d9-3952-46b3-8b4c-0e239ce1b932",
+            "id": "66f861a5-c201-48c9-b6cf-136cdbf73f10",
             "limit": 3
           },
           {
             "email": "bot_client_80002",
             "expire": "01.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "217cd683-3696-47f6-9d2b-4631c7d2d1a1",
+            "id": "27c1504d-0abf-445d-bf67-5d9ebd278b2c",
             "limit": 3
           }
         ],

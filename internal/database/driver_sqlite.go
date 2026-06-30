@@ -11,5 +11,5 @@ func sqliteDialector(path string) gorm.Dialector {
 	if path == "" {
 		path = "/etc/xraytool/xraytool.db"
 	}
-	return sqlite.Open(path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
+	return sqlite.Open(path)
 }

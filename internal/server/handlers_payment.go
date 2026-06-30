@@ -8,7 +8,6 @@ package server
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -19,6 +18,7 @@ import (
 	"gorm.io/gorm"
 
 	"xraytool/internal/database"
+	"xraytool/internal/payment"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,154 +66,39 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	if !readBody(w, req, &body) {
 		return
 	}
-	if body.TelegramID == 0 {
-		writeError(w, http.StatusBadRequest, "telegram_id is required")
-		return
-	}
-	if body.PlanID == nil && body.Amount <= 0 {
-		writeError(w, http.StatusBadRequest, "amount must be positive if plan_id is missing")
-		return
-	}
-	if body.PaymentType == "" {
-		writeError(w, http.StatusBadRequest, "payment_type is required")
-		return
-	}
-
-	db := r.db
-
-	// Find user by telegram_id.
-	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
-	user, err := findUserByPlatformID(db, "telegram", tgIDStr)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
-	}
-
-	// Ensure ExternalID uniqueness: if non-empty store it; otherwise leave nil
-	// so the NULL-allows-duplicates unique index is satisfied without collisions.
-	var externalIDPtr *string
-	if body.ExternalID != "" {
-		externalIDPtr = &body.ExternalID
-	}
-
-	finalAmount := body.Amount
-	var promoCodeID *int64
-
-	if body.PlanID != nil {
-		var plan database.Plan
-		if err := db.First(&plan, *body.PlanID).Error; err != nil {
-			writeError(w, http.StatusBadRequest, "invalid plan_id")
-			return
-		}
-		
-		globalPrice := plan.BasePrice
-		if plan.GlobalDiscountPercent > 0 {
-			globalPrice = plan.BasePrice - (plan.BasePrice * plan.GlobalDiscountPercent / 100)
-		}
-
-		promoPrice := plan.BasePrice
-		if body.PromoCode != "" {
-			var promo database.PromoCode
-			code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
-			if err := db.Where("code = ?", code).First(&promo).Error; err == nil {
-				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
-					platform := strings.ToLower(strings.TrimSpace(body.Platform))
-					if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
-						if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
-							writeError(w, http.StatusBadRequest, "promo code usage limit reached")
-							return
-						}
-						
-						var count int64
-						db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
-						if count > 0 {
-							writeError(w, http.StatusBadRequest, "promo code already used by this user")
-							return
-						}
-						
-						promoPrice = plan.BasePrice - (plan.BasePrice * promo.DiscountPercent / 100)
-						promoCodeID = &promo.ID
-					}
-				}
-			}
-		}
-
-		if globalPrice < promoPrice {
-			finalAmount = globalPrice
-			promoCodeID = nil // Global discount was better, promo code is not applied
-		} else {
-			finalAmount = promoPrice
-		}
-	} else if body.PromoCode != "" {
-		var promo database.PromoCode
-		code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
-		if err := db.Where("code = ?", code).First(&promo).Error; err == nil {
-			if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
-				platform := strings.ToLower(strings.TrimSpace(body.Platform))
-				if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
-					if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
-						writeError(w, http.StatusBadRequest, "promo code usage limit reached")
-						return
-					}
-					promoCodeID = &promo.ID
-				}
-			}
-		}
-	}
-
-	payment := database.Payment{
-		UserID:      user.ID,
-		Amount:      finalAmount,
-		Status:      "pending_card",
+	reqPayload := payment.CreatePaymentRequest{
+		TelegramID:  body.TelegramID,
+		Amount:      body.Amount,
 		PaymentType: body.PaymentType,
 		Method:      body.Method,
-		ExternalID:  externalIDPtr,
+		ExternalID:  body.ExternalID,
 		PlanID:      body.PlanID,
-		PromoCodeID: promoCodeID,
-		CustomData: database.Metadata{
-			"telegram_id": body.TelegramID,
-		},
+		PromoCode:   body.PromoCode,
+		Platform:    body.Platform,
 	}
 
-	txErr := db.Transaction(func(tx *gorm.DB) error {
-		if promoCodeID != nil {
-			var promo database.PromoCode
-			if err := tx.First(&promo, *promoCodeID).Error; err != nil {
-				return err
-			}
-			if promo.MaxUses > 0 {
-				res := tx.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ? AND uses_count < max_uses", *promoCodeID)
-				if res.RowsAffected == 0 {
-					return fmt.Errorf("promo limit")
-				}
-			} else {
-				tx.Exec("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = ?", *promoCodeID)
-			}
-			
-			var count int64
-			tx.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status IN (?, ?)", user.ID, *promoCodeID, "completed", "pending_card").Count(&count)
-			if count > 0 {
-				return fmt.Errorf("promo used by user")
-			}
-		}
-		return tx.Create(&payment).Error
-	})
-
-	if txErr != nil {
-		if txErr.Error() == "promo limit" {
-			writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+	svc := payment.NewService(r.db)
+	pay, err := svc.CreatePayment(reqPayload)
+	if err != nil {
+		if strings.Contains(err.Error(), "telegram_id is required") ||
+			strings.Contains(err.Error(), "amount must be positive") ||
+			strings.Contains(err.Error(), "payment_type is required") ||
+			strings.Contains(err.Error(), "invalid plan_id") ||
+			strings.Contains(err.Error(), "promo code usage limit reached") ||
+			strings.Contains(err.Error(), "promo code already used") {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if txErr.Error() == "promo used by user" {
-			writeError(w, http.StatusBadRequest, "promo code already used or pending for this user")
+		if strings.Contains(err.Error(), "user not found") {
+			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		r.log.Error("create payment", "err", txErr)
+		r.log.Error("create payment", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create payment")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"payment_id": payment.ID})
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"payment_id": pay.ID})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +127,7 @@ func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
 	}
 	// Filter by telegram_id (via user lookup).
 	if tgIDStr := q.Get("telegram_id"); tgIDStr != "" {
-		user, err := findUserByPlatformID(db, "telegram", tgIDStr)
+		user, err := database.FindUserByPlatformID(db, "telegram", tgIDStr)
 		if err == nil {
 			query = query.Where("user_id = ?", user.ID)
 		} else {
@@ -339,6 +224,14 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 	if body.Status == "completed" {
 		var payment database.Payment
 		if err := db.First(&payment, paymentID).Error; err == nil {
+			// Apply referral reward synchronously before dispatching webhook.
+			// This ensures we do not report a successful payment if internal billing divergence occurs.
+			if err := r.applyReferralRewardForPayment(db, &payment); err != nil {
+				r.log.Error("failed to apply referral reward", "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to apply reward")
+				return
+			}
+
 			r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
 				"payment_id":   payment.ID,
 				"amount":       payment.Amount,
@@ -346,10 +239,6 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 				"method":       payment.Method,
 				"user_id":      payment.UserID,
 			}, nil)
-
-			// Apply referral reward if applicable (runs in background goroutine to
-			// not delay the HTTP response).
-			go r.applyReferralRewardForPayment(db, &payment)
 		}
 	}
 
@@ -357,21 +246,20 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 }
 
 // applyReferralRewardForPayment credits the referrer of the payer with 25% of
-// the payment amount, and records a ReferralReward row. No-op if the user has
-// no referrer.
-func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Payment) {
+// the payment amount, and records a ReferralReward row. Returns nil if successful or no-op.
+func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Payment) error {
 	var user database.User
 	if db.First(&user, "id = ?", payment.UserID).Error != nil {
-		return
+		return nil // No user found, nothing to do
 	}
 	if user.ReferredBy == nil || *user.ReferredBy == "" {
-		return
+		return nil
 	}
 
 	const referralPercent = 0.25
 	reward := int(float64(payment.Amount) * referralPercent)
 	if reward <= 0 {
-		return
+		return nil
 	}
 
 	referrerID := *user.ReferredBy
@@ -404,7 +292,7 @@ func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Pa
 
 	if txErr != nil {
 		r.log.Error("referral reward transaction failed", "err", txErr)
-		return
+		return txErr
 	}
 
 	var referrer database.User
@@ -417,6 +305,7 @@ func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Pa
 			}, nil)
 		}
 	}
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -500,6 +389,13 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 					r.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
 
 					if mappedStatus == "completed" {
+						// Apply referral logic synchronously before webhook
+						if err := r.applyReferralRewardForPayment(db, &payment); err != nil {
+							r.log.Error("failed to apply referral reward on platega callback", "err", err)
+							writeError(w, http.StatusInternalServerError, "failed to apply reward")
+							return
+						}
+
 						// Dispatch payment.completed so external systems can process the renewal/balance update
 						r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
 							"payment_id":   payment.ID,
@@ -508,9 +404,6 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 							"method":       payment.Method,
 							"user_id":      payment.UserID,
 						}, nil)
-
-						// Apply referral logic
-						go r.applyReferralRewardForPayment(db, &payment)
 					}
 				}
 			}

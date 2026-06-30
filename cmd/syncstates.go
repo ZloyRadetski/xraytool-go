@@ -18,7 +18,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // syncMasterUUIDsFromDB cross-references the loaded Xray config with the DB and updates UUIDs if mismatched.
-func syncMasterUUIDsFromDB(xrayCfg xrayconfig.RawConfig) (bool, error) {
+func syncMasterUUIDsFromDB() (bool, error) {
 	db := database.DB()
 	if db == nil {
 		return false, fmt.Errorf("database not initialized")
@@ -29,34 +29,37 @@ func syncMasterUUIDsFromDB(xrayCfg xrayconfig.RawConfig) (bool, error) {
 		return false, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
-	findUser, err := xrayconfig.BuildUserIndex(xrayCfg)
-	if err != nil {
-		return false, fmt.Errorf("failed to build user index: %w", err)
-	}
-
 	updatedCount := 0
-	for _, sub := range subs {
-		if sub.Email == "" || sub.XrayUUID == "" {
-			continue
-		}
-		
-		client := findUser(sub.Email)
-		if client == nil {
-			continue
+	if err := xrayconfig.Modify(cfg.Paths.XrayConfig, func(c xrayconfig.RawConfig) error {
+		findUser, err := xrayconfig.BuildUserIndex(c)
+		if err != nil {
+			return fmt.Errorf("failed to build user index: %w", err)
 		}
 
-		if client.GetString("id") != sub.XrayUUID {
-			err = xrayconfig.UpdateStringField(xrayCfg, sub.Email, "id", sub.XrayUUID)
-			if err == nil {
-				updatedCount++
+		for _, sub := range subs {
+			if sub.Email == "" || sub.XrayUUID == "" {
+				continue
+			}
+			
+			client := findUser(sub.Email)
+			if client == nil {
+				continue
+			}
+
+			if client.GetString("id") != sub.XrayUUID {
+				err = xrayconfig.UpdateStringField(c, sub.Email, "id", sub.XrayUUID)
+				if err == nil {
+					updatedCount++
+				}
 			}
 		}
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("failed to update xray config: %w", err)
 	}
 
 	if updatedCount > 0 {
-		if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-			return false, fmt.Errorf("failed to save xray config: %w", err)
-		}
+		fmt.Printf("INFO|Updated UUIDs for %d users in config.json\n", updatedCount)
 		systemctlRestart("xray")
 		return true, nil
 	}
@@ -78,24 +81,20 @@ func syncStatesCmd() *cobra.Command {
 				return
 			}
 
+			// Self-heal: Sync UUIDs from Database to Master Xray config before building snapshot
+			changed, err := syncMasterUUIDsFromDB()
+			if err != nil {
+				fmt.Printf("ERROR|syncing UUIDs from DB: %v\n", err)
+				// non-fatal, continue anyway
+			} else if changed {
+				fmt.Println("INFO|Self-healing complete.")
+			}
+
 			// Build master snapshot.
 			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
 			if err != nil {
 				fmt.Printf("ERROR|reading xray config: %v\n", err)
 				return
-			}
-			// Self-heal: Sync UUIDs from Database to Master Xray config before building snapshot
-			changed, err := syncMasterUUIDsFromDB(xrayCfg)
-			if err != nil {
-				fmt.Printf("ERROR|syncing UUIDs from DB: %v\n", err)
-				// non-fatal, continue anyway
-			} else if changed {
-				fmt.Println("INFO|Self-healing complete. Reloading xray config...")
-				xrayCfg, err = xrayconfig.Read(cfg.Paths.XrayConfig)
-				if err != nil {
-					fmt.Printf("ERROR|failed to reload config after self-healing: %v\n", err)
-					return
-				}
 			}
 
 			masterSnap := slave.BuildMasterSnapshot(xrayCfg)

@@ -86,7 +86,7 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 
 	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
 	if telegramIDStr != "" {
-		user, err := findUserByPlatformID(db, "telegram", telegramIDStr)
+		user, err := database.FindUserByPlatformID(db, "telegram", telegramIDStr)
 		if err == nil {
 			var count int64
 			db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)

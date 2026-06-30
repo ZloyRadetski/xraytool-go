@@ -17,10 +17,9 @@ func TestHelpers_Printer(t *testing.T) {
 	}
 
 	out = captureOutput(func() { pb.Error("some error") })
-	if !strings.Contains(out, "ERROR|some error") || !exitCalled {
+	if !strings.Contains(out, "ERROR|some error") {
 		t.Errorf("expected error exit, got %v", out)
 	}
-	exitCalled = false
 
 	// Interactive Mode
 	pi := newPrinter(false)
@@ -45,7 +44,7 @@ func TestHelpers_Printer(t *testing.T) {
 	}
 
 	out = captureOutput(func() { pi.Errorf("bad %s", "thing") })
-	if !strings.Contains(out, "[ERROR] bad thing") || !exitCalled {
+	if !strings.Contains(out, "[ERROR] bad thing") {
 		t.Errorf("expected ERROR exit, got %v", out)
 	}
 }
@@ -107,26 +106,26 @@ func TestRoot_RequireRoot(t *testing.T) {
 
 	// Windows (default)
 	currentGOOS = "windows"
-	captureOutput(func() { requireRoot() })
-	if exitCalled {
-		t.Error("did not expect exit on windows")
+	err := requireRoot()
+	if err != nil {
+		t.Error("did not expect error on windows")
 	}
 
 	// Non-windows, root
 	currentGOOS = "linux"
 	geteuid = func() int { return 0 }
-	captureOutput(func() { requireRoot() })
-	if exitCalled {
-		t.Error("did not expect exit for root")
+	err = requireRoot()
+	if err != nil {
+		t.Error("did not expect error for root")
 	}
 
 	// Non-windows, non-root
 	geteuid = func() int { return 1000 }
-	out := captureOutput(func() { requireRoot() })
-	if !exitCalled {
-		t.Error("expected exit for non-root")
+	err = requireRoot()
+	if err == nil {
+		t.Error("expected error for non-root")
 	}
-	if !strings.Contains(out, "Script must be run as root") {
-		t.Errorf("expected error message, got %s", out)
+	if err != nil && !strings.Contains(err.Error(), "Script must be run as root") {
+		t.Errorf("expected error message, got %v", err)
 	}
 }

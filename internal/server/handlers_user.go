@@ -25,6 +25,7 @@ import (
 	"xraytool/internal/database"
 	"xraytool/internal/generate"
 	"xraytool/internal/slave"
+	usersvc "xraytool/internal/user"
 	"xraytool/internal/xrayapi"
 	"xraytool/internal/xrayconfig"
 )
@@ -33,61 +34,7 @@ import (
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// findUserByPlatformID locates a User by its ID depending on the platform (uuid, telegram, or web)
-func findUserByPlatformID(db *gorm.DB, platform, id string) (*database.User, error) {
-	if platform == "uuid" {
-		var user database.User
-		if err := db.Where("id = ?", id).First(&user).Error; err != nil {
-			return nil, err
-		}
-		return &user, nil
-	}
 
-	var users []database.User
-	var query *gorm.DB
-	
-	switch db.Dialector.Name() {
-	case "sqlite":
-		if platform == "telegram" {
-			tgIDInt, _ := strconv.ParseInt(id, 10, 64)
-			query = db.Where(
-				"json_extract(metadata, '$.telegram_id') = ? OR json_extract(metadata, '$.telegram_id') = ?",
-				tgIDInt, id,
-			)
-		} else if platform == "web" {
-			query = db.Where("json_extract(metadata, '$.email') = ? OR username = ?", id, id)
-		}
-	case "postgres":
-		if platform == "telegram" {
-			query = db.Where("metadata::jsonb ->> 'telegram_id' = ?", id)
-		} else if platform == "web" {
-			query = db.Where("metadata::jsonb ->> 'email' = ? OR username = ?", id, id)
-		}
-	}
-
-	if query == nil {
-		if platform == "telegram" {
-			tgIDInt, _ := strconv.ParseInt(id, 10, 64)
-			query = db.Where(
-				"json_extract(metadata, '$.telegram_id') = ? OR json_extract(metadata, '$.telegram_id') = ?",
-				tgIDInt, id,
-			)
-		} else if platform == "web" {
-			query = db.Where("json_extract(metadata, '$.email') = ? OR username = ?", id, id)
-		} else {
-			return nil, fmt.Errorf("unsupported platform: %s", platform)
-		}
-	}
-
-	result := query.Limit(1).Find(&users)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if len(users) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
-	return &users[0], nil
-}
 
 // buildUserResponse assembles the full user JSON object the Python bot expects.
 // It enriches a User with subscription, referral counts, and link.
@@ -107,26 +54,14 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 		Select("COALESCE(SUM(amount),0)").
 		Scan(&referralEarned)
 
-	// Extract telegram_id from metadata (stored as float64 by JSON unmarshal, or string if migrated).
-	var tgID int64
-	if user.Metadata != nil {
-		switch v := user.Metadata["telegram_id"].(type) {
-		case float64:
-			tgID = int64(v)
-		case int64:
-			tgID = v
-		case int:
-			tgID = int64(v)
-		case string:
-			parsed, _ := strconv.ParseInt(v, 10, 64)
-			tgID = parsed
-		}
-	}
+	// Extract telegram_id from metadata
+	tgID := extractTelegramID(user.Metadata)
 
 	// Build the subscription link.
 	link := ""
 	if r.cfg != nil && r.cfg.Server.Domain != "" && sub.ID != "" {
-		link = fmt.Sprintf("https://%s/client?id=%s", r.cfg.Server.Domain, sub.ID)
+		svc := usersvc.NewService(r.db, r.cfg)
+		link = svc.GenerateShareLink("", sub.ID)
 	}
 
 	// email field the bot uses: "bot_client_<tgID>"
@@ -247,24 +182,12 @@ func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []ma
 	for _, user := range users {
 		sub := subByUser[user.ID]
 
-		var tgID int64
-		if user.Metadata != nil {
-			switch v := user.Metadata["telegram_id"].(type) {
-			case float64:
-				tgID = int64(v)
-			case int64:
-				tgID = v
-			case int:
-				tgID = int64(v)
-			case string:
-				parsed, _ := strconv.ParseInt(v, 10, 64)
-				tgID = parsed
-			}
-		}
+		tgID := extractTelegramID(user.Metadata)
 
 		link := ""
 		if r.cfg != nil && r.cfg.Server.Domain != "" && sub.ID != "" {
-			link = fmt.Sprintf("https://%s/client?id=%s", r.cfg.Server.Domain, sub.ID)
+			svc := usersvc.NewService(r.db, r.cfg)
+			link = svc.GenerateShareLink("", sub.ID)
 		}
 
 		email := sub.Email
@@ -355,7 +278,7 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 
 	// Idempotency: if user already exists return it.
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
-	existing, err := findUserByPlatformID(db, "telegram", tgIDStr)
+	existing, err := database.FindUserByPlatformID(db, "telegram", tgIDStr)
 	if err == nil && existing != nil {
 		writeJSON(w, http.StatusOK, r.buildUserResponse(db, existing))
 		return
@@ -452,16 +375,8 @@ func (r *Router) handleListAdmins(w http.ResponseWriter, req *http.Request) {
 
 	ids := make([]int64, 0, len(users))
 	for _, u := range users {
-		if u.Metadata == nil {
-			continue
-		}
-		switch v := u.Metadata["telegram_id"].(type) {
-		case float64:
-			ids = append(ids, int64(v))
-		case int64:
-			ids = append(ids, v)
-		case int:
-			ids = append(ids, int64(v))
+		if id := extractTelegramID(u.Metadata); id != 0 {
+			ids = append(ids, id)
 		}
 	}
 	writeJSON(w, http.StatusOK, ids)
@@ -478,11 +393,30 @@ func normalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
+func extractTelegramID(metadata database.Metadata) int64 {
+	if metadata == nil {
+		return 0
+	}
+	switch v := metadata["telegram_id"].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case string:
+		parsed, _ := strconv.ParseInt(v, 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
 // findOrCreateWebUser looks up a user by email. If the user does not exist, it
 // creates a new User + Subscription record inside a single DB transaction.
 // This implements the "open registration" flow (Variant A).
 func (r *Router) findOrCreateWebUser(db *gorm.DB, email string) (*database.User, error) {
-	user, err := findUserByPlatformID(db, "web", email)
+	user, err := database.FindUserByPlatformID(db, "web", email)
 	if err == nil {
 		return user, nil
 	}
@@ -491,6 +425,14 @@ func (r *Router) findOrCreateWebUser(db *gorm.DB, email string) (*database.User,
 	}
 
 	// --- Auto-registration ---
+	r.webRegMu.Lock()
+	defer r.webRegMu.Unlock()
+	
+	// Double check inside the lock
+	user, err = database.FindUserByPlatformID(db, "web", email)
+	if err == nil {
+		return user, nil
+	}
 	var newUser *database.User
 	txErr := db.Transaction(func(tx *gorm.DB) error {
 		userID := uuid.New().String()
@@ -571,7 +513,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		code, err := requestOTP(email, 5*time.Minute)
 		if err != nil {
 			if errors.Is(err, ErrMaxRequestsReached) {
-				r.log.Warn("request_code: rate limited", "email", email, "ip", req.RemoteAddr)
+				r.log.Warn("request_code: rate limited", "email", email, "ip", getClientIP(req))
 				writeError(w, http.StatusTooManyRequests, "too many requests, try again later")
 				return
 			}
@@ -602,7 +544,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	}
 
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
-	_, err := findUserByPlatformID(db, "telegram", tgIDStr)
+	_, err := database.FindUserByPlatformID(db, "telegram", tgIDStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found. please start the bot first")
 		return
@@ -611,7 +553,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	code, err := requestOTP(tgIDStr, 5*time.Minute)
 	if err != nil {
 		if errors.Is(err, ErrMaxRequestsReached) {
-			r.log.Warn("request_code: rate limited", "telegram_id", body.TelegramID, "ip", req.RemoteAddr)
+			r.log.Warn("request_code: rate limited", "telegram_id", body.TelegramID, "ip", getClientIP(req))
 			writeError(w, http.StatusTooManyRequests, "too many requests, try again later")
 			return
 		}
@@ -671,7 +613,7 @@ func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
 	ok, err := verifyOTP(identifier, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
-			r.log.Warn("verify_code: brute force detected", "identifier", identifier, "ip", req.RemoteAddr)
+			r.log.Warn("verify_code: brute force detected", "identifier", identifier, "ip", getClientIP(req))
 			writeError(w, http.StatusForbidden, "too many failed attempts. please request a new code")
 			return
 		}
@@ -695,7 +637,7 @@ func (r *Router) handleGetUserByPlatform(w http.ResponseWriter, req *http.Reques
 	idStr := req.PathValue("id")
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -745,7 +687,7 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -789,7 +731,7 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -827,7 +769,7 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 	}
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -884,7 +826,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1020,7 +962,7 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 	}
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1313,7 +1255,7 @@ func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1341,7 +1283,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	deviceIDStr := req.PathValue("device_id")
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1389,12 +1331,6 @@ func (r *Router) unbanUserInXrayAsync(sub database.Subscription) {
 func (r *Router) unbanUserInXray(sub database.Subscription) {
 	// Remove from limitedDB (Removed)
 	// We must re-add them to Xray config json & hot reload
-	xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
-	if err != nil {
-		r.log.Error("failed to read xray config for unban", "err", err)
-		return
-	}
-
 	subfile := ""
 	if sub.Metadata != nil {
 		if sf, ok := sub.Metadata["subfile"].(string); ok {
@@ -1416,14 +1352,21 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 		Limit:   &limitF,
 	}
 
-	payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
+	var payload []xrayconfig.TaggedClient
+
+	err := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(xrayCfg xrayconfig.RawConfig) error {
+		var innerErr error
+		payload, innerErr = xrayconfig.BuildForAllInbounds(xrayCfg, params)
+		if innerErr != nil {
+			return innerErr
+		}
+		return xrayconfig.AddUserToInbounds(xrayCfg, payload)
+	})
+
 	if err != nil {
-		r.log.Error("failed to build payload for unban", "err", err)
+		r.log.Error("failed to modify xray config for unban", "err", err)
 		return
 	}
-
-	_ = xrayconfig.AddUserToInbounds(xrayCfg, payload)
-	_ = xrayconfig.Write(r.cfg.Paths.XrayConfig, xrayCfg)
 
 	apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
 	if err := apiClient.AddUser(payload, r.cfg.Paths.XrayConfig); err != nil {
@@ -1467,7 +1410,7 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 	idStr := req.PathValue("id")
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1517,7 +1460,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 	idStr := req.PathValue("id")
 
 	db := r.db
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -1577,7 +1520,7 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 
 	db := r.db
 
-	user, err := findUserByPlatformID(db, platform, idStr)
+	user, err := database.FindUserByPlatformID(db, platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
