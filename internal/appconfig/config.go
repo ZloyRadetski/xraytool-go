@@ -8,28 +8,31 @@ import (
 	"path/filepath"
 	"time"
 
+	"xraytool/internal/slave"
+
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the top-level xraytool configuration.
 type Config struct {
-	Mode          string           `yaml:"mode"` // "master" or "slave"
-	Server        ServerConf       `yaml:"server"`
-	Paths         PathsConf        `yaml:"paths"`
-	Xray          XrayConf         `yaml:"xray"`
-	Stats         StatsConf        `yaml:"stats"`
-	SlaveAPI      SlaveAPIConf     `yaml:"slave_api"`
-	MasterAPI     MasterAPIConf    `yaml:"master_api"`
-	Ports         PortsConf        `yaml:"ports"`
-	Logging       LoggingConf      `yaml:"logging"`
-	Webhooks      []string         `yaml:"webhooks"`
-	Worker        WorkerConf       `yaml:"worker"`
-	Database      DatabaseConf     `yaml:"database"`
-	PlategaSecret string           `yaml:"platega_secret"`
-	WebhookSecret string           `yaml:"webhook_secret"`
-	Subscription  SubscriptionConf `yaml:"subscription"`
-	AntiFraud     AntiFraudConf    `yaml:"anti_fraud"`
-	Mailer        MailerConf       `yaml:"mailer"`
+	Mode          string                 `yaml:"mode"` // "master" or "slave"
+	Server        ServerConf             `yaml:"server"`
+	Paths         PathsConf              `yaml:"paths"`
+	Xray          XrayConf               `yaml:"xray"`
+	Stats         StatsConf              `yaml:"stats"`
+	SlaveAPI      SlaveAPIConf           `yaml:"slave_api"`
+	MasterAPI     MasterAPIConf          `yaml:"master_api"`
+	Ports         PortsConf              `yaml:"ports"`
+	Logging       LoggingConf            `yaml:"logging"`
+	Webhooks      []string               `yaml:"webhooks"`
+	Worker        WorkerConf             `yaml:"worker"`
+	Database      DatabaseConf           `yaml:"database"`
+	PlategaSecret string                 `yaml:"platega_secret"`
+	WebhookSecret string                 `yaml:"webhook_secret"`
+	Subscription  SubscriptionConf       `yaml:"subscription"`
+	SlaveServers  map[string]slave.Entry `yaml:"slave_servers"`
+	AntiFraud     AntiFraudConf          `yaml:"anti_fraud"`
+	Mailer        MailerConf             `yaml:"mailer"`
 }
 
 // WorkerConf holds background worker settings.
@@ -120,11 +123,8 @@ type PortsConf struct {
 // PathsConf holds all filesystem paths used by xraytool.
 type PathsConf struct {
 	XrayConfig    string `yaml:"xray_config"`
-	LimitedDB     string `yaml:"limited_db"`
 	StatsState    string `yaml:"stats_state"`
 	InferredStats string `yaml:"inferred_stats"`
-	ServersJSON   string `yaml:"servers_json"`
-	DevicesState  string `yaml:"devices_state"`
 	// JSONSubscriptionTemplate is the path to the main (all-protocols) subscription txt file.
 	// YAML key: json_subscription_template (legacy: subscription_template).
 	JSONSubscriptionTemplate string `yaml:"json_subscription_template"`
@@ -151,9 +151,10 @@ type XrayConf struct {
 
 // MasterAPIConf defines how a slave node authenticates and connects to the master.
 type MasterAPIConf struct {
-	URL      string `yaml:"url"`
-	APIKey   string `yaml:"api_key"`
-	Insecure bool   `yaml:"insecure"`
+	URL         string   `yaml:"url"`
+	APIKey      string   `yaml:"api_key"`
+	Insecure    bool     `yaml:"insecure"`
+	AllowedDirs []string `yaml:"allowed_dirs"`
 }
 
 // StatsConf holds traffic statistics settings.
@@ -185,11 +186,8 @@ func defaults() *Config {
 		},
 		Paths: PathsConf{
 			XrayConfig:               "/usr/local/etc/xray/config.json",
-			LimitedDB:                "/etc/xraytool/limited_users.db",
 			StatsState:               "/etc/xraytool/traffic_stats_state.json",
 			InferredStats:            "/etc/xraytool/inferred_traffic.json",
-			ServersJSON:              "/etc/xraytool/servers.json",
-			DevicesState:             "/etc/xraytool/devices_state.json",
 			JSONSubscriptionTemplate: "/etc/xraytool/configs.txt",
 			RoutingTemplate:          "/etc/xraytool/routing.json",
 			RoutingRUTemplate:        "/etc/xraytool/routing_ALL_RU.json",
@@ -210,9 +208,10 @@ func defaults() *Config {
 			RemotePath:     "/api/v1/internal/xray/sync",
 		},
 		MasterAPI: MasterAPIConf{
-			URL:      "",
-			APIKey:   "",
-			Insecure: false,
+			URL:         "",
+			APIKey:      "",
+			Insecure:    false,
+			AllowedDirs: []string{"/etc/xraytool", "/var/www/TorvaldsVPN", "/var/log/xray"},
 		},
 		Ports: PortsConf{
 			APIServer: 8080,
@@ -287,6 +286,13 @@ const defaultConfigYAML = `# ===================================================
 # Mode: "master" (manages slaves) or "slave" (executes commands from master)
 mode: master
 
+# Secret used to verify Platega webhooks and API calls between backend and bot
+platega_secret: "your_secret_here"
+
+# Secret used to sign outgoing webhooks sent to clients-tg-go
+webhook_secret: "your_webhook_secret_here"
+
+
 server:
   # Public IP of this server (informational, used in some outputs)
   ip: "1.2.3.4"
@@ -297,21 +303,11 @@ paths:
   # Xray-core main config
   xray_config: "/usr/local/etc/xray/config.json"
 
-  # Flat-text DB for blocked users (email|subfile|limit, one per line)
-  # Kept in this format for compatibility with sub.php
-  limited_db: "/etc/xraytool/limited_users.db"
-
   # JSON file storing cumulative traffic stats state
   stats_state: "/etc/xraytool/traffic_stats_state.json"
 
-  # JSON file for inferred/analyzer traffic stats
+  # JSON file for tracking dynamic inferred stats
   inferred_stats: "/etc/xraytool/inferred_traffic.json"
-
-  # JSON file listing slave servers (required only when mode=master)
-  servers_json: "/etc/xraytool/servers.json"
-
-  # JSON file storing unique device HWIDs and states (for sub device limits)
-  devices_state: "/etc/xraytool/devices_state.json"
 
   # Main subscription config template (configs.txt)
   json_subscription_template: "/etc/xraytool/configs.txt"
@@ -349,11 +345,16 @@ slave_api:
 # Master Node Access (used ONLY when mode=slave)
 # ============================================================
 master_api:
-  # The exact URL of the master's sync endpoint. Must include scheme, domain, and path.
-  url: "https://master.example.com/api/v1/internal/xray/sync"
-  # The internal API key of the master node (matches master's api.internal_key).
-  api_key: "secret"
-  # If true, skips TLS certificate verification when connecting to the master.
+  # Master URL (used by slave to send events/stats back)
+  url: "https://master.domain.com/api/v1/internal/xray/sync"
+  # Authentication key used to protect master's internal endpoints AND file download endpoints
+  api_key: "your_secret_api_key"
+  # Directories allowed for the /api/download and /api/upload endpoints
+  allowed_dirs:
+    - "/etc/xraytool"
+    - "/var/www/TorvaldsVPN"
+    - "/var/log/xray"
+  # Ignore self-signed certificates when connecting to master
   insecure: false
 
 ports:
@@ -380,12 +381,6 @@ database:
   dsn: ""
   # File path used when driver=sqlite
   sqlite_path: "/etc/xraytool/xraytool.db"
-
-# Secret used to verify Platega webhooks and API calls between backend and bot
-platega_secret: "your_secret_here"
-
-# Secret used to sign outgoing webhooks sent to clients-tg-go
-webhook_secret: "your_webhook_secret_here"
 
 subscription:
   # Allowed User-Agents to access the subscription
@@ -459,24 +454,11 @@ mailer:
   # Verified sender address (must match the domain verified in Resend)
   from_email: "noreply@yourdomain.tld"
 
-# ============================================================
-# servers.json format (object style):
-# {
-#   "server-name": {
-#     "url": "https://slave.example.com/api/rest/xraytool",   # full URL (preferred)
-#     "domain": "slave.example.com",   # OR domain + optional scheme/port/path
-#     "scheme": "https",
-#     "port": 443,
-#     "path": "/api/rest/xraytool",
-#     "api_key": "secret",             # sent as X-API-Key header
-#     "bearer": "token",               # sent as Authorization: Bearer header
-#     "insecure": false                # skip TLS verification
-#   }
-# }
-#
-# Array style also supported:
-# [{"name": "server-name", "url": "...", "api_key": "..."}]
-# ============================================================
+slave_servers:
+  # "slave-1":
+  #   url: "https://slave.example.com/api/v1/internal/xray/sync"
+  #   api_key: "secret"             # sent as X-API-Key header
+  #   insecure: false               # skip TLS verification
 `
 
 // Load reads and parses the config file at the given path.
@@ -509,20 +491,11 @@ func Load(path string) (*Config, error) {
 	if cfg.Paths.XrayConfig == "" {
 		cfg.Paths.XrayConfig = defs.Paths.XrayConfig
 	}
-	if cfg.Paths.LimitedDB == "" {
-		cfg.Paths.LimitedDB = defs.Paths.LimitedDB
-	}
 	if cfg.Paths.StatsState == "" {
 		cfg.Paths.StatsState = defs.Paths.StatsState
 	}
 	if cfg.Paths.InferredStats == "" {
 		cfg.Paths.InferredStats = defs.Paths.InferredStats
-	}
-	if cfg.Paths.ServersJSON == "" {
-		cfg.Paths.ServersJSON = defs.Paths.ServersJSON
-	}
-	if cfg.Paths.DevicesState == "" {
-		cfg.Paths.DevicesState = defs.Paths.DevicesState
 	}
 	// Backward compatibility: if old yaml keys were used, migrate them to new fields.
 	if cfg.Paths.LegacySubscriptionTemplate != "" && cfg.Paths.JSONSubscriptionTemplate == "" {
@@ -656,6 +629,3 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
-
-
-

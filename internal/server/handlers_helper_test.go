@@ -39,20 +39,16 @@ func newTestRouter(t *testing.T) *server.Router {
 	f.Close()
 	t.Cleanup(func() { os.Remove(f.Name()) })
 
-	limitDBPath := f.Name() + ".limited.db"
-	t.Cleanup(func() { os.Remove(limitDBPath) })
-
 	cfg := &appconfig.Config{
 		Server:        appconfig.ServerConf{Domain: "test.example.com"},
 		Webhooks:      []string{}, // no webhooks in tests
 		PlategaSecret: "test-platega-secret",
 		Paths: appconfig.PathsConf{
 			XrayConfig: f.Name(),
-			LimitedDB:  limitDBPath,
 		},
 	}
 	cm := subscription.NewCacheManager(cfg)
-	return server.New(cfg, "test-api-key", cm)
+	return server.New(cfg, "test-api-key", cm, database.DB())
 }
 
 func do(r *server.Router, method, path, body string, apiKey string) *httptest.ResponseRecorder {

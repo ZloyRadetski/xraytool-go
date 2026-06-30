@@ -38,6 +38,8 @@ import (
 	"net/http/httputil"
 	"strings"
 
+	"gorm.io/gorm"
+
 	"xraytool/internal/appconfig"
 	"xraytool/internal/antifraud"
 	"xraytool/internal/events"
@@ -54,6 +56,7 @@ type Router struct {
 	log          *slog.Logger
 	cm           *subscription.CacheManager
 	mailer       mailer.Mailer
+	db           *gorm.DB
 	// antifraud hooks — nil when the module is disabled.
 	isBanned     func(email string) bool
 	forceUnban   func(email string)
@@ -65,7 +68,7 @@ type Router struct {
 
 // New constructs a Router, registers all routes and middleware, and returns the
 // underlying http.Handler ready to pass to http.ListenAndServe.
-func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *Router {
+func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, db *gorm.DB) *Router {
 	r := &Router{
 		mux:        http.NewServeMux(),
 		apiKey:     apiKey,
@@ -73,6 +76,7 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager) *R
 		dispatcher: events.NewDispatcher(cfg),
 		log:        slog.Default(),
 		cm:         cm,
+		db:         db,
 	}
 
 	// Wire up mailer if configured.

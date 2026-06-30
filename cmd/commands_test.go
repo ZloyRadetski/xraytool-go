@@ -33,7 +33,6 @@ func TestCommands_FailurePaths(t *testing.T) {
 		{[]string{"usersnapshot", "--config=test_config.yaml"}, "reading xray config"},
 		{[]string{"syncstates", "--config=test_config.yaml"}, "reading xray config"},
 		{[]string{"cli-stats", "--config=test_config.yaml"}, "reading xray config"},
-		{[]string{"start-server", "--config=test_config.yaml"}, "reading xray config"},
 	}
 
 	for _, tt := range tests {

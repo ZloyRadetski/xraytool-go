@@ -132,7 +132,7 @@ func slaveRegistry(cfg *appconfig.Config) *slave.Registry {
 		cfg.SlaveAPI.RequestTimeout,
 		cfg.SlaveAPI.RemotePath,
 	)
-	return slave.NewRegistry(cfg.Paths.ServersJSON, c)
+	return slave.NewRegistry(cfg.SlaveServers, c)
 }
 
 // ---------------------------------------------------------------------------

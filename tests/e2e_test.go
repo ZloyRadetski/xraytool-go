@@ -99,11 +99,8 @@ func TestMain(m *testing.M) {
 
 	// Write config_e2e.yaml
 	xrayConfigAbs := filepath.Join(rootDir, "tests", "xray_config.json")
-	limitedDbAbs := filepath.Join(rootDir, "tests", "limited_users.db")
 	statsStateAbs := filepath.Join(rootDir, "tests", "traffic_stats_state.json")
 	inferredStatsAbs := filepath.Join(rootDir, "tests", "inferred_traffic.json")
-	serversJsonAbs := filepath.Join(rootDir, "tests", "servers.json")
-	devicesStateAbs := filepath.Join(rootDir, "tests", "devices_state.json")
 	jsonSubAbs := filepath.Join(rootDir, "tests", "configs.txt")
 	routingAbs := filepath.Join(rootDir, "tests", "routing.json")
 	routingRuAbs := filepath.Join(rootDir, "tests", "routing_ALL_RU.json")
@@ -117,17 +114,16 @@ server:
   domain: "localhost:18080"
 paths:
   xray_config: %q
-  limited_db: %q
   stats_state: %q
   inferred_stats: %q
-  servers_json: %q
-  devices_state: %q
   json_subscription_template: %q
   routing_template: %q
   routing_ru_template: %q
   hy2_config_yaml: %q
   geoip_dat: %q
   geosite_dat: %q
+master_api:
+  api_key: "%s"
 ports:
   api_server: 18080
 database:
@@ -138,9 +134,9 @@ logging:
   level: "debug"
   format: "console"
 `,
-		xrayConfigAbs, limitedDbAbs, statsStateAbs, inferredStatsAbs,
-		serversJsonAbs, devicesStateAbs, jsonSubAbs, routingAbs, routingRuAbs,
-		hy2ConfigAbs, geoipAbs, geositeAbs, tempDBPath)
+		xrayConfigAbs, statsStateAbs, inferredStatsAbs,
+		jsonSubAbs, routingAbs, routingRuAbs,
+		hy2ConfigAbs, geoipAbs, geositeAbs, apiKey, tempDBPath)
 
 	if err := os.WriteFile(configYamlPath, []byte(yamlContent), 0644); err != nil {
 		fmt.Printf("Failed to write config_e2e.yaml: %v\n", err)

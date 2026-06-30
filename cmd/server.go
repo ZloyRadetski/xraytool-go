@@ -3,18 +3,20 @@ package cmd
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
+	"xraytool/internal/antifraud"
+	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
@@ -22,17 +24,11 @@ import (
 	"xraytool/internal/subscription"
 	"xraytool/internal/worker"
 	"xraytool/internal/xrayapi"
-	"xraytool/internal/antifraud"
 
 	"github.com/spf13/cobra"
 )
 
-type ApiConfig struct {
-	APIKey      string   `json:"api_key"`
-	AllowedDirs []string `json:"allowed_dirs"`
-}
 
-var apiConfig ApiConfig
 
 func getClientIP(r *http.Request) string {
 	ip := r.Header.Get("X-Real-IP")
@@ -58,7 +54,7 @@ func logIntruder(r *http.Request, reason string) {
 	logger.Warnf("\n[!!!] INTRUDER ALERT | %s\nIP: %s\n--- Request Dump ---\n%s\n--------------------\n", reason, ip, dumpStr)
 }
 
-func isPathAllowed(path string) bool {
+func isPathAllowed(cfg *appconfig.Config, path string) bool {
 	realPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		realPath, err = filepath.Abs(path)
@@ -67,7 +63,7 @@ func isPathAllowed(path string) bool {
 		}
 	}
 
-	for _, dir := range apiConfig.AllowedDirs {
+	for _, dir := range cfg.MasterAPI.AllowedDirs {
 		realDir, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			realDir, err = filepath.Abs(dir)
@@ -101,37 +97,8 @@ func startServerCmd() *cobra.Command {
 				osExit(1)
 				return
 			}
-			baseDir := filepath.Dir(executablePath)
-
-			if configPath == "" {
-				configPath = "xray_api_config.json"
-			}
-
-			if configPath == "xray_api_config.json" {
-				configPath = filepath.Join(baseDir, "xray_api_config.json")
-				if _, err := os.Stat(configPath); os.IsNotExist(err) {
-					configPath = "/etc/xraytool/xray_api_config.json"
-					if _, err := os.Stat(configPath); os.IsNotExist(err) {
-						configPath = "xray_api_config.json"
-					}
-				}
-			}
-
-			confFile, err := os.ReadFile(configPath)
-			if err != nil {
-				fmt.Printf("Ошибка: Не удалось найти конфиг %s. Работа сервера невозможна.\n", configPath)
-				osExit(1)
-				return
-			}
-
-			if err := json.Unmarshal(confFile, &apiConfig); err != nil {
-				fmt.Printf("Ошибка: Битый формат конфига %s: %v\n", configPath, err)
-				osExit(1)
-				return
-			}
-
-			if apiConfig.APIKey == "" {
-				fmt.Printf("FATAL: api_key не может быть пустым в xray_api_config.json\n")
+			if cfg.MasterAPI.APIKey == "" {
+				fmt.Printf("FATAL: master_api.api_key не может быть пустым в xraytool.yml\n")
 				osExit(1)
 				return
 			}
@@ -261,7 +228,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.MasterAPI.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key on update-links")
 					http.NotFound(w, r)
 					return
@@ -280,7 +247,7 @@ func startServerCmd() *cobra.Command {
 					return
 				}
 
-				if !isPathAllowed(destPath) {
+				if !isPathAllowed(cfg, destPath) {
 					logIntruder(r, fmt.Sprintf("Path Not Allowed: %s", destPath))
 					http.NotFound(w, r)
 					return
@@ -338,7 +305,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.MasterAPI.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key on Upload")
 					http.NotFound(w, r)
 					return
@@ -357,7 +324,7 @@ func startServerCmd() *cobra.Command {
 					return
 				}
 
-				if !isPathAllowed(destPath) {
+				if !isPathAllowed(cfg, destPath) {
 					logIntruder(r, fmt.Sprintf("Path Not Allowed: %s", destPath))
 					http.NotFound(w, r)
 					return
@@ -407,7 +374,7 @@ func startServerCmd() *cobra.Command {
 				}
 
 				reqKey := r.Header.Get("X-API-Key")
-				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiConfig.APIKey)) != 1 {
+				if subtle.ConstantTimeCompare([]byte(reqKey), []byte(cfg.MasterAPI.APIKey)) != 1 {
 					logIntruder(r, "Invalid or Missing API Key on Download")
 					http.NotFound(w, r)
 					return
@@ -420,8 +387,8 @@ func startServerCmd() *cobra.Command {
 					return
 				}
 
-				if !isPathAllowed(srcPath) {
-					logIntruder(r, fmt.Sprintf("Path Not Allowed: %s", srcPath))
+				if !isPathAllowed(cfg, srcPath) {
+					logIntruder(r, "Attempted to download from unauthorized directory: "+srcPath)
 					http.NotFound(w, r)
 					return
 				}
@@ -444,9 +411,9 @@ func startServerCmd() *cobra.Command {
 			// Existing /client and /api/v1/sub are already registered above and take
 			// priority due to Go 1.22+ most-specific-match routing — no conflict.
 			if dbReady {
-				apiRouter := server.New(cfg, apiConfig.APIKey, cacheManager)
+				apiRouter := server.New(cfg, cfg.MasterAPI.APIKey, cacheManager, database.DB())
 
-				// ── Anti-Fraud Module ──────────────────────────────────────────────
+				// 🟢 Anti-Fraud Module 🟢──────────────────────────────────────────────
 				if cfg.AntiFraud.Enabled {
 					afModule := antifraud.New(cfg, database.DB(), slog.Default())
 					// On master: expose IngestEvents so slaves can forward IP events here.
@@ -485,10 +452,10 @@ func startServerCmd() *cobra.Command {
 
 			logger.Infof(" Server:  127.0.0.1:%d", port)
 			logger.Infof(" Script:  %s", xraytoolPath)
-			logger.Infof(" Allowed: %s", strings.Join(apiConfig.AllowedDirs, ", "))
+			logger.Infof(" Allowed: %s", strings.Join(cfg.MasterAPI.AllowedDirs, ", "))
 
 			logger.Infof("API server listening on 127.0.0.1:%d", port)
-			
+
 			srv := &http.Server{
 				Addr:         fmt.Sprintf("127.0.0.1:%d", port),
 				Handler:      mux,
@@ -496,10 +463,31 @@ func startServerCmd() *cobra.Command {
 				WriteTimeout: 20 * time.Second,
 				IdleTimeout:  120 * time.Second,
 			}
-			
-			if err := srv.ListenAndServe(); err != nil {
+
+			// ── Graceful shutdown ────────────────────────────────────────────────
+			// Listen for OS termination signals so we can drain in-flight requests
+			// and webhook deliveries before the process exits.
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+			go func() {
+				<-quit
+				logger.Infof("[SHUTDOWN] Received termination signal — shutting down gracefully")
+
+				// 1. Stop accepting new HTTP requests (30-second grace period).
+				shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := srv.Shutdown(shutCtx); err != nil {
+					logger.Errorf("[SHUTDOWN] HTTP server forced to close: %v", err)
+				}
+
+				// 2. Wait for all in-flight webhook deliveries.
+				logger.Infof("[SHUTDOWN] Waiting for in-flight webhook deliveries...")
+				dispatcher.Shutdown()
+				logger.Infof("[SHUTDOWN] All webhook deliveries complete. Bye.")
+			}()
+
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Errorf("API Server failed: %v", err)
-				log.Fatal(err)
 			}
 		},
 	}

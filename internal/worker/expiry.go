@@ -234,7 +234,7 @@ func (w *ExpiryWorker) handleExpiredBulk(subs []database.Subscription) {
 				w.cfg.SlaveAPI.RequestTimeout,
 				w.cfg.SlaveAPI.RemotePath,
 			)
-			reg := slave.NewRegistry(w.cfg.Paths.ServersJSON, client)
+			reg := slave.NewRegistry(w.cfg.SlaveServers, client)
 			go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 		}
 	}
@@ -303,7 +303,7 @@ func (w *ExpiryWorker) handleExpired(sub database.Subscription) {
 			w.cfg.SlaveAPI.RequestTimeout,
 			w.cfg.SlaveAPI.RemotePath,
 		)
-		reg := slave.NewRegistry(w.cfg.Paths.ServersJSON, client)
+		reg := slave.NewRegistry(w.cfg.SlaveServers, client)
 		go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 	}
 }

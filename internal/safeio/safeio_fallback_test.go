@@ -2,42 +2,37 @@ package safeio
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestWriteToFile_RenameFallback(t *testing.T) {
+// TestWriteToFile_RenameError verifies that a rename failure propagates as an error
+// instead of silently falling back to a non-atomic write that could corrupt the file.
+func TestWriteToFile_RenameError(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "bind_mount.json")
 
-	// 1. Write initial file so it exists
-	err := WriteToFile(filePath, []byte("initial"), 0o644)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	// Write initial file so it exists.
+	if err := WriteToFile(filePath, []byte("initial"), 0o644); err != nil {
+		t.Fatalf("initial write: %v", err)
 	}
 
-	// 2. Mock osRename to fail with "device or resource busy"
-	originalRename := osRename
-	defer func() { osRename = originalRename }()
-	
-	osRename = func(oldpath, newpath string) error {
-		return errors.New("device or resource busy")
+	// Mock osRename to simulate a failure (e.g. EBUSY, though this should not
+	// happen in practice because the temp file is always in the same directory).
+	original := osRename
+	defer func() { osRename = original }()
+	osRename = func(_, _ string) error {
+		return errors.New("simulated rename failure")
 	}
 
-	// 3. Write again. Rename should fail, but it should fallback to WriteFile!
-	err = WriteToFile(filePath, []byte("fallback_success"), 0o644)
-	if err != nil {
-		t.Fatalf("expected fallback to succeed, got error: %v", err)
+	// WriteToFile must return an error — not silently corrupt the file with a
+	// non-atomic O_TRUNC write.
+	err := WriteToFile(filePath, []byte("new_content"), 0o644)
+	if err == nil {
+		t.Fatal("expected error on rename failure, got nil")
 	}
-
-	// 4. Verify content
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("failed to read file: %v", err)
-	}
-	if string(data) != "fallback_success" {
-		t.Fatalf("expected 'fallback_success', got '%s'", string(data))
+	if !strings.Contains(err.Error(), "atomic rename") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
-

@@ -31,24 +31,9 @@ var antiFraudStateCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
-		apiConfigPath := "xray_api_config.json"
-		if _, err := os.Stat(apiConfigPath); os.IsNotExist(err) {
-			if _, err := os.Stat("/etc/xraytool/xray_api_config.json"); err == nil {
-				apiConfigPath = "/etc/xraytool/xray_api_config.json"
-			}
-		}
-
-		apiConfData, err := os.ReadFile(apiConfigPath)
-		if err != nil {
-			fmt.Printf("ERROR|could not read api config %s: %v\n", apiConfigPath, err)
-			os.Exit(1)
-		}
-
-		var apiConfig struct {
-			APIKey string `json:"api_key"`
-		}
-		if err := json.Unmarshal(apiConfData, &apiConfig); err != nil || apiConfig.APIKey == "" {
-			fmt.Printf("ERROR|could not parse api_key from %s: %v\n", apiConfigPath, err)
+		apiKey := cfg.MasterAPI.APIKey
+		if apiKey == "" {
+			fmt.Printf("ERROR|master_api.api_key not found in xraytool.yml\n")
 			os.Exit(1)
 		}
 
@@ -59,7 +44,7 @@ var antiFraudStateCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		req.Header.Set("X-API-Key", apiConfig.APIKey)
+		req.Header.Set("X-API-Key", apiKey)
 
 		client := &http.Client{}
 		resp, err := client.Do(req)

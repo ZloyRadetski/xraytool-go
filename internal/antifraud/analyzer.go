@@ -200,8 +200,10 @@ func (a *analyzer) refreshDeviceCache() {
 }
 
 // getDeviceLimit returns the cached MaxDevices for email.
-// On a cache miss (new user), it falls back to a single DB query and caches the result.
-// Returns 1 as a safe fallback if the user is not found.
+// On a cache miss the safe default (1) is returned immediately and the real
+// value is fetched from the DB asynchronously — the result is stored in the
+// cache for subsequent events. This ensures the hot event-loop is never
+// blocked by a synchronous DB call.
 func (a *analyzer) getDeviceLimit(email string) int {
 	a.deviceCache.mu.RLock()
 	limit, ok := a.deviceCache.limits[email]
@@ -214,18 +216,27 @@ func (a *analyzer) getDeviceLimit(email string) int {
 		return limit
 	}
 
-	// Cache miss — point query for newly created users not yet in the bulk cache.
-	var sub database.Subscription
-	val := 1
-	if err := a.db.Select("max_devices").Where("email = ?", email).Limit(1).Find(&sub).Error; err == nil && sub.MaxDevices > 0 {
-		val = sub.MaxDevices
-	}
-
+	// Cache miss — schedule a background fetch so the event loop is not blocked.
+	// Pre-populate with the safe default so we don't spawn redundant goroutines
+	// for the same email when multiple events arrive before the fetch completes.
 	a.deviceCache.mu.Lock()
-	a.deviceCache.limits[email] = val
+	if _, alreadySet := a.deviceCache.limits[email]; !alreadySet {
+		a.deviceCache.limits[email] = 1 // temporary safe default
+	}
 	a.deviceCache.mu.Unlock()
 
-	return val
+	go func() {
+		var sub database.Subscription
+		val := 1
+		if err := a.db.Select("max_devices").Where("email = ?", email).Limit(1).Find(&sub).Error; err == nil && sub.MaxDevices > 0 {
+			val = sub.MaxDevices
+		}
+		a.deviceCache.mu.Lock()
+		a.deviceCache.limits[email] = val
+		a.deviceCache.mu.Unlock()
+	}()
+
+	return 1
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,7 +312,7 @@ func (a *analyzer) enforce(email, reason string) {
 				a.cfg.SlaveAPI.RequestTimeout,
 				a.cfg.SlaveAPI.RemotePath,
 			)
-			reg := slave.NewRegistry(a.cfg.Paths.ServersJSON, client)
+			reg := slave.NewRegistry(a.cfg.SlaveServers, client)
 			reg.PropagateAll("rmuser", map[string]string{"email": email})
 		}()
 	}
@@ -556,7 +567,7 @@ func (uc *unbanCleaner) tryUnban(ban database.AntifraudBan) {
 				uc.cfg.SlaveAPI.RequestTimeout,
 				uc.cfg.SlaveAPI.RemotePath,
 			)
-			reg := slave.NewRegistry(uc.cfg.Paths.ServersJSON, client)
+			reg := slave.NewRegistry(uc.cfg.SlaveServers, client)
 
 			limitF := float64(sub.MaxDevices)
 			subfile := ""

@@ -18,31 +18,31 @@ import (
 // Fields mirror the servers.json structure (both naming styles are accepted).
 type Entry struct {
 	// Full URL (preferred). If set, Domain/Scheme/Port/Path are ignored.
-	URL string `json:"url"`
+	URL string `json:"url" yaml:"url"`
 
 	// Components used to build the URL when URL is not set.
-	Domain string      `json:"domain"`
-	Host   string      `json:"host"`
-	IP     string      `json:"ip"`
-	Scheme string      `json:"scheme"`
-	Port   interface{} `json:"port"`
-	Path   string      `json:"path"`
+	Domain string      `json:"domain" yaml:"domain"`
+	Host   string      `json:"host" yaml:"host"`
+	IP     string      `json:"ip" yaml:"ip"`
+	Scheme string      `json:"scheme" yaml:"scheme"`
+	Port   interface{} `json:"port" yaml:"port"`
+	Path   string      `json:"path" yaml:"path"`
 
-	// Authentication — all styles are supported.
-	APIKey           string `json:"api_key"`
-	APIKeyCamel      string `json:"apiKey"`
-	XAPIKey          string `json:"x_api_key"`
-	XAPIKeyCamel     string `json:"xApiKey"`
-	Token            string `json:"token"`
-	APIToken         string `json:"apiToken"`
-	Bearer           string `json:"bearer"`
-	BearerToken      string `json:"bearer_token"`
-	BearerTokenCamel string `json:"bearerToken"`
-	AuthHeader       string `json:"auth_header"`   // full "Header-Name: value"
-	Authorization    string `json:"authorization"` // ditto
+	// Authentication - all styles are supported.
+	APIKey           string `json:"api_key" yaml:"api_key"`
+	APIKeyCamel      string `json:"apiKey" yaml:"apiKey"`
+	XAPIKey          string `json:"x_api_key" yaml:"x_api_key"`
+	XAPIKeyCamel     string `json:"xApiKey" yaml:"xApiKey"`
+	Token            string `json:"token" yaml:"token"`
+	APIToken         string `json:"apiToken" yaml:"apiToken"`
+	Bearer           string `json:"bearer" yaml:"bearer"`
+	BearerToken      string `json:"bearer_token" yaml:"bearer_token"`
+	BearerTokenCamel string `json:"bearerToken" yaml:"bearerToken"`
+	AuthHeader       string `json:"auth_header" yaml:"auth_header"`   // full "Header-Name: value"
+	Authorization    string `json:"authorization" yaml:"authorization"` // ditto
 
-	Insecure      bool `json:"insecure"`
-	AllowInsecure bool `json:"allow_insecure"`
+	Insecure      bool `json:"insecure" yaml:"insecure"`
+	AllowInsecure bool `json:"allow_insecure" yaml:"allow_insecure"`
 }
 
 // Endpoint builds the base URL for this server using remotePath as default path.

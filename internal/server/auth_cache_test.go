@@ -11,7 +11,7 @@ import (
 
 func TestRequestOTP_TelegramID(t *testing.T) {
 	id := "1111"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	// 1st request — must succeed
 	code1, err := requestOTP(id, 5*time.Minute)
@@ -40,7 +40,7 @@ func TestRequestOTP_TelegramID(t *testing.T) {
 
 func TestRequestOTP_Email(t *testing.T) {
 	id := "user@example.com"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	code1, err := requestOTP(id, 5*time.Minute)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestRequestOTP_Email(t *testing.T) {
 
 func TestVerifyOTP_BruteForce(t *testing.T) {
 	id := "brute@example.com"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	code, _ := requestOTP(id, 5*time.Minute)
 
@@ -92,7 +92,7 @@ func TestVerifyOTP_BruteForce(t *testing.T) {
 
 func TestVerifyOTP_Success_TelegramID(t *testing.T) {
 	id := "3333"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	code, _ := requestOTP(id, 5*time.Minute)
 
@@ -102,7 +102,7 @@ func TestVerifyOTP_Success_TelegramID(t *testing.T) {
 	}
 
 	// Entry must be deleted after successful verify (single-use)
-	_, stillPresent := otpCache.Load(id)
+	stillPresent := otpCache.get(id) != nil
 	if stillPresent {
 		t.Fatal("entry should be deleted after successful verify")
 	}
@@ -110,7 +110,7 @@ func TestVerifyOTP_Success_TelegramID(t *testing.T) {
 
 func TestVerifyOTP_Success_Email(t *testing.T) {
 	id := "success@example.com"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	code, _ := requestOTP(id, 5*time.Minute)
 
@@ -119,7 +119,7 @@ func TestVerifyOTP_Success_Email(t *testing.T) {
 		t.Fatalf("expected true,nil; got %v,%v", ok, err)
 	}
 
-	_, stillPresent := otpCache.Load(id)
+	stillPresent := otpCache.get(id) != nil
 	if stillPresent {
 		t.Fatal("entry should be deleted after successful verify")
 	}
@@ -127,7 +127,7 @@ func TestVerifyOTP_Success_Email(t *testing.T) {
 
 func TestVerifyOTP_Expired(t *testing.T) {
 	id := "expired@example.com"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	code, _ := requestOTP(id, 1*time.Millisecond)
 	time.Sleep(10 * time.Millisecond)
@@ -140,7 +140,7 @@ func TestVerifyOTP_Expired(t *testing.T) {
 
 func TestVerifyOTP_NotFound(t *testing.T) {
 	id := "ghost@example.com"
-	otpCache.Delete(id) // ensure not present
+	otpCache.delete(id) // ensure not present
 
 	ok, err := verifyOTP(id, "123456")
 	if ok || err != nil {
@@ -150,7 +150,7 @@ func TestVerifyOTP_NotFound(t *testing.T) {
 
 func TestRequestOTP_ResetsAfterExpiry(t *testing.T) {
 	id := "reset@example.com"
-	otpCache.Delete(id)
+	otpCache.delete(id)
 
 	// Exhaust the 2-request limit with a very short TTL
 	_, _ = requestOTP(id, 1*time.Millisecond)

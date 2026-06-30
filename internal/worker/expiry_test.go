@@ -46,9 +46,6 @@ func setupTestWorker(t *testing.T, db *gorm.DB, cfg *appconfig.Config) *ExpiryWo
 		cfg.Paths.XrayConfig = filepath.Join(tmpDir, "config.json")
 		os.WriteFile(cfg.Paths.XrayConfig, []byte(`{"inbounds":[]}`), 0644)
 	}
-	if cfg.Paths.LimitedDB == "" {
-		cfg.Paths.LimitedDB = filepath.Join(tmpDir, "limited.db")
-	}
 
 	return NewExpiryWorker(db, cfg, nil, nil, logger)
 }

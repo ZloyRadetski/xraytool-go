@@ -1,7 +1,6 @@
 package subscription
 
 import (
-	"bufio"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -55,13 +53,6 @@ type ActiveUser struct {
 	Hy2Auth  string
 	Hy2Obfs  string
 	Limit    int
-}
-
-// LimitedUser represents a blocked user from limited_users.db.
-type LimitedUser struct {
-	Email   string
-	Subfile string
-	Limit   *float64
 }
 
 // generateDummyVless converts an array of custom strings into VLESS dummy links.
@@ -278,40 +269,6 @@ func findActiveUserBySubfile(cfg xrayconfig.RawConfig, filename string, defaultE
 		}
 	}
 	return best
-}
-
-func findLimitedUserBySubfile(dbPath string, filename string) *LimitedUser {
-	targetNorm := normalizeSubfileToID(filename)
-	if targetNorm == "" {
-		return nil
-	}
-
-	f, err := os.Open(dbPath)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "|")
-		if len(parts) < 2 {
-			continue
-		}
-		email := strings.TrimSpace(parts[0])
-		sub := strings.TrimSpace(parts[1])
-		if normalizeSubfileToID(sub) == targetNorm {
-			return &LimitedUser{
-				Email:   email,
-				Subfile: sub,
-			}
-		}
-	}
-	return nil
 }
 
 func pickRequestValue(req *Request, queryKeys, headerKeys []string) string {
@@ -1049,54 +1006,7 @@ func buildErrorJSONResponse(lines []string) string {
 	return string(data)
 }
 
-func getCurrentUsername() string {
-	username := "unknown"
-	u, err := user.Current()
-	if err == nil {
-		username = u.Username
-	} else if userEnv := os.Getenv("USER"); userEnv != "" {
-		username = userEnv
-	} else if userEnv := os.Getenv("USERNAME"); userEnv != "" {
-		username = userEnv
-	}
-	var sb strings.Builder
-	for _, r := range username {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			sb.WriteRune(r)
-		}
-	}
-	if sb.Len() == 0 {
-		return "unknown"
-	}
-	return sb.String()
-}
 
-func resolveDeviceStatePath(primary string) string {
-	suffix := getCurrentUsername()
-	candidates := []string{
-		primary,
-		"/etc/xraytool/devices_state.json",
-		"/var/www/TorvaldsVPN/devices_state.json",
-		filepath.Join(os.TempDir(), "torvaldsvpn_devices_state_"+suffix+".json"),
-	}
-
-	for _, p := range candidates {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		dir := filepath.Dir(p)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			lockPath := p + ".lock"
-			f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
-			if err == nil {
-				f.Close()
-				return p
-			}
-		}
-	}
-	return primary
-}
 
 func canonicalDeviceClientKey(filename, clientId string) string {
 	norm := normalizeSubfileToID(filename)

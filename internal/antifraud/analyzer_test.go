@@ -138,6 +138,10 @@ func TestAnalyzer_HandleEvent_MultiDevice(t *testing.T) {
 	// maxIPs = 3, MaxDevices = 2 → dynamic threshold = 3 * 2 = 6
 	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 3, db, log)
 
+	// Pre-warm the device cache synchronously so the async fetch does not
+	// race with the handleEvent calls below.
+	an.refreshDeviceCache()
+
 	// 6 unique IPs — must NOT trigger ban (at limit)
 	for i := 1; i <= 6; i++ {
 		an.handleEvent(event{email: email, ip: generateIP(i)})
@@ -184,18 +188,21 @@ func TestAnalyzer_GetDeviceLimit_CacheHit(t *testing.T) {
 	cfg := &appconfig.Config{}
 	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
 
-	// First call: DB miss → fetches from DB and caches
+	// Warm the cache synchronously with a bulk refresh (same path used in production).
+	an.refreshDeviceCache()
+
+	// First call: cache hit (refreshDeviceCache already populated it)
 	limit := an.getDeviceLimit(email)
 	assert.Equal(t, 5, limit)
 
-	// Verify it's now in cache
+	// Verify it's in cache
 	an.deviceCache.mu.RLock()
 	cached, ok := an.deviceCache.limits[email]
 	an.deviceCache.mu.RUnlock()
-	assert.True(t, ok, "value should be cached after first lookup")
+	assert.True(t, ok, "value should be cached after refresh")
 	assert.Equal(t, 5, cached)
 
-	// Second call: cache hit (no extra DB query)
+	// Second call: still a cache hit
 	limit2 := an.getDeviceLimit(email)
 	assert.Equal(t, 5, limit2)
 }

@@ -889,42 +889,66 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	if user.IsBlocked {
+		writeError(w, http.StatusForbidden, "user is globally blocked")
+		return
+	}
 
-	var newEndsAt time.Time
+	// Resolve plan price outside the transaction (read-only, no concurrency issue).
 	if body.PlanID != nil {
 		var plan database.Plan
 		if err := db.First(&plan, *body.PlanID).Error; err != nil {
 			writeError(w, http.StatusBadRequest, "invalid plan_id")
 			return
 		}
-		
 		body.PlanTotalPrice = plan.BasePrice
 		if plan.GlobalDiscountPercent > 0 {
 			body.PlanTotalPrice = plan.BasePrice - (plan.BasePrice * plan.GlobalDiscountPercent / 100)
 		}
-
-		var sub database.Subscription
-		db.Where("user_id = ?", user.ID).First(&sub)
-		
-		baseTime := time.Now()
-		if sub.EndsAt != nil && sub.EndsAt.After(time.Now()) {
-			baseTime = *sub.EndsAt
-		}
-		newEndsAt = baseTime.AddDate(0, plan.Months, 0)
+		// NOTE: newEndsAt will be computed inside the transaction using the
+		// locked subscription row to prevent double-click race conditions.
 	} else {
-		newEndsAt, err = convert.ParseExpiryDate(body.NewEndsAt)
-		if err != nil {
+		_, parseErr := convert.ParseExpiryDate(body.NewEndsAt)
+		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, "invalid new_ends_at format")
 			return
 		}
 	}
-	if user.IsBlocked {
-		writeError(w, http.StatusForbidden, "user is globally blocked")
-		return
-	}
 
-	// Atomic: deduct balance and update subscription in a transaction.
+	// Atomic: lock the subscription row, compute new expiry, deduct balance —
+	// all inside a single transaction to prevent double-spend on concurrent requests.
+	var newEndsAt time.Time
 	txErr := db.Transaction(func(tx *gorm.DB) error {
+		// Lock the subscription row for the duration of this transaction.
+		// FOR UPDATE prevents a second concurrent request from reading the
+		// same ends_at and computing an identical (wrong) new expiry.
+		var sub database.Subscription
+		lockQuery := tx.Where("user_id = ?", user.ID).Order("created_at desc")
+		if tx.Dialector.Name() == "postgres" {
+			lockQuery = lockQuery.Set("gorm:query_option", "FOR UPDATE")
+		}
+		if err := lockQuery.First(&sub).Error; err != nil {
+			return fmt.Errorf("subscription not found: %w", err)
+		}
+
+		if body.PlanID != nil {
+			var plan database.Plan
+			if err := tx.First(&plan, *body.PlanID).Error; err != nil {
+				return fmt.Errorf("plan not found: %w", err)
+			}
+			baseTime := time.Now()
+			if sub.EndsAt != nil && sub.EndsAt.After(time.Now()) {
+				baseTime = *sub.EndsAt
+			}
+			newEndsAt = baseTime.AddDate(0, plan.Months, 0)
+		} else {
+			var parseErr error
+			newEndsAt, parseErr = convert.ParseExpiryDate(body.NewEndsAt)
+			if parseErr != nil {
+				return parseErr
+			}
+		}
+
 		// Only deduct if price > 0.
 		if body.PlanTotalPrice > 0 {
 			result := tx.Model(&database.User{}).
@@ -1144,7 +1168,7 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 			r.cfg.SlaveAPI.RequestTimeout,
 			r.cfg.SlaveAPI.RemotePath,
 		)
-		reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+		reg := slave.NewRegistry(r.cfg.SlaveServers, client)
 		go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 	}
 
@@ -1405,7 +1429,7 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 			r.cfg.SlaveAPI.RequestTimeout,
 			r.cfg.SlaveAPI.RemotePath,
 		)
-		reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+		reg := slave.NewRegistry(r.cfg.SlaveServers, client)
 
 		slaveParams := map[string]string{
 			"email":   sub.Email,
@@ -1470,7 +1494,7 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 				r.cfg.SlaveAPI.RequestTimeout,
 				r.cfg.SlaveAPI.RemotePath,
 			)
-			reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+			reg := slave.NewRegistry(r.cfg.SlaveServers, client)
 			go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 		}
 	}
@@ -1618,7 +1642,7 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 					r.cfg.SlaveAPI.RequestTimeout,
 					r.cfg.SlaveAPI.RemotePath,
 				)
-				reg := slave.NewRegistry(r.cfg.Paths.ServersJSON, client)
+				reg := slave.NewRegistry(r.cfg.SlaveServers, client)
 				go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 			}
 		}

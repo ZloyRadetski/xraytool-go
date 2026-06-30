@@ -143,11 +143,8 @@ database:
   driver: "sqlite"
 paths:
   xray_config: ""
-  limited_db: ""
   stats_state: ""
   inferred_stats: ""
-  servers_json: ""
-  devices_state: ""
   json_subscription_template: ""
   routing_template: ""
   routing_ru_template: ""
@@ -180,14 +177,11 @@ subscription:
 
 	defs := defaults()
 	if cfg.Paths.XrayConfig != defs.Paths.XrayConfig ||
-		cfg.Paths.LimitedDB != defs.Paths.LimitedDB ||
 		cfg.Stats.BucketSeconds != defs.Stats.BucketSeconds ||
 		cfg.SlaveAPI.ConnectTimeout != defs.SlaveAPI.ConnectTimeout ||
 		cfg.Ports.APIServer != defs.Ports.APIServer ||
 		cfg.Logging.Level != defs.Logging.Level ||
 		cfg.Paths.InferredStats != defs.Paths.InferredStats ||
-		cfg.Paths.ServersJSON != defs.Paths.ServersJSON ||
-		cfg.Paths.DevicesState != defs.Paths.DevicesState ||
 		cfg.Paths.RoutingTemplate != defs.Paths.RoutingTemplate ||
 		cfg.Paths.RoutingRUTemplate != defs.Paths.RoutingRUTemplate ||
 		cfg.Paths.Hy2ConfigYAML != defs.Paths.Hy2ConfigYAML ||

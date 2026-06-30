@@ -26,10 +26,15 @@ type Event struct {
 }
 
 // Dispatcher manages sending events to registered webhooks.
+//
+// Background goroutines spawned by Dispatch are tracked in wg so that
+// Shutdown can block until all in-flight webhook deliveries complete.
+// This prevents silent data loss on graceful server shutdown (SIGTERM).
 type Dispatcher struct {
 	webhooks []string
 	client   *http.Client
 	secret   string
+	wg       sync.WaitGroup
 }
 
 // NewDispatcher creates a new event dispatcher with the given config.
@@ -51,7 +56,9 @@ func NewDispatcher(cfg *appconfig.Config) *Dispatcher {
 	}
 }
 
-// Dispatch sends an event with the given type, data, and metadata to all registered webhooks asynchronously.
+// Dispatch sends an event with the given type, data, and metadata to all
+// registered webhooks asynchronously. The goroutine is tracked in the
+// internal WaitGroup so Shutdown() can drain all in-flight deliveries.
 func (d *Dispatcher) Dispatch(eventType string, data map[string]interface{}, userMetadata map[string]interface{}) {
 	if len(d.webhooks) == 0 {
 		return
@@ -66,7 +73,12 @@ func (d *Dispatcher) Dispatch(eventType string, data map[string]interface{}, use
 	}
 
 	logger.Infof("[EVENT_DISPATCHER] Dispatching event %s (type: %s) to %d webhooks asynchronously", event.EventID, event.EventType, len(d.webhooks))
-	go d.broadcast(event)
+
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.broadcast(event)
+	}()
 }
 
 // DispatchSync sends an event synchronously, blocking until all webhooks are sent (or fail).
@@ -102,6 +114,12 @@ func (d *Dispatcher) DispatchSync(eventType string, data map[string]interface{},
 	wg.Wait()
 }
 
+// Shutdown waits for all in-flight background webhook deliveries to complete.
+// Call this during graceful server shutdown before exiting the process.
+func (d *Dispatcher) Shutdown() {
+	d.wg.Wait()
+}
+
 func (d *Dispatcher) broadcast(event Event) {
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -109,9 +127,15 @@ func (d *Dispatcher) broadcast(event Event) {
 		return
 	}
 
+	var wg sync.WaitGroup
 	for _, webhookURL := range d.webhooks {
-		go d.sendWithRetry(context.Background(), webhookURL, event.EventID, payload)
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			d.sendWithRetry(context.Background(), url, event.EventID, payload)
+		}(webhookURL)
 	}
+	wg.Wait()
 }
 
 func (d *Dispatcher) sendWithRetry(ctx context.Context, url, eventID string, payload []byte) {

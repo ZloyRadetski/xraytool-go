@@ -56,26 +56,13 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 	}
 
 	if err := osRename(tmp, path); err != nil {
-		// Fallback for Docker bind mounts or situations where rename fails (e.g. device or resource busy)
-		// This fallback is NOT atomic, but it's the only way to write to a bind-mounted file.
-		outf, writeErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, perm)
-		if writeErr != nil {
-			os.Remove(tmp)
-			return fmt.Errorf("rename failed (%v) and fallback open failed: %w", err, writeErr)
-		}
-		if _, writeErr := outf.Write(data); writeErr != nil {
-			outf.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("rename failed (%v) and fallback write failed: %w", err, writeErr)
-		}
-		if syncErr := outf.Sync(); syncErr != nil {
-			outf.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("rename failed (%v) and fallback sync failed: %w", err, syncErr)
-		}
-		outf.Close()
+		// The temp file is always created in the same directory as the target
+		// (via os.CreateTemp(dir, ...)), so os.Rename never crosses filesystem
+		// boundaries and must not fail with EXDEV. Any other rename failure is
+		// a real I/O error — abort and leave the original file intact.
+		os.Remove(tmp)
+		return fmt.Errorf("atomic rename %q → %q: %w", tmp, path, err)
 	}
-	os.Remove(tmp)
 
 	return nil
 }

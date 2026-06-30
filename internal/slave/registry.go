@@ -1,34 +1,28 @@
 package slave
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
 )
 
-// Registry loads slave server entries and propagates commands in parallel.
+// Registry holds slave server entries and propagates commands in parallel.
 type Registry struct {
-	path   string
-	client *Client
+	servers map[string]Entry
+	client  *Client
 }
 
-// NewRegistry creates a Registry backed by the given servers.json path.
-func NewRegistry(path string, client *Client) *Registry {
-	return &Registry{path: path, client: client}
+// NewRegistry creates a Registry backed by the given servers map.
+func NewRegistry(servers map[string]Entry, client *Client) *Registry {
+	if servers == nil {
+		servers = make(map[string]Entry)
+	}
+	return &Registry{servers: servers, client: client}
 }
 
-// Servers returns all configured slave servers as a name→Entry map.
-// Returns nil (no error) when the file does not exist.
+// Servers returns all configured slave servers as a name->Entry map.
 func (r *Registry) Servers() (map[string]Entry, error) {
-	if _, err := os.Stat(r.path); os.IsNotExist(err) {
-		return nil, nil
-	}
-	data, err := os.ReadFile(r.path)
-	if err != nil {
-		return nil, fmt.Errorf("reading servers.json: %w", err)
-	}
-	return parseServers(data)
+	return r.servers, nil
 }
 
 // PropagateResult holds the outcome of one slave API call.
@@ -93,44 +87,4 @@ func (r *Registry) CallOneDecode(serverName, cmd string, params map[string]strin
 		return fmt.Errorf("unknown slave server: %q", serverName)
 	}
 	return r.client.CallDecode(entry, cmd, params, target)
-}
-
-// ---------------------------------------------------------------------------
-// servers.json parser — supports both object and array formats
-// ---------------------------------------------------------------------------
-
-func parseServers(data []byte) (map[string]Entry, error) {
-	// Try object format: {"name": {Entry...}, ...}
-	var objFmt map[string]Entry
-	if err := json.Unmarshal(data, &objFmt); err == nil && len(objFmt) > 0 {
-		return objFmt, nil
-	}
-
-	// Try array format: [{name: "...", ...}, ...]
-	var arrFmt []json.RawMessage
-	if err := json.Unmarshal(data, &arrFmt); err != nil {
-		return nil, fmt.Errorf("parsing servers.json: %w", err)
-	}
-
-	result := make(map[string]Entry, len(arrFmt))
-	for i, raw := range arrFmt {
-		var entry Entry
-		if err := json.Unmarshal(raw, &entry); err != nil {
-			continue
-		}
-		// Determine name from various possible fields.
-		var nameFields struct {
-			Name   string `json:"name"`
-			ID     string `json:"id"`
-			Key    string `json:"key"`
-			Server string `json:"server"`
-		}
-		json.Unmarshal(raw, &nameFields) //nolint:errcheck
-		name := firstNonEmpty(nameFields.Name, nameFields.ID, nameFields.Key, nameFields.Server)
-		if name == "" {
-			name = fmt.Sprintf("%d", i)
-		}
-		result[name] = entry
-	}
-	return result, nil
 }

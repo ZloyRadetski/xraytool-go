@@ -216,6 +216,7 @@ func TestHandleEvent_ExactlyAtThreshold_NoBan(t *testing.T) {
 	bs := newBanStore()
 	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, db, slog.Default())
 	// threshold = 3 * 2 = 6
+	an.refreshDeviceCache() // pre-warm so async fetch doesn't race with events
 
 	// Ровно 6 IP — не должен забанить
 	for i := 1; i <= 6; i++ {
@@ -241,6 +242,7 @@ func TestHandleEvent_OneOverThreshold_Bans(t *testing.T) {
 	bs := newBanStore()
 	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, db, slog.Default())
 	// threshold = 3 * 2 = 6
+	an.refreshDeviceCache() // pre-warm
 
 	// 7 IP — должен забанить
 	for i := 1; i <= 7; i++ {
@@ -281,7 +283,7 @@ func TestSlaveReporter_AddAndFlush(t *testing.T) {
 			RemotePath:     "/api/v1/internal/xray/sync",
 		},
 		// Путь к несуществующему файлу — PropagateAll вернёт empty slice.
-		Paths: appconfig.PathsConf{ServersJSON: "/nonexistent/servers.json"},
+		Paths: appconfig.PathsConf{},
 	}
 
 	r := newSlaveReporter(cfg, slog.Default())
@@ -308,7 +310,7 @@ func TestSlaveReporter_AddAndFlush(t *testing.T) {
 func TestSlaveReporter_FlushEmptyBuffer(t *testing.T) {
 	cfg := &appconfig.Config{
 		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{ServersJSON: "/nonexistent/servers.json"},
+		Paths:    appconfig.PathsConf{},
 	}
 	r := newSlaveReporter(cfg, slog.Default())
 	assert.NotPanics(t, r.flush, "flush on empty buffer must not panic")
@@ -319,7 +321,7 @@ func TestSlaveReporter_FlushEmptyBuffer(t *testing.T) {
 func TestSlaveReporter_ConcurrentAdds(t *testing.T) {
 	cfg := &appconfig.Config{
 		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{ServersJSON: "/nonexistent/servers.json"},
+		Paths:    appconfig.PathsConf{},
 	}
 	r := newSlaveReporter(cfg, slog.Default())
 
@@ -345,7 +347,7 @@ func TestSlaveReporter_ConcurrentAdds(t *testing.T) {
 func TestSlaveReporter_FlushResetsBuffer(t *testing.T) {
 	cfg := &appconfig.Config{
 		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{ServersJSON: "/nonexistent/servers.json"},
+		Paths:    appconfig.PathsConf{},
 	}
 	r := newSlaveReporter(cfg, slog.Default())
 
@@ -364,7 +366,7 @@ func TestSlaveReporter_FlushResetsBuffer(t *testing.T) {
 func TestSlaveReporter_RunAndStop(t *testing.T) {
 	cfg := &appconfig.Config{
 		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: 50 * time.Millisecond, RequestTimeout: 50 * time.Millisecond},
-		Paths:    appconfig.PathsConf{ServersJSON: "/nonexistent/servers.json"},
+		Paths:    appconfig.PathsConf{},
 	}
 	r := newSlaveReporter(cfg, slog.Default())
 	r.add(event{email: "shutdown@x.com", ip: "9.9.9.9"})
@@ -635,7 +637,7 @@ func BenchmarkHandleEvent_WithDeviceCache(b *testing.B) {
 func BenchmarkSlaveReporter_Add(b *testing.B) {
 	cfg := &appconfig.Config{
 		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{ServersJSON: "/nonexistent/servers.json"},
+		Paths:    appconfig.PathsConf{},
 	}
 	r := newSlaveReporter(cfg, slog.Default())
 	e := event{email: "bench@x.com", ip: "1.2.3.4"}

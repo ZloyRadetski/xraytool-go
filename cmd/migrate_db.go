@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -21,7 +20,6 @@ import (
 // Users + Subscriptions into the configured target database (Postgres or SQLite).
 func migrateLegacyDBCmd() *cobra.Command {
 	var sourcePath string
-	var devicesPath string
 
 	cmd := &cobra.Command{
 		Use:   "db-migrate",
@@ -80,9 +78,7 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 				fmt.Printf("[WARN] Error migrating payments: %v\n", err)
 			}
 
-			if err := migrateDevices(srcGorm, database.DB(), devicesPath); err != nil {
-				fmt.Printf("[WARN] Error migrating devices: %v\n", err)
-			}
+
 
 			// Cleanly close both databases to trigger SQLite WAL checkpoint!
 			if sqlDB, err := srcGorm.DB(); err == nil {
@@ -99,10 +95,6 @@ it skips rows that already exist (identified by Telegram ID in Metadata).`,
 	cmd.Flags().StringVar(
 		&sourcePath, "from", "",
 		"Path to the legacy bot.db SQLite file (required)",
-	)
-	cmd.Flags().StringVar(
-		&devicesPath, "devices", "",
-		"Path to the legacy devices_state.json file (optional)",
 	)
 	_ = cmd.MarkFlagRequired("from")
 
@@ -479,114 +471,3 @@ func migratePayments(srcDB *gorm.DB, dstDB *gorm.DB) error {
 	return nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Devices migration
-// ─────────────────────────────────────────────────────────────────────────────
-
-type legacyDeviceState struct {
-	Clients map[string]struct {
-		Devices []struct {
-			HWID         string `json:"hwid"`
-			DeviceModel  string `json:"device_model"`
-			DeviceOS     string `json:"device_os"`
-			VerOS        string `json:"ver_os"`
-			UserAgent    string `json:"last_user_agent"`
-			RequestCount int    `json:"request_count"`
-			FirstSeen    string `json:"first_seen"`
-			LastSeen     string `json:"last_seen"`
-		} `json:"devices"`
-	} `json:"clients"`
-}
-
-func migrateDevices(srcDB *gorm.DB, dstDB *gorm.DB, devicesPath string) error {
-	if devicesPath == "" {
-		return nil
-	}
-	data, err := os.ReadFile(devicesPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("[WARN] devices state file not found, skipping devices migration")
-			return nil
-		}
-		return err
-	}
-	var state legacyDeviceState
-	importJson := true
-	_ = importJson // JSON imported in standard imports
-
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("parsing devices state: %w", err)
-	}
-
-	// Build clientKey -> tg_id map from server table
-	var servers []legacyServer
-	if err := srcDB.Find(&servers).Error; err != nil {
-		return fmt.Errorf("reading legacy server table: %w", err)
-	}
-
-	keyToTgID := make(map[string]int64)
-	for _, s := range servers {
-		if s.Link == "" {
-			continue
-		}
-
-		parts := strings.Split(s.Link, "id=")
-		if len(parts) > 1 {
-			key := strings.Split(parts[1], "&")[0]
-			key = strings.ToLower(key)
-			keyToTgID[key] = s.TgID
-			keyToTgID[key+".txt"] = s.TgID
-		}
-	}
-
-	migrated := 0
-	for clientKey, clientData := range state.Clients {
-		normalizedKey := strings.ToLower(clientKey)
-		tgID, ok := keyToTgID[normalizedKey]
-		
-		var sub database.Subscription
-		found := false
-
-		if ok {
-			email := fmt.Sprintf("bot_client_%d", tgID)
-			if err := dstDB.Where("email = ?", email).First(&sub).Error; err == nil {
-				found = true
-			}
-		}
-
-		if !found {
-			// Fallback: search by subfile directly in metadata
-			if err := dstDB.Where("json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?", clientKey, normalizedKey).First(&sub).Error; err == nil {
-				found = true
-			}
-		}
-
-		if !found {
-			fmt.Printf("[SKIP] Sub not found for clientKey=%q\n", clientKey)
-			continue
-		}
-
-		for _, d := range clientData.Devices {
-			var count int64
-			dstDB.Model(&database.Device{}).Where("subscription_id = ? AND hw_id = ?", sub.ID, d.HWID).Count(&count)
-			if count > 0 {
-				continue
-			}
-
-			dstDB.Create(&database.Device{
-				SubscriptionID: sub.ID,
-				HWID:           d.HWID,
-				DeviceModel:    d.DeviceModel,
-				DeviceOS:       d.DeviceOS,
-				VerOS:          d.VerOS,
-				UserAgent:      d.UserAgent,
-				RequestCount:   d.RequestCount,
-				FirstSeen:      parseFlexibleTime(d.FirstSeen),
-				LastSeen:       parseFlexibleTime(d.LastSeen),
-			})
-			migrated++
-		}
-	}
-	fmt.Printf("\n=== Devices Migration complete: %d devices migrated ===\n", migrated)
-	return nil
-}
