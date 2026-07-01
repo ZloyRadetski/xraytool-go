@@ -819,7 +819,7 @@ func parseSubscriptionTemplate(content string) (string, []string) {
 	return header.String(), templates
 }
 
-func generateHeader(email, sublink, headerText, expireVal, downloadVal string, isBlocked bool, limit int) string {
+func generateHeader(email, sublink, headerText, expireVal, uploadVal, downloadVal string, isBlocked bool, limit int) string {
 	daysLeft := "0"
 	expireTs := parseDateToTimestamp(expireVal)
 	if expireTs > 0 {
@@ -834,10 +834,16 @@ func generateHeader(email, sublink, headerText, expireVal, downloadVal string, i
 		blockedStr = "1"
 	}
 
+	upBytes, _ := strconv.ParseInt(uploadVal, 10, 64)
+	downBytes, _ := strconv.ParseInt(downloadVal, 10, 64)
+
 	tokens := map[string]string{
 		"{EMAIL}":           email,
 		"{SUBLINK}":         sublink,
 		"{EXPIRE}":          expireVal,
+		"{UP}":              uploadVal,
+		"{DOWN}":            downloadVal,
+		"{TOTAL}":           fmt.Sprintf("%d", upBytes+downBytes),
 		"{DOWNLOAD}":        downloadVal,
 		"{DAYS_LEFT}":       daysLeft,
 		"{EXPIRE_DAYS}":     daysLeft,

@@ -409,7 +409,7 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 
 	svc := usersvc.NewService(nil, cfg)
 	canonicalSubLink := svc.GenerateShareLink(getRequestHost(req, cfg.Server.Domain), clientId)
-	renderedHeader := generateHeader(email, canonicalSubLink, subHeader, fmt.Sprintf("%d", expireTs), fmt.Sprintf("%d", downloadBytes), isBlockedUser, deviceLimit)
+	renderedHeader := generateHeader(email, canonicalSubLink, subHeader, fmt.Sprintf("%d", expireTs), fmt.Sprintf("%d", uploadBytes), fmt.Sprintf("%d", downloadBytes), isBlockedUser, deviceLimit)
 
 	meta := parseHeaderMetadata(renderedHeader)
 	for k, v := range meta.CustomHeaders {

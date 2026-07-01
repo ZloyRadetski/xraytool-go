@@ -167,7 +167,7 @@ func TestParseSubscriptionTemplate(t *testing.T) {
 
 func TestGenerateHeader(t *testing.T) {
 	headerText := "#profile-title: My Server\n#announce: Hello {EMAIL}\n#profile-web-page-url: {SUBLINK}"
-	out := generateHeader("test@user", "http://sub", headerText, "01-01-2030", "1024", false, 3)
+	out := generateHeader("test@user", "http://sub", headerText, "01-01-2030", "512", "1024", false, 3)
 	if !strings.Contains(out, "#profile-title: base64:") {
 		t.Errorf("Expected base64 encoded title")
 	}
