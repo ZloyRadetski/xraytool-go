@@ -77,11 +77,54 @@ func Load(path string, _ int64) (*State, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading stats state: %w", err)
 	}
-	var s State
-	if err := json.Unmarshal(data, &s); err != nil || s.Users == nil {
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return defaultState(), nil
 	}
-	return &s, nil
+
+	s := defaultState()
+	if v, ok := raw["version"].(float64); ok && v == 2 {
+		if err := json.Unmarshal(data, s); err != nil {
+			return defaultState(), nil
+		}
+		return s, nil
+	}
+
+	// Migrate from v1
+	if users, ok := raw["users"].(map[string]interface{}); ok {
+		for email, uData := range users {
+			uMap, ok := uData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			user := &UserState{}
+			
+			if cum, ok := uMap["cumulative"].(map[string]interface{}); ok {
+				if xray, ok := cum["xray"].(map[string]interface{}); ok {
+					if up, ok := xray["up"].(float64); ok {
+						user.CumulativeUp = int64(up)
+					}
+					if down, ok := xray["down"].(float64); ok {
+						user.CumulativeDown = int64(down)
+					}
+				}
+			}
+			
+			if rawNode, ok := uMap["raw"].(map[string]interface{}); ok {
+				if xray, ok := rawNode["xray"].(map[string]interface{}); ok {
+					if up, ok := xray["up"].(float64); ok {
+						user.LastRawUp = int64(up)
+					}
+					if down, ok := xray["down"].(float64); ok {
+						user.LastRawDown = int64(down)
+					}
+				}
+			}
+			s.Users[email] = user
+		}
+	}
+	return s, nil
 }
 
 // Save atomically writes the state to path.

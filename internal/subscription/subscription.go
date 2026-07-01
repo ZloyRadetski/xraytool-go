@@ -724,7 +724,7 @@ func getRequestHost(req *Request, fallbackDomain string) string {
 // Returns (headerSection, []templateBlocks).
 func parseSubscriptionTemplate(content string) (string, []string) {
 	lines := strings.Split(content, "\n")
-	header := ""
+	var header strings.Builder
 	var templates []string
 	isHeader := true
 	var jsonBody strings.Builder
@@ -745,7 +745,7 @@ func parseSubscriptionTemplate(content string) (string, []string) {
 					}
 				}
 			} else {
-				header += line + "\n"
+				header.WriteString(line + "\n")
 			}
 			continue
 		}
@@ -786,17 +786,17 @@ func parseSubscriptionTemplate(content string) (string, []string) {
 	}
 
 	if len(templates) > 0 {
-		return header, templates
+		return header.String(), templates
 	}
 
 	// Fallback to line-by-line link parsing if no JSON start was found
 	isHeader = true
-	header = ""
+	header.Reset()
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if isHeader {
-				header += "\n"
+				header.WriteString("\n")
 			}
 			continue
 		}
@@ -807,16 +807,16 @@ func parseSubscriptionTemplate(content string) (string, []string) {
 		}
 		if strings.HasPrefix(trimmed, "#") {
 			if isHeader {
-				header += line + "\n"
+				header.WriteString(line + "\n")
 			}
 			continue
 		}
 		if isHeader {
-			header += line + "\n"
+			header.WriteString(line + "\n")
 		}
 	}
 
-	return header, templates
+	return header.String(), templates
 }
 
 func generateHeader(email, sublink, headerText, expireVal, downloadVal string, isBlocked bool, limit int) string {
