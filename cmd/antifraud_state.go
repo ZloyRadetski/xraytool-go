@@ -31,9 +31,9 @@ var antiFraudStateCmd = &cobra.Command{
 			os.Exit(0)
 		}
 
-		apiKey := cfg.MasterAPI.APIKey
+		apiKey := cfg.Server.APIKey
 		if apiKey == "" {
-			fmt.Printf("ERROR|master_api.api_key not found in xraytool.yml\n")
+			fmt.Printf("ERROR|server.api_key not found in xraytool.yml\n")
 			os.Exit(1)
 		}
 
