@@ -88,10 +88,16 @@ func Load(path string, _ int64) (*State, error) {
 		if err := json.Unmarshal(data, s); err != nil {
 			return defaultState(), nil
 		}
+		if s.Users == nil {
+			s.Users = make(map[string]*UserState)
+		}
 		return s, nil
 	}
 
 	// Migrate from v1
+	if s.Users == nil {
+		s.Users = make(map[string]*UserState)
+	}
 	if users, ok := raw["users"].(map[string]interface{}); ok {
 		for email, uData := range users {
 			uMap, ok := uData.(map[string]interface{})

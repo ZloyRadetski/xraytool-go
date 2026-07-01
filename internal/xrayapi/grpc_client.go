@@ -128,13 +128,9 @@ func (g *GRPCClient) Close() {
 
 // QueryStats fetches per-user traffic counters via the gRPC StatsService.
 //
-// It uses GetUsersStats (preferred over QueryStats+string-parsing) because it
-// returns a strongly-typed slice of UserStat objects directly.
-//
-// Dry-run scenarios verified:
-//   - Xray not running → dial() fails within connectTimeout → error returned.
-//   - Empty stats → returns nil slice without error.
-//   - Context deadline exceeded mid-call → wrapped error returned to caller.
+// We strictly use QueryStatsRequest instead of GetUsersStatsRequest because
+// Xray-core's GetUsersStats has a known bug: it filters out users who are not
+// currently online (missing from OnlineMap), which causes us to lose their traffic counters.
 func (g *GRPCClient) QueryStats() ([]UserStat, error) {
 	conn, err := g.dial()
 	if err != nil {
@@ -145,28 +141,42 @@ func (g *GRPCClient) QueryStats() ([]UserStat, error) {
 	defer cancel()
 
 	client := statsService.NewStatsServiceClient(conn)
-	resp, err := client.GetUsersStats(ctx, &statsService.GetUsersStatsRequest{
-		IncludeTraffic: true,
-		Reset_:         false, // Billing worker resets counters via a dedicated call if needed.
+	resp, err := client.QueryStats(ctx, &statsService.QueryStatsRequest{
+		Pattern: "user>>>",
+		Reset_:  false, // Billing worker resets counters via a dedicated call if needed.
 	})
 	if err != nil {
-		return nil, fmt.Errorf("xrayapi: GetUsersStats: %w", err)
+		return nil, fmt.Errorf("xrayapi: QueryStats: %w", err)
 	}
 
-	if resp == nil || len(resp.Users) == 0 {
+	if resp == nil || len(resp.Stat) == 0 {
 		return nil, nil
 	}
 
-	stats := make([]UserStat, 0, len(resp.Users))
-	for _, u := range resp.Users {
-		if u.Email == "" || u.Traffic == nil {
+	userMap := make(map[string]*UserStat)
+	for _, stat := range resp.Stat {
+		// Format: user>>>email>>>traffic>>>uplink
+		parts := strings.Split(stat.Name, ">>>")
+		if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
 			continue
 		}
-		stats = append(stats, UserStat{
-			Email: u.Email,
-			Up:    u.Traffic.Uplink,
-			Down:  u.Traffic.Downlink,
-		})
+		email := parts[1]
+		direction := parts[3]
+
+		if _, ok := userMap[email]; !ok {
+			userMap[email] = &UserStat{Email: email}
+		}
+
+		if direction == "uplink" {
+			userMap[email].Up = stat.Value
+		} else if direction == "downlink" {
+			userMap[email].Down = stat.Value
+		}
+	}
+
+	stats := make([]UserStat, 0, len(userMap))
+	for _, u := range userMap {
+		stats = append(stats, *u)
 	}
 	return stats, nil
 }
