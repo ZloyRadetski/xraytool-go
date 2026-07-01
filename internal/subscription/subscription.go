@@ -618,54 +618,32 @@ func getHy2ObfsPasswordFromYAML(yamlPath string) string {
 	return ""
 }
 
-func getDownloadBytes(statsPath string, email string) int64 {
+func getTrafficBytes(statsPath string, email string) (up int64, down int64) {
 	if statsPath == "" {
-		return 0
+		return 0, 0
 	}
 	data, err := os.ReadFile(statsPath)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
+	
 	var parsed struct {
-		Users map[string]interface{} `json:"users"`
+		Users map[string]struct {
+			CumulativeUp   float64 `json:"cumulative_up"`
+			CumulativeDown float64 `json:"cumulative_down"`
+		} `json:"users"`
 	}
+	
 	if json.Unmarshal(data, &parsed) != nil || parsed.Users == nil {
-		return 0
+		return 0, 0
 	}
+	
 	userObj, ok := parsed.Users[email]
 	if !ok {
-		return 0
+		return 0, 0
 	}
-	// Sum combined traffic bytes
-	bytes, _ := json.Marshal(userObj)
-	var traversal map[string]interface{}
-	json.Unmarshal(bytes, &traversal) //nolint:errcheck
-
-	return extractDownloadValue(traversal)
-}
-
-func extractDownloadValue(m map[string]interface{}) int64 {
-	if m == nil {
-		return 0
-	}
-	// Path 1: cumulative.total.combined
-	if cum, ok := m["cumulative"].(map[string]interface{}); ok {
-		if tot, ok := cum["total"].(map[string]interface{}); ok {
-			if comb, ok := tot["combined"].(float64); ok {
-				return int64(comb)
-			}
-		}
-	}
-	// Fallback sums
-	// up + down
-	if cum, ok := m["cumulative"].(map[string]interface{}); ok {
-		up, _ := cum["up"].(float64)
-		down, _ := cum["down"].(float64)
-		if up > 0 || down > 0 {
-			return int64(up + down)
-		}
-	}
-	return 0
+	
+	return int64(userObj.CumulativeUp), int64(userObj.CumulativeDown)
 }
 
 func defaultExpireDate() string {

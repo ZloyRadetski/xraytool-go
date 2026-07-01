@@ -31,6 +31,7 @@ go.work.sum
 
 # Конфигурационные файлы (чтобы случайно не слить ключи/пароли в интернет)
 xray_api_config.json
+test_xray_config2.json
 non_existent_config.yaml
 
 # Файлы логов

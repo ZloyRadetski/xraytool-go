@@ -331,9 +331,8 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 	hysteria2Auth := hy2Pass
 	hy2Obfs := getOrCreateHy2ObfsPassword(cfg.Paths.Hy2ConfigYAML, xrayCfg)
 
-	// Fetch traffic download bytes
-	downloadBytes := int64(0)
-	downloadBytes = getDownloadBytes(cfg.Paths.StatsState, email)
+	// Fetch traffic bytes
+	uploadBytes, downloadBytes := getTrafficBytes(cfg.Paths.StatsState, email)
 
 	isVlessFormat := req.Query["format"] == "vless"
 
@@ -359,7 +358,7 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 	if deviceLimitReached || unsupportedClient || isBlockedOrExpired {
 		res.Headers["Content-Disposition"] = `attachment; filename="configs.txt"`
 		res.Headers["Profile-Title"] = "Torvalds VPN"
-		res.Headers["Subscription-Userinfo"] = fmt.Sprintf("upload=0; download=%d; total=107374182400000; expire=%d", downloadBytes, expireTs)
+		res.Headers["Subscription-Userinfo"] = fmt.Sprintf("upload=%d; download=%d; total=107374182400000; expire=%d", uploadBytes, downloadBytes, expireTs)
 		res.Headers["Profile-Update-Interval"] = "12"
 		res.Headers["Profile-Type"] = "Sip002"
 		res.Headers["Content-Type"] = "text/plain; charset=utf-8"
@@ -384,7 +383,7 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 	if isVlessFormat {
 		res.Headers["Content-Disposition"] = `attachment; filename="configs.txt"`
 		res.Headers["Profile-Title"] = "Torvalds VPN"
-		res.Headers["Subscription-Userinfo"] = fmt.Sprintf("upload=0; download=%d; total=107374182400000; expire=%d", downloadBytes, expireTs)
+		res.Headers["Subscription-Userinfo"] = fmt.Sprintf("upload=%d; download=%d; total=107374182400000; expire=%d", uploadBytes, downloadBytes, expireTs)
 		res.Headers["Profile-Update-Interval"] = "12"
 		res.Headers["Profile-Type"] = "Sip002"
 		res.Headers["Content-Type"] = "text/plain; charset=utf-8"
@@ -444,6 +443,8 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 		"{EMAIL}", email,
 		"{GLOBAL_ROUTING}", routeGlobalData,
 		"{RU_ROUTING}", routeRUData,
+		"{UP}", fmt.Sprintf("%d", uploadBytes),
+		"{DOWN}", fmt.Sprintf("%d", downloadBytes),
 	)
 	jsonPayload = replacer.Replace(jsonPayload)
 

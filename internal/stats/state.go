@@ -1,14 +1,11 @@
 // Package stats manages per-user cumulative traffic statistics.
 //
-// Algorithm:
-//   - Xray counters are monotonically increasing (reset to 0 on xray restart).
-//   - Each update computes a delta = current − previous_raw (or current if counter reset).
-//   - Deltas are accumulated in:
-//   - cumulative  — running total since we started tracking
-//   - buckets     — per-minute time buckets (for detailed history)
-//   - archived    — sum of buckets older than retention window
-//
-// The state is stored in a JSON file (traffic_stats_state.json).
+// Algorithm (Simplified & Bulletproof):
+// - We fetch raw stats from Xray.
+// - If CurrentRaw >= LastRaw, Delta = CurrentRaw - LastRaw
+// - If CurrentRaw < LastRaw (Xray restarted/reset counter), Delta = CurrentRaw
+// - We add Delta to Cumulative (which never decreases).
+// - We save State to JSON.
 package stats
 
 import (
@@ -17,50 +14,40 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
 	"xraytool/internal/safeio"
 )
 
-// ---------------------------------------------------------------------------
-// State types
-// ---------------------------------------------------------------------------
-
 // State is the persisted stats snapshot.
 type State struct {
-	Version                  int                   `json:"version"`
-	DetailedRetentionSeconds int64                 `json:"detailed_retention_seconds"`
-	LastSampleTS             int64                 `json:"last_sample_ts"`
-	Users                    map[string]*UserState `json:"users"`
+	Version      int                   `json:"version"`
+	LastSampleTS int64                 `json:"last_sample_ts"`
+	Users        map[string]*UserState `json:"users"`
 }
 
-// UserState holds all traffic counters for one user.
+// UserState holds traffic counters for one user.
 type UserState struct {
-	Raw        TrafficPoint            `json:"raw"`
-	Cumulative TrafficPoint            `json:"cumulative"`
-	Archived   TrafficPoint            `json:"archived"`
-	Buckets    map[string]TrafficPoint `json:"buckets"`
+	CumulativeUp   int64 `json:"cumulative_up"`
+	CumulativeDown int64 `json:"cumulative_down"`
+	LastRawUp      int64 `json:"last_raw_up"`
+	LastRawDown    int64 `json:"last_raw_down"`
 }
 
-// TrafficPoint holds a matched set of counters.
-type TrafficPoint struct {
-	Xray  XrayCounters  `json:"xray"`
-	Total TotalCounters `json:"total"`
-}
-
-// XrayCounters are the raw xray up/down/total bytes.
+// XrayCounters are the raw xray up/down/total bytes (kept for API compatibility).
 type XrayCounters struct {
 	Up    int64 `json:"up"`
 	Down  int64 `json:"down"`
 	Total int64 `json:"total"`
 }
 
-// TotalCounters are the derived totals (same values, named for API compat).
+// TotalCounters are the derived totals (kept for API compatibility).
 type TotalCounters struct {
 	Up       int64 `json:"up"`
 	Down     int64 `json:"down"`
 	Combined int64 `json:"combined"`
 }
 
-// CumulativeUser is a summary view used by the stats command.
+// CumulativeUser is a summary view used by the stats command and API.
 type CumulativeUser struct {
 	Email        string
 	Xray         XrayCounters
@@ -69,47 +56,22 @@ type CumulativeUser struct {
 	ClusterTotal int64
 }
 
-// ---------------------------------------------------------------------------
-// Constructors
-// ---------------------------------------------------------------------------
-
-// NewPoint creates a TrafficPoint from raw up/down values.
-func NewPoint(up, down int64) TrafficPoint {
-	tot := up + down
-	return TrafficPoint{
-		Xray:  XrayCounters{Up: up, Down: down, Total: tot},
-		Total: TotalCounters{Up: up, Down: down, Combined: tot},
-	}
+// LiveSample is a single traffic snapshot from xray API for one user.
+type LiveSample struct {
+	Email string
+	Up    int64
+	Down  int64
 }
-
-// AddPoints adds two TrafficPoints.
-func AddPoints(a, b TrafficPoint) TrafficPoint {
-	return NewPoint(a.Xray.Up+b.Xray.Up, a.Xray.Down+b.Xray.Down)
-}
-
-// DiffPoints computes the delta between current and previous, handling counter resets.
-func DiffPoints(curr, prev TrafficPoint) TrafficPoint {
-	up := curr.Xray.Up - prev.Xray.Up
-	down := curr.Xray.Down - prev.Xray.Down
-	if up < 0 {
-		up = curr.Xray.Up // counter was reset
-	}
-	if down < 0 {
-		down = curr.Xray.Down
-	}
-	return NewPoint(up, down)
-}
-
-func zeroPoint() TrafficPoint { return NewPoint(0, 0) }
 
 // ---------------------------------------------------------------------------
 // Load / Save
 // ---------------------------------------------------------------------------
 
 // Load reads the state file, or returns a fresh default state on any error.
-func Load(path string, retentionSeconds int64) (*State, error) {
+// The retentionSeconds argument is ignored in this simplified engine but kept for API compatibility.
+func Load(path string, _ int64) (*State, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return defaultState(retentionSeconds), nil
+		return defaultState(), nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -117,7 +79,7 @@ func Load(path string, retentionSeconds int64) (*State, error) {
 	}
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil || s.Users == nil {
-		return defaultState(retentionSeconds), nil
+		return defaultState(), nil
 	}
 	return &s, nil
 }
@@ -137,12 +99,10 @@ func Save(path string, s *State) error {
 	return nil
 }
 
-func defaultState(retentionSeconds int64) *State {
+func defaultState() *State {
 	return &State{
-		Version:                  1,
-		DetailedRetentionSeconds: retentionSeconds,
-		LastSampleTS:             0,
-		Users:                    make(map[string]*UserState),
+		Version: 2, // version 2 indicates the new ultra-lightweight engine
+		Users:   make(map[string]*UserState),
 	}
 }
 
@@ -150,91 +110,51 @@ func defaultState(retentionSeconds int64) *State {
 // Update
 // ---------------------------------------------------------------------------
 
-// LiveSample is a single traffic snapshot from xray API for one user.
-type LiveSample struct {
-	Email string
-	Up    int64
-	Down  int64
-}
-
 // Update incorporates new live samples into the state.
-func Update(s *State, samples []LiveSample, retentionSeconds int64) {
+// The retentionSeconds argument is ignored.
+func Update(s *State, samples []LiveSample, _ int64) {
 	now := time.Now().Unix()
-	bucketSec := int64(60)
-	bucketStart := (now / bucketSec) * bucketSec
-	cutoff := now - retentionSeconds
-
-	// Build email→sample lookup.
-	live := make(map[string]LiveSample, len(samples))
-	for _, ls := range samples {
-		live[ls.Email] = ls
-	}
-
-	// Collect all known emails.
-	all := make(map[string]bool, len(s.Users)+len(live))
-	for e := range s.Users {
-		all[e] = true
-	}
-	for e := range live {
-		all[e] = true
-	}
 
 	if s.Users == nil {
-		s.Users = make(map[string]*UserState, len(all))
+		s.Users = make(map[string]*UserState)
 	}
 
-	bucketKey := fmt.Sprintf("%d", bucketStart)
-
-	for email := range all {
-		prev := s.Users[email]
-		if prev == nil {
-			prev = &UserState{Buckets: make(map[string]TrafficPoint)}
-		}
-		if prev.Buckets == nil {
-			prev.Buckets = make(map[string]TrafficPoint)
+	for _, ls := range samples {
+		user, exists := s.Users[ls.Email]
+		if !exists {
+			user = &UserState{}
+			s.Users[ls.Email] = user
 		}
 
-		// Prune old buckets → archive.
-		recent := make(map[string]TrafficPoint)
-		archivedSum := zeroPoint()
-		for k, v := range prev.Buckets {
-			if ts := parseBucketKey(k); ts < cutoff {
-				archivedSum = AddPoints(archivedSum, v)
-			} else {
-				recent[k] = v
-			}
-		}
-		archived := AddPoints(prev.Archived, archivedSum)
-
-		ls, hasLive := live[email]
-		if !hasLive {
-			// User not in current live sample (maybe removed from xray).
-			s.Users[email] = &UserState{
-				Raw:        prev.Raw,
-				Cumulative: prev.Cumulative,
-				Archived:   archived,
-				Buckets:    recent,
-			}
-			continue
+		// Calculate Delta Up
+		var deltaUp int64
+		if ls.Up >= user.LastRawUp {
+			deltaUp = ls.Up - user.LastRawUp
+		} else {
+			// Xray counter was reset (or started from 0 for an inactive user)
+			deltaUp = ls.Up
 		}
 
-		curr := NewPoint(ls.Up, ls.Down)
-		delta := DiffPoints(curr, prev.Raw)
-
-		existing := recent[bucketKey]
-		recent[bucketKey] = AddPoints(existing, delta)
-
-		s.Users[email] = &UserState{
-			Raw:        curr,
-			Cumulative: AddPoints(prev.Cumulative, delta),
-			Archived:   archived,
-			Buckets:    recent,
+		// Calculate Delta Down
+		var deltaDown int64
+		if ls.Down >= user.LastRawDown {
+			deltaDown = ls.Down - user.LastRawDown
+		} else {
+			// Xray counter was reset
+			deltaDown = ls.Down
 		}
+
+		// Add to Cumulative (this never goes down)
+		user.CumulativeUp += deltaUp
+		user.CumulativeDown += deltaDown
+
+		// Update Last Raw for the next poll
+		user.LastRawUp = ls.Up
+		user.LastRawDown = ls.Down
 	}
 
 	s.LastSampleTS = now
-	s.DetailedRetentionSeconds = retentionSeconds
-	s.Version = 1
+	s.Version = 2
 }
 
 // ---------------------------------------------------------------------------
@@ -245,11 +165,19 @@ func Update(s *State, samples []LiveSample, retentionSeconds int64) {
 func Cumulative(s *State) []CumulativeUser {
 	out := make([]CumulativeUser, 0, len(s.Users))
 	for email, us := range s.Users {
-		cum := us.Cumulative
+		tot := us.CumulativeUp + us.CumulativeDown
 		out = append(out, CumulativeUser{
 			Email: email,
-			Xray:  cum.Xray,
-			Total: cum.Total,
+			Xray: XrayCounters{
+				Up:    us.CumulativeUp,
+				Down:  us.CumulativeDown,
+				Total: tot,
+			},
+			Total: TotalCounters{
+				Up:       us.CumulativeUp,
+				Down:     us.CumulativeDown,
+				Combined: tot,
+			},
 		})
 	}
 	return out
@@ -278,17 +206,4 @@ func HumanBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%.2fG", float64(b)/GB)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Internal
-// ---------------------------------------------------------------------------
-
-func parseBucketKey(key string) int64 {
-	var ts int64
-	fmt.Sscanf(key, "%d", &ts)
-	if ts > 100_000_000_000 { // milliseconds → seconds
-		ts /= 1000
-	}
-	return ts
 }

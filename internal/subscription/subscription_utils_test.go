@@ -40,66 +40,33 @@ func TestParseDateToTimestamp(t *testing.T) {
 	}
 }
 
-func TestExtractDownloadValue(t *testing.T) {
-	// 1. Path: cumulative -> total -> combined
-	payload1 := map[string]interface{}{
-		"cumulative": map[string]interface{}{
-			"total": map[string]interface{}{
-				"combined": float64(5000),
-			},
-		},
-	}
-	if v := extractDownloadValue(payload1); v != 5000 {
-		t.Errorf("Expected 5000, got %d", v)
-	}
-
-	// 2. Path: cumulative -> up + down
-	payload2 := map[string]interface{}{
-		"cumulative": map[string]interface{}{
-			"up":   float64(1000),
-			"down": float64(2000),
-		},
-	}
-	if v := extractDownloadValue(payload2); v != 3000 {
-		t.Errorf("Expected 3000, got %d", v)
-	}
-
-	// 3. Invalid paths
-	if v := extractDownloadValue(nil); v != 0 {
-		t.Errorf("Expected 0, got %d", v)
-	}
-	if v := extractDownloadValue(map[string]interface{}{}); v != 0 {
-		t.Errorf("Expected 0, got %d", v)
-	}
-}
-
-func TestGetDownloadBytes(t *testing.T) {
+func TestGetTrafficBytes(t *testing.T) {
 	dir := t.TempDir()
 	statsPath := filepath.Join(dir, "stats.json")
 
 	statsJSON := `{
 		"users": {
 			"testuser": {
-				"cumulative": {
-					"total": {
-						"combined": 12345
-					}
-				}
+				"cumulative_up": 1024,
+				"cumulative_down": 2048
 			}
 		}
 	}`
 	os.WriteFile(statsPath, []byte(statsJSON), 0644)
 
-	if v := getDownloadBytes(statsPath, "testuser"); v != 12345 {
-		t.Errorf("Expected 12345, got %d", v)
+	up, down := getTrafficBytes(statsPath, "testuser")
+	if up != 1024 || down != 2048 {
+		t.Errorf("Expected 1024 and 2048, got %d and %d", up, down)
 	}
 
-	if v := getDownloadBytes(statsPath, "nonexistent"); v != 0 {
-		t.Errorf("Expected 0, got %d", v)
+	up, down = getTrafficBytes(statsPath, "nonexistent")
+	if up != 0 || down != 0 {
+		t.Errorf("Expected 0, 0, got %d, %d", up, down)
 	}
 
-	if v := getDownloadBytes("missing_file.json", "testuser"); v != 0 {
-		t.Errorf("Expected 0, got %d", v)
+	up, down = getTrafficBytes("missing_file.json", "testuser")
+	if up != 0 || down != 0 {
+		t.Errorf("Expected 0, 0, got %d, %d", up, down)
 	}
 }
 
