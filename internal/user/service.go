@@ -418,7 +418,9 @@ func (s *Service) SetExpire(ctx context.Context, req SetExpireRequest) error {
 	}
 
 	if s.cfg.IsMaster {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if s.propagator != nil {
 				s.propagator.PropagateAll("setexpire", map[string]string{"email": email, "expire": req.Expire})
 			}
