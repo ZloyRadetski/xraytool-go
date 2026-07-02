@@ -2,6 +2,7 @@ package slave
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -103,7 +104,14 @@ func (p *stateSyncProvider) syncSlave(ctx context.Context, reg *Registry, srvNam
 		return nil
 	}
 
-	err = reg.CallOneDecode(srvName, "applybatch", map[string]string{}, &batch)
+	payloadBytes, err := json.Marshal(batch)
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch: %w", err)
+	}
+
+	_, err = reg.CallOne(srvName, "apply-batch", map[string]string{
+		"payload": string(payloadBytes),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to apply batch: %w", err)
 	}
