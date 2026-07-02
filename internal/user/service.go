@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"xraytool/internal/domain"
@@ -32,6 +33,12 @@ type Service struct {
 	engine     domain.Engine
 	propagator domain.EventPropagator
 	log        *slog.Logger
+	wg         sync.WaitGroup
+}
+
+// Wait blocks until all async propagations have finished.
+func (s *Service) Wait() {
+	s.wg.Wait()
 }
 
 // NewService creates a Service. engine must not be nil; pass &vpn.NoopEngine{}
@@ -219,9 +226,11 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 		}
 	}
 
-	// Propagate to slave nodes.
+	// Propagate limit update to slaves.
 	if s.cfg.IsMaster {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			slaveParams := map[string]string{
 				"email":   email,
 				"uuid":    userUUID,
@@ -328,7 +337,9 @@ func (s *Service) UnlimitUser(ctx context.Context, req UnlimitUserRequest) (*Cre
 	}
 
 	if s.cfg.IsMaster {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			slaveParams := map[string]string{
 				"email":   email,
 				"uuid":    userUUID,
@@ -508,7 +519,9 @@ func (s *Service) propagateBlockOrRemove(email, action string, legacy bool) {
 	if !s.cfg.IsMaster {
 		return
 	}
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		slaveCmd := action
 		if action == "rm" {
 			slaveCmd = "rmuser"

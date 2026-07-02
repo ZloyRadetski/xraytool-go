@@ -122,6 +122,9 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 	}
 	deps.Registry = database.NewRegistry(targetDB)
 	deps.Cleanup = append(deps.Cleanup, func() {
+		if deps.UserSvc != nil {
+			deps.UserSvc.Wait()
+		}
 		if sqlDB, err := targetDB.DB(); err == nil {
 			sqlDB.Close()
 		}

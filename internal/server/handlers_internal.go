@@ -117,11 +117,23 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			return
 		}
 
-		if _, err := r.userSvc.CreateUser(req.Context(), user.CreateUserRequest{
-			Email:  body.Email,
-			UUID:   body.UUID,
-			SkipDB: true,
-		}); err != nil {
+		var limitPtr *float64
+		if body.Limit != "" {
+			if limit, err := user.ParseLimit(body.Limit); err == nil {
+				limitPtr = limit
+			}
+		}
+
+		reqCreate := user.CreateUserRequest{
+			Email:   body.Email,
+			UUID:    body.UUID,
+			Subfile: body.Subfile,
+			Expire:  body.Expire,
+			Auth:    body.Auth,
+			Limit:   limitPtr,
+			SkipDB:  true,
+		}
+		if _, err := r.userSvc.CreateUser(req.Context(), reqCreate); err != nil {
 			r.log.Error("internal sync: failed to create user", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to create user")
 			return
