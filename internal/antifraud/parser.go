@@ -63,7 +63,7 @@ func parseLine(line []byte) (ip, email []byte) {
 	// 2. Extract Email (the LAST token on the entire line)
 	// Example: "tcp:8.8.8.8:443 [inbound] email"
 	rest := line[idx+len(acceptedTag):]
-	
+
 	// Xray logs always have at least "[tag] email" or "[tag]" after the destination address.
 	// If there's no space in rest, it means it just ends with "tcp:8.8.8.8:443", which is not an email.
 	if bytes.IndexByte(rest, ' ') < 0 {
@@ -126,11 +126,11 @@ func lastToken(b []byte) []byte {
 //     so it starts reading the fresh log (not the renamed .old file).
 //   - goroutine leak check: all goroutines launched here are gated on ctx.Done.
 type tailer struct {
-	path           string
-	out            chan<- event
-	rotateCh       <-chan struct{}
-	log            *slog.Logger
-	pollInterval   time.Duration
+	path         string
+	out          chan<- event
+	rotateCh     <-chan struct{}
+	log          *slog.Logger
+	pollInterval time.Duration
 }
 
 const tailPollInterval = 200 * time.Millisecond

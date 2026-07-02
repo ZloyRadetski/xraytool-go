@@ -14,8 +14,7 @@ func TestListAdmins(t *testing.T) {
 	// Admin
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":3001,"username":"Admin1"}`)
 
-	db := database.DB()
-	resUpdate := db.Model(&database.User{}).Where("username = ?", "Admin1").Update("is_admin", true)
+	resUpdate := testDB.Model(&database.User{}).Where("username = ?", "Admin1").Update("is_admin", true)
 	if resUpdate.Error != nil {
 		t.Fatalf("failed to set admin: %v", resUpdate.Error)
 	}
@@ -47,18 +46,18 @@ func TestGetUserByRef(t *testing.T) {
 	if wReg.Code != http.StatusCreated && wReg.Code != http.StatusOK {
 		t.Fatalf("failed to register user: %d %s", wReg.Code, wReg.Body.String())
 	}
-	
+
 	refCodeRaw := jsonBody(t, wReg)["ref_code"]
 	if refCodeRaw == nil {
 		t.Fatalf("ref_code is missing from response: %v", wReg.Body.String())
 	}
 	refCode := refCodeRaw.(string)
-	
+
 	wGet := doAuth(r, "GET", "/api/v1/users/ref/"+refCode, "")
 	if wGet.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", wGet.Code)
 	}
-	
+
 	if jsonBody(t, wGet)["username"] != "RefUser" {
 		t.Errorf("wrong username")
 	}
@@ -116,7 +115,7 @@ func TestSetMetadata(t *testing.T) {
 func TestAdminUnblockUser(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":3006,"username":"BlockUnblockUser"}`)
-	
+
 	doAuth(r, "POST", "/api/v1/admin/users/bot_client_3006/block", "")
 	wgBlocked := doAuth(r, "GET", "/api/v1/users/telegram/3006", "")
 	if jsonBody(t, wgBlocked)["sub_status"] != "blocked" {

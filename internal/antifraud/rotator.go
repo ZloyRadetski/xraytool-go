@@ -4,16 +4,17 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
-	"xraytool/internal/xrayapi"
+	"xraytool/internal/domain"
 )
 
 // rotator monitors the Xray access log file size.
 // When the file exceeds the configured limit it performs a safe log rotation:
 //
 //  1. os.Rename(log → log.old)   — atomic on Linux; Xray keeps writing to .old via open fd
-//  2. xrayapi.RestartLogger()    — Xray closes the old fd and opens a new access.log
+//  2. Engine.RestartLogger()     — Engine closes the old fd and opens a new access.log
 //  3. signal tailer via notify() — tailer drains .old lines, then we delete .old
 //
 // This keeps tmpfs memory usage bounded without losing any log entries.
@@ -24,21 +25,21 @@ import (
 //   - File doesn't exist yet: os.Stat fails → skip tick silently.
 //   - Double rotation (tick fires while .old still exists): we check for .old and skip.
 type rotator struct {
-	logPath    string
-	maxBytes   int64
-	apiAddr    string
-	notifyCh   chan<- struct{} // signals tailer to switch to fresh file
-	log        *slog.Logger
+	logPath      string
+	maxBytes     int64
+	loggerCtrl   domain.LoggerController
+	notifyCh     chan<- struct{} // signals tailer to switch to fresh file
+	log          *slog.Logger
 	tickInterval time.Duration
 }
 
 const rotatorTickInterval = 10 * time.Second
 
-func newRotator(logPath string, maxMB int, apiAddr string, notifyCh chan<- struct{}, log *slog.Logger) *rotator {
+func newRotator(logPath string, maxMB int, loggerCtrl domain.LoggerController, notifyCh chan<- struct{}, log *slog.Logger) *rotator {
 	return &rotator{
 		logPath:      logPath,
 		maxBytes:     int64(maxMB) * 1024 * 1024,
-		apiAddr:      apiAddr,
+		loggerCtrl:   loggerCtrl,
 		notifyCh:     notifyCh,
 		log:          log,
 		tickInterval: rotatorTickInterval,
@@ -82,19 +83,38 @@ func (r *rotator) tryRotate() {
 		return
 	}
 
-	// Step 1: Atomic rename. Xray keeps writing to the renamed file via its open fd.
-	if err := os.Rename(r.logPath, oldPath); err != nil {
-		r.log.Error("antifraud rotator: rename failed", "err", err)
-		return
-	}
+	if runtime.GOOS == "windows" {
+		// Windows: cannot reliably rename an opened file. Copy and truncate.
+		input, err := os.ReadFile(r.logPath)
+		if err != nil {
+			r.log.Error("antifraud rotator: read failed", "err", err)
+			return
+		}
+		if err := os.WriteFile(oldPath, input, 0644); err != nil {
+			r.log.Error("antifraud rotator: write old failed", "err", err)
+			return
+		}
+		if err := os.Truncate(r.logPath, 0); err != nil {
+			r.log.Error("antifraud rotator: truncate failed", "err", err)
+			return
+		}
+		if err := r.loggerCtrl.RestartLogger(context.Background()); err != nil {
+			r.log.Error("antifraud rotator: RestartLogger failed", "err", err)
+		}
+	} else {
+		// Step 1: Atomic rename. Xray keeps writing to the renamed file via its open fd.
+		if err := os.Rename(r.logPath, oldPath); err != nil {
+			r.log.Error("antifraud rotator: rename failed", "err", err)
+			return
+		}
 
-	// Step 2: Tell Xray to close the old fd and open a fresh log file.
-	apiClient := xrayapi.NewGRPCClient(r.apiAddr)
-	if err := apiClient.RestartLogger(); err != nil {
-		// Critical: Xray couldn't reopen the log. Reverse the rename so we don't lose data.
-		_ = os.Rename(oldPath, r.logPath)
-		r.log.Error("antifraud rotator: RestartLogger failed, rotation reversed", "err", err)
-		return
+		// Step 2: Tell Engine to close the old fd and open a fresh log file.
+		if err := r.loggerCtrl.RestartLogger(context.Background()); err != nil {
+			// Critical: Xray couldn't reopen the log. Reverse the rename so we don't lose data.
+			_ = os.Rename(oldPath, r.logPath)
+			r.log.Error("antifraud rotator: RestartLogger failed, rotation reversed", "err", err)
+			return
+		}
 	}
 
 	r.log.Info("antifraud rotator: log rotated", "old_path", oldPath, "size_before_mb",

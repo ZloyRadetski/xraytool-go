@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"xraytool/internal/appconfig"
+	"xraytool/internal/domain"
 	"xraytool/internal/slave"
 	"xraytool/internal/user"
-	"xraytool/internal/xrayconfig"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,8 +25,6 @@ type Printer struct {
 }
 
 func newPrinter(batch bool) *Printer { return &Printer{Batch: batch} }
-
-
 
 // Error prints an error message and returns it as an error object.
 func (p *Printer) Error(msg string) error {
@@ -161,18 +159,14 @@ func subfileID(subfile string) string {
 
 // resolveEmail handles the duplicated logic of selecting an email from flags, interactive menu,
 // or stdin, and validates it. It calls p.Error (which prints error) if validation fails.
-func resolveEmail(email, emailAlias string, allowMenu bool, promptText string, p *Printer) (string, error) {
+func resolveEmail(email, emailAlias string, allowMenu bool, promptText string, engine domain.Engine, p *Printer) (string, error) {
 	if email == "" {
 		email = emailAlias
 	}
 
 	if email == "" && !p.Batch {
 		if allowMenu {
-			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-			if err != nil {
-				return "", p.Errorf("reading xray config: %v", err)
-			}
-			email = selectUserInteractive(xrayCfg, p)
+			email = selectUserInteractive(engine, p)
 		} else {
 			fmt.Print(promptText)
 			fmt.Scanln(&email)

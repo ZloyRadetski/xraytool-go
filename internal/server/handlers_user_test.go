@@ -206,7 +206,6 @@ func TestRegisterUser_SubstringMatchPrevention(t *testing.T) {
 
 func TestGetUserByTelegram_SQLiteRepresentationsAndEdgeCases(t *testing.T) {
 	r := newTestRouter(t)
-	db := database.DB()
 
 	// 1. Insert user with numeric telegram_id in metadata
 	userNum := database.User{
@@ -217,7 +216,7 @@ func TestGetUserByTelegram_SQLiteRepresentationsAndEdgeCases(t *testing.T) {
 			"telegram_id": 99999, // stored as number
 		},
 	}
-	if err := db.Create(&userNum).Error; err != nil {
+	if err := testDB.Create(&userNum).Error; err != nil {
 		t.Fatalf("failed to create userNum: %v", err)
 	}
 
@@ -230,7 +229,7 @@ func TestGetUserByTelegram_SQLiteRepresentationsAndEdgeCases(t *testing.T) {
 			"telegram_id": "88888", // stored as string
 		},
 	}
-	if err := db.Create(&userStr).Error; err != nil {
+	if err := testDB.Create(&userStr).Error; err != nil {
 		t.Fatalf("failed to create userStr: %v", err)
 	}
 
@@ -292,7 +291,7 @@ func TestGetUserByTelegram_EdgeCases(t *testing.T) {
 	}
 
 	// 2. Numeric vs String representation in metadata
-	db := database.DB()
+
 	stringUserID := "str-user-id-uuid"
 	stringUser := database.User{
 		ID:       stringUserID,
@@ -303,7 +302,7 @@ func TestGetUserByTelegram_EdgeCases(t *testing.T) {
 			"telegram_id": "77777",
 		},
 	}
-	if err := db.Create(&stringUser).Error; err != nil {
+	if err := testDB.Create(&stringUser).Error; err != nil {
 		t.Fatalf("failed to create user with string telegram_id: %v", err)
 	}
 	// Verify it can be retrieved by telegram ID 77777
@@ -329,7 +328,7 @@ func TestGetUserByTelegram_EdgeCases(t *testing.T) {
 
 func TestRequestCode(t *testing.T) {
 	r := newTestRouter(t)
-	
+
 	// Must register user first because request_code validates existence
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":1234,"username":"Tester"}`)
 
@@ -346,14 +345,14 @@ func TestDeviceManagement(t *testing.T) {
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":9999123,"username":"DeviceTester"}`)
 
 	// 2. Insert a device manually into the test database
-	db := database.DB()
+
 	var user database.User
-	if err := db.Where("json_extract(metadata, '$.telegram_id') = ?", 9999123).First(&user).Error; err != nil {
+	if err := testDB.Where("json_extract(metadata, '$.telegram_id') = ?", 9999123).First(&user).Error; err != nil {
 		t.Fatalf("failed to find user: %v", err)
 	}
 
 	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+	if err := testDB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
 		t.Fatalf("failed to find subscription: %v", err)
 	}
 
@@ -362,7 +361,7 @@ func TestDeviceManagement(t *testing.T) {
 		HWID:           "test-hwid-1",
 		DeviceModel:    "Test Phone",
 	}
-	db.Create(&device1)
+	testDB.Create(&device1)
 
 	// 3. Test GET devices
 	wGet := doAuth(r, "GET", "/api/v1/users/telegram/9999123/devices", "")
@@ -390,7 +389,7 @@ func TestDeviceManagement(t *testing.T) {
 
 	// 5. Verify device is deleted
 	var count int64
-	db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&count)
+	testDB.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&count)
 	if count != 0 {
 		t.Fatalf("expected 0 devices, got %d", count)
 	}

@@ -4,66 +4,61 @@ import (
 	"fmt"
 	"sort"
 
-	"xraytool/internal/database"
-	"xraytool/internal/user"
-	"xraytool/internal/xrayconfig"
+	"context"
 
 	"github.com/spf13/cobra"
 )
 
-func userListCmd(getUserSvc func() *user.Service) *cobra.Command {
+func userListCmd(deps *AppDeps) *cobra.Command {
 	var batchMode bool
 
 	cmd := &cobra.Command{
 		Use:   "userlist",
 		Short: "List active and blocked users",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := requireRoot(); err != nil { return err }
+			if err := requireRoot(); err != nil {
+				return err
+			}
 			p := newPrinter(batchMode)
 
-			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-			if err != nil {
-				return p.Errorf("reading xray config: %v", err)
-			}
-
-			users, err := xrayconfig.ListUsers(xrayCfg)
+			engine := deps.Engine
+			users, err := engine.ListUsers(context.Background())
 			if err != nil {
 				return p.Errorf("listing users: %v", err)
 			}
 
 			// Sort by email.
 			sort.Slice(users, func(i, j int) bool {
-				return users[i].Email() < users[j].Email()
+				return users[i].Email < users[j].Email
 			})
 
-			db := database.DB()
 			type BlockedUser struct {
 				Email   string
 				Subfile string
 				Limit   *float64
 			}
 			var limited []BlockedUser
-			if db != nil {
-				var subs []database.Subscription
-				db.Where("status = ?", "blocked").Find(&subs)
-				for _, sub := range subs {
-					subfile := ""
-					if sub.Metadata != nil {
-						if sf, ok := sub.Metadata["subfile"].(string); ok {
-							subfile = sf
+			if deps.UserSvc != nil {
+				if subs, err := deps.UserSvc.GetBlockedSubscriptions(context.Background()); err == nil {
+					for _, sub := range subs {
+						subfile := ""
+						if sub.Metadata != nil {
+							if sf, ok := sub.Metadata["subfile"].(string); ok {
+								subfile = sf
+							}
 						}
+						lv := float64(sub.MaxDevices)
+						limited = append(limited, BlockedUser{Email: sub.Email, Subfile: subfile, Limit: &lv})
 					}
-					lv := float64(sub.MaxDevices)
-					limited = append(limited, BlockedUser{Email: sub.Email, Subfile: subfile, Limit: &lv})
 				}
 			}
 			if batchMode {
 				// Machine-readable output.
 				for _, u := range users {
 					fmt.Printf("ACTIVE|%s|%s|%s\n",
-						u.Email(),
-						u.GetString("subfile"),
-						u.GetString("expire"),
+						u.Email,
+						u.Subfile,
+						u.Expire,
 					)
 				}
 				for _, e := range limited {
@@ -80,17 +75,17 @@ func userListCmd(getUserSvc func() *user.Service) *cobra.Command {
 
 			fmt.Printf("\n%s=== Active (%d) ===%s\n", cyan, len(users), nc)
 			for i, u := range users {
-				expire := u.GetString("expire")
+				expire := u.Expire
 				if expire == "" {
 					expire = "n/a"
 				}
-				sub := u.GetString("subfile")
+				sub := u.Subfile
 				if sub == "" {
 					sub = "?"
 				}
 				fmt.Printf("%s%d.%s %s [%s] | Expire: %s\n",
 					yellow, i+1, nc,
-					u.Email(), sub, expire,
+					u.Email, sub, expire,
 				)
 			}
 
@@ -115,7 +110,7 @@ func userListCmd(getUserSvc func() *user.Service) *cobra.Command {
 	return cmd
 }
 
-func shareLinkCmd(getUserSvc func() *user.Service) *cobra.Command {
+func shareLinkCmd(deps *AppDeps) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -125,43 +120,46 @@ func shareLinkCmd(getUserSvc func() *user.Service) *cobra.Command {
 		Use:   "sharelink",
 		Short: "Get the subscription link for a user",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := requireRoot(); err != nil { return err }
+			if err := requireRoot(); err != nil {
+				return err
+			}
 
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			email, err := resolveEmail(email, emailAlias, true, "", p)
-			if err != nil { return err }
-
-			// Try active users first.
-			xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
+			email, err := resolveEmail(email, emailAlias, true, "", deps.Engine, p)
 			if err != nil {
-				return p.Errorf("reading xray config: %v", err)
+				return err
 			}
 
-			client, _ := xrayconfig.FindUser(xrayCfg, email)
-			if client != nil {
-				sub := client.GetString("subfile")
-				if sub != "" {
-					svc := getUserSvc()
-					link := svc.GenerateShareLink("", subfileID(sub))
-					if isBatch {
-						fmt.Printf("SUCCESS|LINK|%s\n", link)
-					} else {
-						p.OK("Link found:")
-						fmt.Printf("\033[1m%s\033[0m\n", link)
-					}
-					return nil
+			// Try active users first.
+			engine := deps.Engine
+			users, _ := engine.ListUsers(context.Background())
+			var targetSubfile string
+			for _, u := range users {
+				if u.Email == email {
+					targetSubfile = u.Subfile
+					break
 				}
 			}
 
+			if targetSubfile != "" {
+				svc := deps.UserSvc
+				link := svc.GenerateShareLink("", subfileID(targetSubfile))
+				if isBatch {
+					fmt.Printf("SUCCESS|LINK|%s\n", link)
+				} else {
+					p.OK("Link found:")
+					fmt.Printf("\033[1m%s\033[0m\n", link)
+				}
+				return nil
+			}
+
 			// Try SQL DB for legacy behavior fallback
-			db := database.DB()
-			if db != nil {
-				var sub database.Subscription
-				if err := db.Where("email = ?", email).First(&sub).Error; err == nil && sub.Metadata != nil {
+			if deps.UserSvc != nil {
+				if sub, err := deps.UserSvc.GetSubscriptionByEmail(context.Background(), email); err == nil && sub.Metadata != nil {
 					if sf, ok := sub.Metadata["subfile"].(string); ok && sf != "" {
-						svc := getUserSvc()
+						svc := deps.UserSvc
 						link := svc.GenerateShareLink("", subfileID(sf))
 						status := sub.Status
 						if isBatch {

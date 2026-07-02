@@ -5,16 +5,19 @@ import (
 	"strconv"
 
 	"gorm.io/gorm"
+
+	"xraytool/internal/domain"
 )
 
 // FindUserByPlatformID locates a User by its ID depending on the platform (uuid, telegram, or web)
-func FindUserByPlatformID(db *gorm.DB, platform, id string) (*User, error) {
+func FindUserByPlatformID(db *gorm.DB, platform, id string) (*domain.User, error) {
 	if platform == "uuid" {
 		var user User
 		if err := db.Where("id = ?", id).First(&user).Error; err != nil {
 			return nil, err
 		}
-		return &user, nil
+		dUser := user.ToDomain()
+		return &dUser, nil
 	}
 
 	var users []User
@@ -60,5 +63,6 @@ func FindUserByPlatformID(db *gorm.DB, platform, id string) (*User, error) {
 	if len(users) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return &users[0], nil
+	dUser := users[0].ToDomain()
+	return &dUser, nil
 }

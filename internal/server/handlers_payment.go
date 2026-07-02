@@ -8,6 +8,8 @@ package server
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -15,9 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm"
-
-	"xraytool/internal/database"
+	"xraytool/internal/domain"
 	"xraytool/internal/payment"
 )
 
@@ -28,7 +28,7 @@ import (
 // buildPaymentResponse converts a database.Payment into the shape the bot expects:
 //
 //	{"id":42,"status":"pending_card","amount":159,"payment_type":"...","method":"...","external_id":"...","custom_data":{"telegram_id":123}}
-func buildPaymentResponse(p *database.Payment) map[string]interface{} {
+func buildPaymentResponse(p *domain.Payment) map[string]interface{} {
 	extID := ""
 	if p.ExternalID != nil {
 		extID = *p.ExternalID
@@ -77,20 +77,18 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		Platform:    body.Platform,
 	}
 
-	svc := payment.NewService(r.db)
-	pay, err := svc.CreatePayment(reqPayload)
+	pay, err := r.paymentSvc.CreatePayment(reqPayload)
 	if err != nil {
-		if strings.Contains(err.Error(), "telegram_id is required") ||
-			strings.Contains(err.Error(), "amount must be positive") ||
-			strings.Contains(err.Error(), "payment_type is required") ||
-			strings.Contains(err.Error(), "invalid plan_id") ||
-			strings.Contains(err.Error(), "promo code usage limit reached") ||
-			strings.Contains(err.Error(), "promo code already used") {
-			writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, payment.ErrUserNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if strings.Contains(err.Error(), "user not found") {
-			writeError(w, http.StatusNotFound, err.Error())
+		if errors.Is(err, payment.ErrInvalidPlanID) ||
+			errors.Is(err, payment.ErrPromoLimitReached) ||
+			errors.Is(err, payment.ErrPromoAlreadyUsed) ||
+			strings.Contains(err.Error(), "is required") ||
+			strings.Contains(err.Error(), "must be positive") {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		r.log.Error("create payment", "err", err)
@@ -108,38 +106,16 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
-	db := r.db
-	query := db.Model(&database.Payment{})
-
 	q := req.URL.Query()
 
-	// Filter by status.
-	if status := q.Get("status"); status != "" {
-		query = query.Where("status = ?", status)
-	}
-	// Filter by method.
-	if method := q.Get("method"); method != "" {
-		query = query.Where("method = ?", method)
-	}
-	// Filter by payment_type.
-	if pt := q.Get("payment_type"); pt != "" {
-		query = query.Where("payment_type = ?", pt)
-	}
-	// Filter by telegram_id (via user lookup).
-	if tgIDStr := q.Get("telegram_id"); tgIDStr != "" {
-		user, err := database.FindUserByPlatformID(db, "telegram", tgIDStr)
-		if err == nil {
-			query = query.Where("user_id = ?", user.ID)
-		} else {
-			// Unknown user → return empty list.
-			writeJSON(w, http.StatusOK, []interface{}{})
-			return
-		}
-	}
+	status := q.Get("status")
+	method := q.Get("method")
+	pt := q.Get("payment_type")
+	tgIDStr := q.Get("telegram_id")
 
-	var payments []database.Payment
-	if result := query.Order("id DESC").Find(&payments); result.Error != nil {
-		r.log.Error("list payments", "err", result.Error)
+	payments, err := r.paymentSvc.FindPaymentsByFilters(req.Context(), status, method, pt, tgIDStr)
+	if err != nil {
+		r.log.Error("list payments", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -164,14 +140,13 @@ func (r *Router) handleGetPayment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-	var payment database.Payment
-	if result := db.First(&payment, paymentID); result.Error != nil {
+	payment, err := r.paymentSvc.FindPaymentByID(req.Context(), fmt.Sprintf("%d", paymentID))
+	if err != nil {
 		writeError(w, http.StatusNotFound, "payment not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, buildPaymentResponse(&payment))
+	writeJSON(w, http.StatusOK, buildPaymentResponse(payment))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,112 +175,18 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	db := r.db
-
-	// Atomic conditional update: only succeeds if current status is in expectedStatuses.
-	query := db.Model(&database.Payment{}).Where("id = ?", paymentID)
-	if len(body.ExpectedStatuses) > 0 {
-		query = query.Where("status IN ?", body.ExpectedStatuses)
-	} else if body.Status == "completed" {
-		query = query.Where("status != 'completed'")
-	}
-	result := query.Update("status", body.Status)
-	if result.Error != nil {
-		r.log.Error("update payment status", "err", result.Error)
+	updated, err := r.paymentSvc.UpdatePaymentStatus(req.Context(), paymentID, body.Status, body.ExpectedStatuses)
+	if err != nil {
+		r.log.Error("update payment status", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if result.RowsAffected == 0 {
+	if !updated {
 		writeError(w, http.StatusConflict, "payment not in expected status")
 		return
 	}
 
-	// Dispatch event for completed payments so webhooks (e.g. the Python bot) are notified.
-	if body.Status == "completed" {
-		var payment database.Payment
-		if err := db.First(&payment, paymentID).Error; err == nil {
-			// Apply referral reward synchronously before dispatching webhook.
-			// This ensures we do not report a successful payment if internal billing divergence occurs.
-			if err := r.applyReferralRewardForPayment(db, &payment); err != nil {
-				r.log.Error("failed to apply referral reward", "err", err)
-				writeError(w, http.StatusInternalServerError, "failed to apply reward")
-				return
-			}
-
-			r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
-				"payment_id":   payment.ID,
-				"amount":       payment.Amount,
-				"payment_type": payment.PaymentType,
-				"method":       payment.Method,
-				"user_id":      payment.UserID,
-			}, nil)
-		}
-	}
-
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// applyReferralRewardForPayment credits the referrer of the payer with 25% of
-// the payment amount, and records a ReferralReward row. Returns nil if successful or no-op.
-func (r *Router) applyReferralRewardForPayment(db *gorm.DB, payment *database.Payment) error {
-	var user database.User
-	if db.First(&user, "id = ?", payment.UserID).Error != nil {
-		return nil // No user found, nothing to do
-	}
-	if user.ReferredBy == nil || *user.ReferredBy == "" {
-		return nil
-	}
-
-	const referralPercent = 0.25
-	reward := int(float64(payment.Amount) * referralPercent)
-	if reward <= 0 {
-		return nil
-	}
-
-	referrerID := *user.ReferredBy
-
-	// Credit the referrer's balance atomically and record the reward inside a transaction.
-	txErr := db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&database.ReferralReward{}).Where("payment_id = ?", payment.ID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			// Reward already processed for this payment.
-			return nil
-		}
-
-		if result := tx.Model(&database.User{}).
-			Where("id = ?", referrerID).
-			Update("balance", gorm.Expr("balance + ?", reward)); result.Error != nil {
-			return result.Error
-		}
-
-		rewardRow := database.ReferralReward{
-			ReferrerID: referrerID,
-			ReferredID: user.ID,
-			PaymentID:  payment.ID,
-			Amount:     reward,
-		}
-		return tx.Create(&rewardRow).Error
-	})
-
-	if txErr != nil {
-		r.log.Error("referral reward transaction failed", "err", txErr)
-		return txErr
-	}
-
-	var referrer database.User
-	if err := db.First(&referrer, "id = ?", referrerID).Error; err == nil {
-		if tgIDRaw, ok := referrer.Metadata["telegram_id"]; ok {
-			r.dispatcher.Dispatch("referral.reward", map[string]interface{}{
-				"telegram_id":       tgIDRaw,
-				"reward_amount":     reward,
-				"referred_username": user.Username,
-			}, nil)
-		}
-	}
-	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -361,54 +242,17 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 	if extID == "" {
 		extID, _ = body["transactionId"].(string)
 	}
-	
+
 	status, _ := body["status"].(string)
 	r.log.Info("platega callback received", "external_id", extID, "status", status)
 
 	// Always dispatch the raw Platega callback event
 	r.dispatcher.Dispatch("platega.callback", body, nil)
 
-	// Automatically update the payment status if external_id and status are present
 	if extID != "" && status != "" {
-		mappedStatus := status
-		if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" {
-			mappedStatus = "completed"
-		}
-
-		db := r.db
-		var payment database.Payment
-		if err := db.Where("external_id = ?", extID).First(&payment).Error; err == nil {
-			if payment.Status != mappedStatus && payment.Status != "completed" {
-				res := db.Model(&payment).Where("status != ? AND status != 'completed'", mappedStatus).Update("status", mappedStatus)
-				if res.Error != nil {
-					r.log.Error("failed to update payment status", "err", res.Error)
-					writeError(w, http.StatusInternalServerError, "database error")
-					return
-				}
-				if res.RowsAffected > 0 {
-					r.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
-
-					if mappedStatus == "completed" {
-						// Apply referral logic synchronously before webhook
-						if err := r.applyReferralRewardForPayment(db, &payment); err != nil {
-							r.log.Error("failed to apply referral reward on platega callback", "err", err)
-							writeError(w, http.StatusInternalServerError, "failed to apply reward")
-							return
-						}
-
-						// Dispatch payment.completed so external systems can process the renewal/balance update
-						r.dispatcher.Dispatch("payment.completed", map[string]interface{}{
-							"payment_id":   payment.ID,
-							"amount":       payment.Amount,
-							"payment_type": payment.PaymentType,
-							"method":       payment.Method,
-							"user_id":      payment.UserID,
-						}, nil)
-					}
-				}
-			}
-		} else {
-			r.log.Warn("platega callback: payment not found by external_id", "external_id", extID)
+		if err := r.paymentSvc.ProcessExternalPaymentStatus(req.Context(), extID, status); err != nil {
+			r.log.Error("failed to process external payment status", "err", err)
+			// Don't fail the webhook, just log it.
 		}
 	}
 
@@ -417,18 +261,17 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 
 // GET /api/v1/admin/payments/stats
 func (r *Router) handleAdminPaymentsStats(w http.ResponseWriter, req *http.Request) {
-	db := r.db
-	var payments []database.Payment
-	if err := db.Select("amount", "status", "created_at").Find(&payments).Error; err != nil {
+	payments, err := r.paymentSvc.FindAll(req.Context())
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
 	type MonthStat struct {
-		Month             string `json:"month"`
-		TotalRevenue      int    `json:"total_revenue"`
-		CompletedCount    int    `json:"completed_count"`
-		TotalCount        int    `json:"total_count"`
+		Month          string `json:"month"`
+		TotalRevenue   int    `json:"total_revenue"`
+		CompletedCount int    `json:"completed_count"`
+		TotalCount     int    `json:"total_count"`
 	}
 
 	statsMap := make(map[string]*MonthStat)

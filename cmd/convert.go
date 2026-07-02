@@ -2,14 +2,13 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"xraytool/internal/convert"
 
 	"github.com/spf13/cobra"
 )
 
-func convertCmd() *cobra.Command {
+func convertCmd(deps *AppDeps) *cobra.Command {
 	var inputFlag string
 
 	cmd := &cobra.Command{
@@ -25,14 +24,8 @@ func convertCmd() *cobra.Command {
 			} else if len(args) > 0 {
 				rawInput = args[0]
 			} else {
-				// Check if there is data on stdin
-				stat, err := os.Stdin.Stat()
-				if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-					rawInput = "-"
-				} else {
-					_ = cmd.Help()
-					return nil
-				}
+				_ = cmd.Help()
+				return nil
 			}
 
 			input, _, err := convert.ResolveInput(rawInput)

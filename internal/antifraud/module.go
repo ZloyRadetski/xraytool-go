@@ -15,12 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"gorm.io/gorm"
-
-	"xraytool/internal/appconfig"
-	"xraytool/internal/database"
-	"xraytool/internal/xrayapi"
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/domain"
 )
 
 // banStore is the in-memory cache of active bans.
@@ -56,13 +51,30 @@ func (b *banStore) clearBan(email string) {
 	b.mu.Unlock()
 }
 
+type Config struct {
+	Enabled               bool
+	DryRun                bool
+	LogPath               string
+	LogRotationSizeMB     int
+	IPLimitTTL            string
+	BanDuration           string
+	SuspiciousIPThreshold int
+	ReportToMaster        bool
+
+	IsMaster          bool
+}
+
 // Module is the public API for the anti-fraud component.
 type Module struct {
-	cfg      *appconfig.Config
-	db       *gorm.DB
-	log      *slog.Logger
-	banStore *banStore
-	state    *State
+	cfg        *Config
+	registry   domain.Registry
+	banner     domain.SoftBanner
+	loggerCtrl domain.LoggerController
+	propagator domain.EventPropagator
+	reporter   domain.FraudEventReporter
+	log        *slog.Logger
+	banStore   *banStore
+	state      *State
 
 	// Channels
 	eventCh chan event
@@ -73,18 +85,19 @@ type Module struct {
 }
 
 // New creates a new Module. The module is not started until Run is called.
-func New(cfg *appconfig.Config, db *gorm.DB, log *slog.Logger) *Module {
+func New(cfg *Config, registry domain.Registry, banner domain.SoftBanner, loggerCtrl domain.LoggerController, propagator domain.EventPropagator, reporter domain.FraudEventReporter, log *slog.Logger) *Module {
 	return &Module{
-		cfg:      cfg,
-		db:       db,
-		log:      log.With("component", "antifraud"),
-		banStore: newBanStore(),
-		state:    newState(),
+		cfg:          cfg,
+		registry:     registry,
+		banner:       banner,
+		loggerCtrl:   loggerCtrl,
+		propagator:   propagator,
+		reporter:     reporter,
+		log:          log.With("component", "antifraud"),
+		banStore:     newBanStore(),
+		state:        newState(),
 		activeSlaves: make(map[string]time.Time),
-
-		// Buffer size of 512 is plenty. If it fills, it means the analyzer is
-		// blocked or too slow (tailer will wait, slave pushes will be dropped).
-		eventCh: make(chan event, 512),
+		eventCh:      make(chan event, 1000),
 	}
 }
 
@@ -131,7 +144,7 @@ func (m *Module) GetSnapshot() SnapshotData {
 // Design notes:
 //   - Events are injected into the same eventCh that the tailer uses.
 //   - slaveID is used to track how many unique slaves are reporting.
-func (m *Module) IngestEvents(slaveID string, events []SlaveIPEvent) {
+func (m *Module) IngestEvents(slaveID string, events []domain.FraudEvent) {
 	if slaveID != "" {
 		m.slavesMu.Lock()
 		m.activeSlaves[slaveID] = time.Now()
@@ -160,7 +173,7 @@ func (m *Module) IngestEvents(slaveID string, events []SlaveIPEvent) {
 func (m *Module) ForceUnban(email string) {
 	m.banStore.clearBan(email)
 	// Best-effort DB cleanup; errors are non-fatal.
-	m.db.Where("email = ?", email).Delete(&database.AntifraudBan{})
+	m.registry.AntifraudBans().DeleteByEmail(context.Background(), email)
 	m.log.Info("antifraud: ban forcefully lifted (admin action)", slog.String("email", email))
 }
 
@@ -175,18 +188,18 @@ func (m *Module) ForceUnban(email string) {
 //   - 1× ip state cleaner (TTL eviction)
 //   - 1× unban cleaner (DB-driven unban)
 func (m *Module) Run(ctx context.Context) {
-	ipTTL, err := time.ParseDuration(m.cfg.AntiFraud.IPLimitTTL)
+	ipTTL, err := time.ParseDuration(m.cfg.IPLimitTTL)
 	if err != nil {
 		m.log.Error("antifraud: invalid ip_limit_ttl, using 3m", slog.String("err", err.Error()))
 		ipTTL = 3 * time.Minute
 	}
 
 	m.log.Info("antifraud module: starting",
-		slog.Bool("enabled", m.cfg.AntiFraud.Enabled),
-		slog.String("log_path", m.cfg.AntiFraud.LogPath),
-		slog.Int("max_ips", m.cfg.AntiFraud.MaxIPs),
-		slog.String("ip_limit_ttl", m.cfg.AntiFraud.IPLimitTTL),
-		slog.String("ban_duration", m.cfg.AntiFraud.BanDuration),
+		slog.Bool("enabled", m.cfg.Enabled),
+		slog.String("log_path", m.cfg.LogPath),
+		slog.Int("max_ips", m.cfg.SuspiciousIPThreshold),
+		slog.String("ip_limit_ttl", m.cfg.IPLimitTTL),
+		slog.String("ban_duration", m.cfg.BanDuration),
 	)
 
 	// Startup recovery: re-apply active bans from the database so that a
@@ -202,15 +215,27 @@ func (m *Module) Run(ctx context.Context) {
 	rotateCh := make(chan struct{}, 1)
 
 	rot := newRotator(
-		m.cfg.AntiFraud.LogPath,
-		m.cfg.AntiFraud.LogRotationSizeMB,
-		m.cfg.Xray.APIAddr,
+		m.cfg.LogPath,
+		m.cfg.LogRotationSizeMB,
+		m.loggerCtrl,
 		rotateCh,
 		m.log,
 	)
-	tail := newTailer(m.cfg.AntiFraud.LogPath, eventCh, rotateCh, m.log)
-	an := newAnalyzer(m.cfg, m.state, m.banStore, eventCh, ipTTL, m.cfg.AntiFraud.MaxIPs, m.db, m.log)
-	uc := newUnbanCleaner(m.cfg, m.banStore, m.db, m.log)
+	tail := newTailer(m.cfg.LogPath, eventCh, rotateCh, m.log)
+	an := newAnalyzer(
+		m.cfg,
+		m.state,
+		m.banStore,
+		m.eventCh,
+		ipTTL,
+		m.cfg.SuspiciousIPThreshold,
+		m.registry,
+		m.banner,
+		m.propagator,
+		m.reporter,
+		m.log,
+	)
+	uc := newUnbanCleaner(m.cfg, m.banStore, m.registry, m.banner, m.propagator, m.log)
 
 	// Launch workers.
 	go rot.run(ctx)
@@ -244,8 +269,8 @@ func (m *Module) runIPCleaner(ctx context.Context, ttl time.Duration) {
 //
 // This restores the correct state after a server restart or crash.
 func (m *Module) recoverBansFromDB() {
-	var activeBans []database.AntifraudBan
-	if err := m.db.Where("expires_at > ?", time.Now()).Find(&activeBans).Error; err != nil {
+	activeBans, err := m.registry.AntifraudBans().FindActive(context.Background())
+	if err != nil {
 		m.log.Error("antifraud recovery: DB query failed", slog.String("err", err.Error()))
 		return
 	}
@@ -256,27 +281,14 @@ func (m *Module) recoverBansFromDB() {
 
 	m.log.Info("antifraud recovery: re-applying active bans from DB", slog.Int("count", len(activeBans)))
 
-	xrayCfg, cfgErr := xrayconfig.Read(m.cfg.Paths.XrayConfig)
-
 	for _, ban := range activeBans {
 		m.banStore.setBan(ban.Email, ban.ExpiresAt)
 
-		if cfgErr != nil {
-			continue
-		}
-
-		tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, ban.Email)
-		if len(tags) == 0 {
-			continue
-		}
-
-		apiClient := xrayapi.NewGRPCClient(m.cfg.Xray.APIAddr)
-		if err := apiClient.RemoveUser(ban.Email, tags); err != nil {
-			// Non-fatal: Xray may have restarted and the user is already gone.
+		if err := m.banner.BanUser(context.Background(), ban.Email); err != nil {
 			m.log.Warn("antifraud recovery: hot-remove failed (non-fatal)",
 				slog.String("email", ban.Email), slog.String("err", err.Error()))
 		} else {
-			m.log.Info("antifraud recovery: banned user removed from Xray runtime",
+			m.log.Info("antifraud recovery: banned user removed from runtime",
 				slog.String("email", ban.Email))
 		}
 	}

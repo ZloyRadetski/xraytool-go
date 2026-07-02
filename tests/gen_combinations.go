@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/vpn"
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	}
 	defer outFile.Close()
 
-	params := xrayconfig.ClientParams{
+	params := vpn.ClientParams{
 		Email:   "test@example.com",
 		UUID:    "12345678-1234-1234-1234-123456789012",
 		Auth:    "my-secret-password",
@@ -33,11 +33,11 @@ func main() {
 		for _, t := range transports {
 			for _, s := range securities {
 				// Hysteria doesn't use streamSettings in the same way, but we will test it anyway.
-				
+
 				ibMap := map[string]interface{}{
 					"protocol": p,
 				}
-				
+
 				streamSettings := map[string]interface{}{}
 				if t != "" {
 					streamSettings["network"] = t
@@ -45,17 +45,17 @@ func main() {
 				if s != "" {
 					streamSettings["security"] = s
 				}
-				
+
 				if len(streamSettings) > 0 {
 					ibMap["streamSettings"] = streamSettings
 				}
 
 				ibData, _ := json.Marshal(ibMap)
-				var ib xrayconfig.RawInbound
+				var ib vpn.RawInbound
 				json.Unmarshal(ibData, &ib)
 
-				client, err := xrayconfig.BuildClient(ib, params)
-				
+				client, err := vpn.BuildClient(ib, params)
+
 				titleT := t
 				if titleT == "" {
 					titleT = "default(tcp)"
@@ -66,7 +66,7 @@ func main() {
 				}
 
 				outFile.WriteString(fmt.Sprintf("%s %s %s:\n", p, titleT, titleS))
-				
+
 				if err != nil {
 					outFile.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
 				} else {

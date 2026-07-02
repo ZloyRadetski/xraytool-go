@@ -2,20 +2,14 @@ package antifraud
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
-	"gorm.io/gorm"
 
-	"xraytool/internal/appconfig"
-	"xraytool/internal/database"
-	"xraytool/internal/slave"
-	"xraytool/internal/xrayapi"
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/domain"
 )
 
 // analyzer reads events from the tailer channel, updates the IP State,
@@ -25,23 +19,27 @@ import (
 // from multiple goroutines, eliminating the need for per-event locking
 // beyond State's own mutex.
 type analyzer struct {
-	cfg      *appconfig.Config
-	state    *State
-	banStore *banStore
-	events   <-chan event
-	ipTTL    time.Duration
-	maxIPs   int
+	cfg           *Config
+	state         *State
+	banStore      *banStore
+	events        <-chan event
+	ipTTL         time.Duration
+	maxIPs        int
 	log           *slog.Logger
-	db            *gorm.DB
+	registry      domain.Registry
+	banner        domain.SoftBanner
 	dryRunLogTime map[string]time.Time
 
 	// deviceCache holds per-user MaxDevices values, refreshed every 2 minutes.
 	// The dynamic threshold for user U is: maxIPs * deviceCache[U].
 	deviceCache deviceLimitCache
 
+	// propagator sends unban/ban events to slaves.
+	propagator domain.EventPropagator
+
 	// reporter batches IP events and forwards them to master (slave mode only).
 	// nil when ReportToMaster is false or mode is master.
-	reporter *slaveReporter
+	reporter domain.FraudEventReporter
 }
 
 // deviceLimitCache is an in-memory cache of MaxDevices per email.
@@ -54,53 +52,44 @@ type deviceLimitCache struct {
 }
 
 func newAnalyzer(
-	cfg *appconfig.Config,
+	cfg *Config,
 	state *State,
-	bs *banStore,
+	banStore *banStore,
 	events <-chan event,
 	ipTTL time.Duration,
 	maxIPs int,
-	db *gorm.DB,
+	registry domain.Registry,
+	banner domain.SoftBanner,
+	propagator domain.EventPropagator,
+	reporter domain.FraudEventReporter,
 	log *slog.Logger,
 ) *analyzer {
-	a := &analyzer{
-		cfg:      cfg,
-		state:    state,
-		banStore: bs,
-		events:   events,
-		ipTTL:    ipTTL,
-		maxIPs:   maxIPs,
+	return &analyzer{
+		cfg:           cfg,
+		state:         state,
+		banStore:      banStore,
+		events:        events,
+		ipTTL:         ipTTL,
+		maxIPs:        maxIPs,
 		log:           log,
-		db:            db,
+		registry:      registry,
+		banner:        banner,
+		propagator:    propagator,
+		reporter:      reporter,
 		dryRunLogTime: make(map[string]time.Time),
-		deviceCache: deviceLimitCache{
-			limits: make(map[string]int, 64),
-		},
+		deviceCache:   deviceLimitCache{limits: make(map[string]int)},
 	}
-
-	// Slave mode: set up the reporter that forwards events to master.
-	if !cfg.IsMaster() && cfg.AntiFraud.ReportToMaster {
-		a.reporter = newSlaveReporter(cfg, log)
-	}
-
-	return a
 }
 
 // run processes events until ctx is cancelled.
-// It also spawns two background goroutines:
+// It also spawns a background goroutine:
 //   - deviceCacheRefresh: keeps per-user MaxDevices limits fresh.
-//   - slaveReporter.run: batches and forwards events to master (slave-only).
 func (a *analyzer) run(ctx context.Context) {
 	a.log.Info("antifraud analyzer: starting", "max_ips", a.maxIPs, "ttl", a.ipTTL)
 	defer a.log.Info("antifraud analyzer: stopped")
 
-	// Warm up the device cache before processing the first event.
 	a.refreshDeviceCache()
 	go a.runDeviceCacheRefresh(ctx)
-
-	if a.reporter != nil {
-		go a.reporter.run(ctx)
-	}
 
 	for {
 		select {
@@ -130,7 +119,7 @@ func (a *analyzer) handleEvent(e event) {
 
 	// Forward to master for global aggregation (slave mode only, fire-and-forget).
 	if a.reporter != nil {
-		a.reporter.add(e)
+		a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: e.ip}})
 		// If this slave is configured to report to master, the master makes the final
 		// decision. We skip local enforcement because the slave doesn't have the full DB
 		// (so it doesn't know the user's real max_devices).
@@ -140,7 +129,7 @@ func (a *analyzer) handleEvent(e event) {
 	if count > threshold {
 		reason := fraudReason(e.email, count, threshold, a.maxIPs, devices, a.ipTTL)
 
-		if a.cfg.AntiFraud.DryRun {
+		if a.cfg.DryRun {
 			// Debounce dry-run logs to once per minute per user to avoid log spam.
 			if lastLog, ok := a.dryRunLogTime[e.email]; !ok || time.Since(lastLog) > time.Minute {
 				a.log.Warn("antifraud: fraud detected (dry-run mode, no ban applied)",
@@ -178,13 +167,8 @@ func (a *analyzer) runDeviceCacheRefresh(ctx context.Context) {
 // refreshDeviceCache fetches all (email, max_devices) pairs from the DB
 // in a single query and atomically replaces the in-memory map.
 func (a *analyzer) refreshDeviceCache() {
-	var rows []struct {
-		Email      string
-		MaxDevices int
-	}
-	if err := a.db.Model(&database.Subscription{}).
-		Select("email, max_devices").
-		Scan(&rows).Error; err != nil {
+	rows, err := a.registry.Subscriptions().GetAllEmailsAndMaxDevices(context.Background())
+	if err != nil {
 		a.log.Warn("antifraud: device cache refresh failed", slog.String("err", err.Error()))
 		return
 	}
@@ -228,9 +212,9 @@ func (a *analyzer) getDeviceLimit(email string) int {
 	a.deviceCache.mu.Unlock()
 
 	go a.deviceCache.sg.Do(email, func() (interface{}, error) {
-		var sub database.Subscription
 		val := 1
-		if err := a.db.Select("max_devices").Where("email = ?", email).Limit(1).Find(&sub).Error; err == nil && sub.MaxDevices > 0 {
+		sub, err := a.registry.Subscriptions().FindByEmail(context.Background(), email)
+		if err == nil && sub != nil && sub.MaxDevices > 0 {
 			val = sub.MaxDevices
 		}
 		a.deviceCache.mu.Lock()
@@ -258,7 +242,7 @@ func (a *analyzer) enforce(email, reason string) {
 		slog.String("reason", reason),
 	)
 
-	banDur, err := time.ParseDuration(a.cfg.AntiFraud.BanDuration)
+	banDur, err := time.ParseDuration(a.cfg.BanDuration)
 	if err != nil {
 		a.log.Error("antifraud: invalid ban_duration in config, using 10m default",
 			slog.String("err", err.Error()))
@@ -269,19 +253,17 @@ func (a *analyzer) enforce(email, reason string) {
 	expiresAt := now.Add(banDur)
 
 	// 1. Persist the ban to survive server restarts.
-	ban := database.AntifraudBan{
+	ban := domain.AntifraudBan{
 		Email:     email,
 		BannedAt:  now,
 		ExpiresAt: expiresAt,
 		Reason:    reason,
 	}
 	// Use Save (upsert by email unique index) in case a prior ban record exists.
-	if result := a.db.Where(database.AntifraudBan{Email: email}).
-		Assign(database.AntifraudBan{BannedAt: now, ExpiresAt: expiresAt, Reason: reason}).
-		FirstOrCreate(&ban); result.Error != nil {
+	if err := a.registry.AntifraudBans().Upsert(context.Background(), &ban); err != nil {
 		a.log.Error("antifraud: failed to persist ban to DB",
 			slog.String("email", email),
-			slog.String("err", result.Error.Error()),
+			slog.String("err", err.Error()),
 		)
 		return
 	}
@@ -289,35 +271,15 @@ func (a *analyzer) enforce(email, reason string) {
 	// 2. Update the in-memory ban store AFTER the DB write succeeds.
 	a.banStore.setBan(email, expiresAt)
 
-	// 3. Remove user from Xray runtime memory (hot-remove).
-	// We need the inbound tags from the on-disk config (not touched by antifraud).
-	xrayCfg, err := xrayconfig.Read(a.cfg.Paths.XrayConfig)
-	if err != nil {
-		a.log.Error("antifraud: cannot read xray config for hot-remove",
+	// 3. Remove user from Engine runtime memory (hot-remove).
+	if err := a.banner.BanUser(context.Background(), email); err != nil {
+		a.log.Warn("antifraud: hot-remove failed (non-fatal)",
 			slog.String("email", email), slog.String("err", err.Error()))
-		// Non-fatal: user will reconnect but subscription page shows dummy.
-	} else {
-		tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, email)
-		if len(tags) > 0 {
-			apiClient := xrayapi.NewGRPCClient(a.cfg.Xray.APIAddr)
-			if err := apiClient.RemoveUser(email, tags); err != nil {
-				a.log.Warn("antifraud: hot-remove failed (non-fatal)",
-					slog.String("email", email), slog.String("err", err.Error()))
-			}
-		}
 	}
 
 	// 4. Propagate rmuser to slave nodes (fire-and-forget).
-	if a.cfg.IsMaster() {
-		go func() {
-			client := slave.NewClient(
-				a.cfg.SlaveAPI.ConnectTimeout,
-				a.cfg.SlaveAPI.RequestTimeout,
-				a.cfg.SlaveAPI.RemotePath,
-			)
-			reg := slave.NewRegistry(a.cfg.SlaveServers, client)
-			reg.PropagateAll("rmuser", map[string]string{"email": email})
-		}()
+	if a.cfg.IsMaster && a.propagator != nil {
+		go a.propagator.PropagateAll("rmuser", map[string]string{"email": email})
 	}
 
 	a.log.Warn("antifraud: ban applied",
@@ -327,126 +289,7 @@ func (a *analyzer) enforce(email, reason string) {
 	)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// slaveReporter — forwards IP events to master in batches (slave mode only)
-// ─────────────────────────────────────────────────────────────────────────────
 
-// SlaveIPEvent is a single IP observation forwarded from a slave to master.
-// Exported so that handlers_internal.go can decode the incoming JSON.
-type SlaveIPEvent struct {
-	Email string `json:"email"`
-	IP    string `json:"ip"`
-}
-
-// slaveReporter accumulates events and flushes them to master every 5 seconds.
-// It is nil on the master node.
-type slaveReporter struct {
-	mu   sync.Mutex
-	buf  []SlaveIPEvent
-	cfg  *appconfig.Config
-	log  *slog.Logger
-}
-
-func newSlaveReporter(cfg *appconfig.Config, log *slog.Logger) *slaveReporter {
-	return &slaveReporter{
-		buf: make([]SlaveIPEvent, 0, 64),
-		cfg: cfg,
-		log: log,
-	}
-}
-
-// add enqueues an event for the next flush. Thread-safe.
-func (r *slaveReporter) add(e event) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Hard limit to prevent OOM if master is down for a long time
-	if len(r.buf) >= 10000 {
-		return
-	}
-	r.buf = append(r.buf, SlaveIPEvent{Email: e.email, IP: e.ip})
-}
-
-// run flushes the buffer every 5 seconds until ctx is cancelled.
-func (r *slaveReporter) run(ctx context.Context) {
-	r.log.Info("antifraud slave reporter: starting")
-	defer r.log.Info("antifraud slave reporter: stopped")
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			r.flush() // drain remaining events on shutdown
-			return
-		case <-ticker.C:
-			r.flush()
-		}
-	}
-}
-
-// flush drains the buffer and sends it to master.
-// No-op if the buffer is empty.
-func (r *slaveReporter) flush() {
-	r.mu.Lock()
-	if len(r.buf) == 0 {
-		r.mu.Unlock()
-		return
-	}
-	batch := make([]SlaveIPEvent, len(r.buf))
-	copy(batch, r.buf)
-	r.mu.Unlock()
-
-	payload, err := json.Marshal(struct {
-		Events []SlaveIPEvent `json:"events"`
-	}{Events: batch})
-	if err != nil {
-		r.log.Error("antifraud slave reporter: failed to marshal batch", slog.String("err", err.Error()))
-		return
-	}
-
-	if r.cfg.MasterAPI.URL == "" {
-		r.log.Warn("antifraud slave reporter: master_api.url is not configured, cannot forward events")
-		r.mu.Lock()
-		r.buf = r.buf[:0]
-		r.mu.Unlock()
-		return
-	}
-
-	entry := slave.Entry{
-		URL:      r.cfg.MasterAPI.URL,
-		APIKey:   r.cfg.MasterAPI.APIKey,
-		Insecure: r.cfg.MasterAPI.Insecure,
-	}
-
-	client := slave.NewClient(
-		r.cfg.SlaveAPI.ConnectTimeout,
-		r.cfg.SlaveAPI.RequestTimeout,
-		"", // remote path is fully defined by MasterAPI.URL
-	)
-
-	_, err = client.Call(entry, "antifraud-events", map[string]string{"payload": string(payload)})
-	if err != nil {
-		r.log.Warn("antifraud slave reporter: failed to reach master", slog.String("err", err.Error()))
-		return
-	}
-
-	r.mu.Lock()
-	// Only remove the events we just successfully sent
-	// Since batch contains all elements from buf at the time of copy,
-	// if there are no new elements appended during the request, we can just reset.
-	// Otherwise, we keep the newly added elements.
-	if len(r.buf) == len(batch) {
-		r.buf = r.buf[:0]
-	} else {
-		// New events arrived while network call was happening.
-		// We shift them to the beginning.
-		n := copy(r.buf, r.buf[len(batch):])
-		r.buf = r.buf[:n]
-	}
-	r.mu.Unlock()
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // unbanCleaner
@@ -456,28 +299,30 @@ func (r *slaveReporter) flush() {
 //
 // Safety invariants (Ghost User protection):
 //  1. Delete the ban record from AntifraudBan first (marks intent to unban).
-//  2. Verify user still exists in xrayconfig.json (may have been expired by ExpiryWorker).
+//  2. Verify user still exists in vpn.json (may have been expired by ExpiryWorker).
 //  3. Verify subscription.status == "active" in the DB (race-condition guard).
 //  4. Only then call AddUser.
 //
 // If step 3 finds the user inactive, we simply don't re-add — no zombie/ghost users.
 type unbanCleaner struct {
-	cfg      *appconfig.Config
+	cfg      *Config
 	banStore *banStore
-	db       *gorm.DB
-	log      *slog.Logger
-	tick     time.Duration
+	registry   domain.Registry
+	banner     domain.SoftBanner
+	propagator domain.EventPropagator
+	log        *slog.Logger
 }
 
 const unbanCleanerTick = 15 * time.Second
 
-func newUnbanCleaner(cfg *appconfig.Config, bs *banStore, db *gorm.DB, log *slog.Logger) *unbanCleaner {
+func newUnbanCleaner(cfg *Config, banStore *banStore, registry domain.Registry, banner domain.SoftBanner, propagator domain.EventPropagator, log *slog.Logger) *unbanCleaner {
 	return &unbanCleaner{
-		cfg:      cfg,
-		banStore: bs,
-		db:       db,
-		log:      log,
-		tick:     unbanCleanerTick,
+		cfg:        cfg,
+		banStore:   banStore,
+		registry:   registry,
+		banner:     banner,
+		propagator: propagator,
+		log:        log,
 	}
 }
 
@@ -485,7 +330,7 @@ func (uc *unbanCleaner) run(ctx context.Context) {
 	uc.log.Info("antifraud unban cleaner: starting")
 	defer uc.log.Info("antifraud unban cleaner: stopped")
 
-	ticker := time.NewTicker(uc.tick)
+	ticker := time.NewTicker(unbanCleanerTick)
 	defer ticker.Stop()
 
 	for {
@@ -499,8 +344,8 @@ func (uc *unbanCleaner) run(ctx context.Context) {
 }
 
 func (uc *unbanCleaner) processExpired() {
-	var expired []database.AntifraudBan
-	if err := uc.db.Where("expires_at <= ?", time.Now()).Find(&expired).Error; err != nil {
+	expired, err := uc.registry.AntifraudBans().FindExpired(context.Background())
+	if err != nil {
 		uc.log.Error("antifraud unban cleaner: DB query failed", slog.String("err", err.Error()))
 		return
 	}
@@ -510,73 +355,21 @@ func (uc *unbanCleaner) processExpired() {
 	}
 }
 
-func (uc *unbanCleaner) tryUnban(ban database.AntifraudBan) {
+func (uc *unbanCleaner) tryUnban(ban domain.AntifraudBan) {
 	email := ban.Email
 
-	// Step 1: Check if user still exists in xrayconfig.json.
-	xrayCfg, err := xrayconfig.Read(uc.cfg.Paths.XrayConfig)
-	if err != nil {
-		uc.log.Error("antifraud unban: cannot read xray config",
-			slog.String("email", email), slog.String("err", err.Error()))
-		return
-	}
-
-	exists, _ := xrayconfig.UserExists(xrayCfg, email)
-	if !exists {
-		// ExpiryWorker already removed this user from the config — no need to re-add.
-		uc.log.Info("antifraud unban: user not in xray config, skipping re-add (likely expired)",
-			slog.String("email", email))
-		return
-	}
-
-	// Step 3: Ghost User protection — verify subscription is still active in the DB.
-	var sub database.Subscription
-	if err := uc.db.Where("email = ?", email).
-		Order("created_at desc").First(&sub).Error; err != nil {
-		uc.log.Warn("antifraud unban: subscription not found in DB, skipping",
-			slog.String("email", email))
-		return
-	}
-
-	if sub.Status != "active" {
-		uc.log.Info("antifraud unban: subscription no longer active, skipping re-add",
-			slog.String("email", email), slog.String("status", sub.Status))
-		return
-	}
-
-	// Step 4: Re-add user to Xray runtime (hot-add). Re-use the config read in Step 2.
-	user, _ := xrayconfig.FindUser(xrayCfg, email)
-	if user == nil {
-		uc.log.Warn("antifraud unban: user disappeared from config between checks",
-			slog.String("email", email))
-		return
-	}
-
-	payload, err := xrayconfig.BuildForAllInbounds(xrayCfg, xrayconfig.ClientParams{
-		Email:   email,
-		UUID:    user.GetString("id"),
-		Auth:    user.GetString("auth"),
-		Subfile: user.GetString("subfile"),
-		Expire:  user.GetString("expire"),
-	})
-	if err != nil {
-		uc.log.Error("antifraud unban: failed to build payload",
-			slog.String("email", email), slog.String("err", err.Error()))
-		return
-	}
-
-	apiClient := xrayapi.NewGRPCClient(uc.cfg.Xray.APIAddr)
-	if err := apiClient.AddUser(payload, uc.cfg.Paths.XrayConfig); err != nil {
+	// Step 4: Re-add user to Engine runtime (hot-add).
+	if err := uc.banner.UnbanUser(context.Background(), email); err != nil {
 		uc.log.Error("antifraud unban: hot-add failed",
 			slog.String("email", email), slog.String("err", err.Error()))
-		return // Do not delete ban if Xray failed
+		return // Do not delete ban if Engine failed
 	} else {
-		uc.log.Info("antifraud unban: user restored to Xray runtime",
+		uc.log.Info("antifraud unban: user restored to runtime",
 			slog.String("email", email))
 	}
 
 	// Step 5: Remove ban record (only after successful Xray unban)
-	if err := uc.db.Delete(&ban).Error; err != nil {
+	if err := uc.registry.AntifraudBans().DeleteByEmail(context.Background(), email); err != nil {
 		uc.log.Error("antifraud unban: failed to delete ban record",
 			slog.String("email", email), slog.String("err", err.Error()))
 		return
@@ -586,59 +379,12 @@ func (uc *unbanCleaner) tryUnban(ban database.AntifraudBan) {
 	uc.banStore.clearBan(email)
 
 	// Step 5: Propagate to slaves (fire-and-forget).
-	if uc.cfg.IsMaster() {
-		go func() {
-			client := slave.NewClient(
-				uc.cfg.SlaveAPI.ConnectTimeout,
-				uc.cfg.SlaveAPI.RequestTimeout,
-				uc.cfg.SlaveAPI.RemotePath,
-			)
-			reg := slave.NewRegistry(uc.cfg.SlaveServers, client)
-
-			limitF := float64(sub.MaxDevices)
-			subfile := ""
-			if sub.Metadata != nil {
-				if sf, ok := sub.Metadata["subfile"].(string); ok {
-					subfile = sf
-				}
-			}
-			expireVal := ""
-			if sub.EndsAt != nil {
-				expireVal = sub.EndsAt.Format("02.01.2006")
-			}
-			// Take auth from xrayCfg (already read) to properly support Hysteria2 inbounds.
-			authVal := ""
-			if user != nil {
-				authVal = user.GetString("auth")
-			}
-
-			slaveParams := map[string]string{
-				"email":   sub.Email,
-				"uuid":    sub.XrayUUID,
-				"subfile": subfile,
-				"expire":  expireVal,
-				"auth":    authVal,
-				"limit":   fmt.Sprintf("%.0f", limitF),
-			}
-			reg.PropagateAll("newuser", slaveParams)
-		}()
+	if uc.cfg.IsMaster && uc.propagator != nil {
+		go uc.propagator.PropagateAll("newuser", map[string]string{"email": email})
 	}
 }
 
-// buildPayload is a convenience alias used in tests.
-func buildPayload(cfg *appconfig.Config, xrayCfg xrayconfig.RawConfig, email string) ([]xrayconfig.TaggedClient, error) {
-	user, _ := xrayconfig.FindUser(xrayCfg, email)
-	if user == nil {
-		return nil, fmt.Errorf("user %q not found in config", email)
-	}
-	return xrayconfig.BuildForAllInbounds(xrayCfg, xrayconfig.ClientParams{
-		Email:   email,
-		UUID:    user.GetString("id"),
-		Auth:    user.GetString("auth"),
-		Subfile: user.GetString("subfile"),
-		Expire:  user.GetString("expire"),
-	})
-}
+// buildPayload is a convenience alias used in tests. // No more buildPayload calls
 
 // fraudReason builds a human-readable ban reason string with dynamic limit details.
 func fraudReason(email string, ipCount, threshold, baseLimit, devices int, ttl time.Duration) string {

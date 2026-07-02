@@ -5,8 +5,8 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -261,7 +261,7 @@ func getDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("Failed to open SQLite database: %v", err)
 	}
-	
+
 	// Ensure schema is fully migrated before tests start
 	err = db.AutoMigrate(
 		&database.User{},
@@ -1108,8 +1108,6 @@ func TestE2ESuite(t *testing.T) {
 	// FEATURE 5: COMMAND INJECTION & EXECUTION SAFETY (cmd_exec_safety)
 	// ─────────────────────────────────────────────────────────────────────────
 
-
-
 	t.Run("Tier1_F5_Case3_CLINewUserValid", func(t *testing.T) {
 		exitCode, stdout, stderr := runCLI(t, []string{"newuser", "--email", "clinewuser@example.com", "--legacy"}, nil)
 		if exitCode != 0 {
@@ -1136,8 +1134,6 @@ func TestE2ESuite(t *testing.T) {
 			t.Errorf("Expected exit code 0, got %d. Stderr: %s, Stdout: %s", exitCode, stderr, stdout)
 		}
 	})
-
-
 
 	t.Run("Tier2_F5_Case4_PathTraversalUpload", func(t *testing.T) {
 		// Mock upload multipart request
@@ -1588,7 +1584,7 @@ func TestE2ESuite(t *testing.T) {
 		_, _, _ = apiRequest("POST", "/api/v1/users/register", body, true)
 		_, _, _ = apiRequest("POST", "/api/v1/users/telegram/80001/balance", map[string]interface{}{"amount": 200}, true)
 		_, _, _ = apiRequest("POST", "/api/v1/users/telegram/80001/auto-renew", map[string]interface{}{"plan_total_price": 100, "new_ends_at": time.Now().Add(24 * time.Hour).Format(time.RFC3339)}, true)
-		
+
 		db := getDB(t)
 		var u database.User
 		if err := db.Where("metadata LIKE ?", "%80001%").First(&u).Error; err != nil {
@@ -1648,7 +1644,7 @@ func TestE2ESuite(t *testing.T) {
 		if err != nil || st != http.StatusOK {
 			t.Fatalf("format=vless failed: status %d", st)
 		}
-		
+
 		// If format=vless, it should return unencoded vless config! NOT Base64.
 		if !strings.Contains(resp, "vless://") {
 			t.Errorf("format=vless did not return raw vless config. Response: %s", resp)
@@ -1692,7 +1688,7 @@ func TestE2ESuite(t *testing.T) {
 		concurrency := 20
 		var wg sync.WaitGroup
 		wg.Add(concurrency)
-		
+
 		errors := 0
 		var mu sync.Mutex
 

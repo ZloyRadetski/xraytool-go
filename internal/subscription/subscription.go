@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/vpn"
 )
 
 // Package-level compiled regexes (avoids recompilation on every call).
@@ -77,7 +77,6 @@ func generateDummyVless(lines []string) string {
 	}
 	return strings.Join(out, "\n")
 }
-
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -195,7 +194,7 @@ func userAgentHasToken(uaLower, token string) bool {
 	return before && after
 }
 
-func findActiveUserBySubfile(cfg xrayconfig.RawConfig, filename string, defaultExpire string) *ActiveUser {
+func findActiveUserBySubfile(cfg vpn.RawConfig, filename string, defaultExpire string) *ActiveUser {
 	targetNorm := normalizeSubfileToID(filename)
 	if targetNorm == "" {
 		return nil
@@ -308,7 +307,7 @@ func normalizeHwid(s string) string {
 	return s
 }
 
-func firstRealityPrivateKey(cfg xrayconfig.RawConfig) string {
+func firstRealityPrivateKey(cfg vpn.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -333,7 +332,7 @@ func firstRealityPrivateKey(cfg xrayconfig.RawConfig) string {
 	return ""
 }
 
-func firstRealityPublicKey(cfg xrayconfig.RawConfig) string {
+func firstRealityPublicKey(cfg vpn.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -358,7 +357,7 @@ func firstRealityPublicKey(cfg xrayconfig.RawConfig) string {
 	return ""
 }
 
-func randomRealityShortID(cfg xrayconfig.RawConfig) string {
+func randomRealityShortID(cfg vpn.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -395,7 +394,7 @@ func randomRealityShortID(cfg xrayconfig.RawConfig) string {
 	return ""
 }
 
-func firstRealitySNI(cfg xrayconfig.RawConfig) string {
+func firstRealitySNI(cfg vpn.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return "google.com"
@@ -444,7 +443,7 @@ func derivePublicKey(privateKey string) string {
 
 	pubKeyCacheMu.Lock()
 	defer pubKeyCacheMu.Unlock()
-	
+
 	if pub, ok := pubKeyCache[privateKey]; ok {
 		return pub
 	}
@@ -482,12 +481,12 @@ func derivePublicKey(privateKey string) string {
 
 	pubBytes := key.PublicKey().Bytes()
 	pub = base64.RawURLEncoding.EncodeToString(pubBytes)
-	
+
 	pubKeyCache[privateKey] = pub
 	return pub
 }
 
-func ssServerPassword(cfg xrayconfig.RawConfig) string {
+func ssServerPassword(cfg vpn.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -541,7 +540,7 @@ func buildDeterministicHy2Pass(uuidHint, email string) string {
 	return pass[:32]
 }
 
-func getOrCreateHy2ObfsPassword(yamlPath string, cfg xrayconfig.RawConfig) string {
+func getOrCreateHy2ObfsPassword(yamlPath string, cfg vpn.RawConfig) string {
 	// 1. Try parsing directly from Xray Hysteria2 inbound settings (settings.obfs.password)
 	inbounds, err := cfg.GetInbounds()
 	if err == nil {
@@ -626,23 +625,23 @@ func getTrafficBytes(statsPath string, email string) (up int64, down int64) {
 	if err != nil {
 		return 0, 0
 	}
-	
+
 	var parsed struct {
 		Users map[string]struct {
 			CumulativeUp   float64 `json:"cumulative_up"`
 			CumulativeDown float64 `json:"cumulative_down"`
 		} `json:"users"`
 	}
-	
+
 	if json.Unmarshal(data, &parsed) != nil || parsed.Users == nil {
 		return 0, 0
 	}
-	
+
 	userObj, ok := parsed.Users[email]
 	if !ok {
 		return 0, 0
 	}
-	
+
 	return int64(userObj.CumulativeUp), int64(userObj.CumulativeDown)
 }
 
@@ -989,8 +988,6 @@ func buildErrorJSONResponse(lines []string) string {
 	data, _ := json.MarshalIndent(nodes, "", "  ")
 	return string(data)
 }
-
-
 
 func canonicalDeviceClientKey(filename, clientId string) string {
 	norm := normalizeSubfileToID(filename)

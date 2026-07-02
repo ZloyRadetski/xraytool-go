@@ -39,34 +39,37 @@ import (
 	"strings"
 	"sync"
 
-	"gorm.io/gorm"
-
-	"xraytool/internal/appconfig"
 	"xraytool/internal/antifraud"
+	"xraytool/internal/appconfig"
+	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/mailer"
+	"xraytool/internal/payment"
 	"xraytool/internal/subscription"
+	usersvc "xraytool/internal/user"
 )
 
 // Router holds all server-wide dependencies and the configured mux.
 type Router struct {
-	mux          *http.ServeMux
-	apiKey       string
-	cfg          *appconfig.Config
-	dispatcher   *events.Dispatcher
-	log          *slog.Logger
-	cm           *subscription.CacheManager
-	mailer       mailer.Mailer
-	db           *gorm.DB
+	mux        *http.ServeMux
+	apiKey     string
+	cfg        *appconfig.Config
+	dispatcher *events.Dispatcher
+	log        *slog.Logger
+	cm         *subscription.CacheManager
+	mailer     mailer.Mailer
+	engine     domain.Engine
+	userSvc    *usersvc.Service
+	paymentSvc *payment.Service
 	// antifraud hooks — nil when the module is disabled.
-	isBanned     func(email string) bool
-	forceUnban   func(email string)
-	getSnapshot  func() antifraud.SnapshotData
+	isBanned    func(email string) bool
+	forceUnban  func(email string)
+	getSnapshot func() antifraud.SnapshotData
 	// ingestEvents is called when master receives IP events from a slave node.
 	// nil when the module is disabled or when running in slave mode.
-	ingestEvents func(slaveID string, events []antifraud.SlaveIPEvent)
+	ingestEvents func(slaveID string, events []domain.FraudEvent)
 
-	bgTasks sync.WaitGroup
+	bgTasks  sync.WaitGroup
 	webRegMu sync.Mutex
 }
 
@@ -78,15 +81,17 @@ func (r *Router) Shutdown() {
 
 // New constructs a Router, registers all routes and middleware, and returns the
 // underlying http.Handler ready to pass to http.ListenAndServe.
-func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, db *gorm.DB) *Router {
+func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, engine domain.Engine, userSvc *usersvc.Service, paymentSvc *payment.Service, dispatcher *events.Dispatcher, log *slog.Logger) *Router {
 	r := &Router{
 		mux:        http.NewServeMux(),
 		apiKey:     apiKey,
 		cfg:        cfg,
-		dispatcher: events.NewDispatcher(cfg),
-		log:        slog.Default(),
+		dispatcher: dispatcher,
+		log:        log.With("component", "http-server"),
 		cm:         cm,
-		db:         db,
+		engine:     engine,
+		userSvc:    userSvc,
+		paymentSvc: paymentSvc,
 	}
 
 	// Wire up mailer if configured.
@@ -107,7 +112,7 @@ func (r *Router) WithAntiFraud(
 	isBanned func(string) bool,
 	forceUnban func(string),
 	getSnapshot func() antifraud.SnapshotData,
-	ingestEvents func(string, []antifraud.SlaveIPEvent),
+	ingestEvents func(string, []domain.FraudEvent),
 ) *Router {
 	r.isBanned = isBanned
 	r.forceUnban = forceUnban
@@ -178,7 +183,7 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("DELETE /api/v1/admin/users/{platform}/{id}", protected(r.handleAdminDeleteUser))
 	// Anti-Fraud
 	r.mux.Handle("GET /api/v1/admin/antifraud/state", protected(r.handleAdminAntiFraudState))
-	
+
 	// Admin Promocodes
 	r.mux.Handle("POST /api/v1/admin/promocodes", protected(r.handleAdminCreatePromoCode))
 	r.mux.Handle("GET /api/v1/admin/promocodes", protected(r.handleAdminListPromoCodes))
@@ -200,7 +205,7 @@ func (r *Router) registerRoutes() {
 func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		key := req.Header.Get("X-API-Key")
-		
+
 		isValid := subtle.ConstantTimeCompare([]byte(key), []byte(r.apiKey)) == 1
 		if !isValid && r.cfg != nil {
 			for _, srv := range r.cfg.SlaveServers {
@@ -219,8 +224,6 @@ func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 		next(w, req)
 	})
 }
-
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

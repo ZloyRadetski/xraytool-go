@@ -105,7 +105,7 @@ func Load(path string, _ int64) (*State, error) {
 				continue
 			}
 			user := &UserState{}
-			
+
 			if cum, ok := uMap["cumulative"].(map[string]interface{}); ok {
 				if xray, ok := cum["xray"].(map[string]interface{}); ok {
 					if up, ok := xray["up"].(float64); ok {
@@ -116,7 +116,7 @@ func Load(path string, _ int64) (*State, error) {
 					}
 				}
 			}
-			
+
 			if rawNode, ok := uMap["raw"].(map[string]interface{}); ok {
 				if xray, ok := rawNode["xray"].(map[string]interface{}); ok {
 					if up, ok := xray["up"].(float64); ok {

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"xraytool/internal/database"
 )
 
 type PlanResponse struct {
@@ -18,9 +16,8 @@ type PlanResponse struct {
 }
 
 func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
-	db := r.db
-	var plans []database.Plan
-	if err := db.Where("is_active = ?", true).Order("months asc").Find(&plans).Error; err != nil {
+	plans, err := r.paymentSvc.FindActivePlans(req.Context())
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get plans")
 		return
 	}
@@ -57,9 +54,8 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	db := r.db
-	var promo database.PromoCode
-	if err := db.Where("code = ?", code).First(&promo).Error; err != nil {
+	promo, err := r.paymentSvc.FindPromoCodeByCode(req.Context(), code)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "promo code not found")
 		return
 	}
@@ -86,10 +82,9 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 
 	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
 	if telegramIDStr != "" {
-		user, err := database.FindUserByPlatformID(db, "telegram", telegramIDStr)
+		user, err := r.userSvc.FindUserByPlatformID(req.Context(), "telegram", telegramIDStr)
 		if err == nil {
-			var count int64
-			db.Model(&database.Payment{}).Where("user_id = ? AND promo_code_id = ? AND status = ?", user.ID, promo.ID, "completed").Count(&count)
+			count, _ := r.paymentSvc.CountPaymentsByPromoAndUser(req.Context(), promo.ID, user.ID, "completed")
 			if count > 0 {
 				writeError(w, http.StatusBadRequest, "promo code already used by this user")
 				return

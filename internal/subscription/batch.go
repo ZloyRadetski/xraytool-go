@@ -1,13 +1,11 @@
 package subscription
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
-	"xraytool/internal/appconfig"
-	"xraytool/internal/slave"
-	"xraytool/internal/xrayapi"
-	"xraytool/internal/xrayconfig"
+		"xraytool/internal/domain"
 )
 
 type BatchApplyResult struct {
@@ -19,52 +17,7 @@ type BatchApplyResult struct {
 }
 
 // ApplyBatchOperations executes a batch of Add/Remove user operations on the local node.
-func ApplyBatchOperations(cfg *appconfig.Config, payload slave.BatchPayload) BatchApplyResult {
-	xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-	if err != nil {
-		return BatchApplyResult{Ok: false, Error: fmt.Sprintf("reading config: %v", err)}
-	}
-	
-	// Keep a clean copy of original config for tag extraction during Hot-Remove
-	originalCfg, _ := xrayconfig.Read(cfg.Paths.XrayConfig)
-
-	// Apply Removes
-	if len(payload.Remove) > 0 {
-		_ = xrayconfig.RemoveUsersFromAllInbounds(xrayCfg, payload.Remove)
-	}
-
-	// Apply Adds
-	var addEmails []string
-	for _, u := range payload.Add {
-		addEmails = append(addEmails, u.Email)
-	}
-	if len(addEmails) > 0 {
-		_ = xrayconfig.RemoveUsersFromAllInbounds(xrayCfg, addEmails)
-	}
-
-	for _, u := range payload.Add {
-		params := xrayconfig.ClientParams{
-			Email:   u.Email,
-			UUID:    u.UUID,
-			Auth:    u.Auth,
-			Subfile: u.Subfile,
-			Expire:  u.Expire,
-			Limit:   u.Limit,
-		}
-		tagged, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
-		if err == nil && len(tagged) > 0 {
-			_ = xrayconfig.AddUserToInbounds(xrayCfg, tagged)
-		}
-	}
-
-	// Write config
-	if err := xrayconfig.Write(cfg.Paths.XrayConfig, xrayCfg); err != nil {
-		return BatchApplyResult{Ok: false, Error: fmt.Sprintf("writing config: %v", err)}
-	}
-
-	// Apply Hot-Reload using Xray API
-	apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
-	
+func ApplyBatchOperations(engine domain.Engine, payload domain.BatchPayload) BatchApplyResult {
 	var wg sync.WaitGroup
 	var errs []string
 	var mu sync.Mutex
@@ -78,27 +31,12 @@ func ApplyBatchOperations(cfg *appconfig.Config, payload slave.BatchPayload) Bat
 	}
 
 	// 1. Hot-Remove explicitly removed users
-	tagsMap, _ := xrayconfig.InboundTagsForUsers(originalCfg, payload.Remove)
 	for _, email := range payload.Remove {
-		tags := tagsMap[email]
 		wg.Add(1)
-		go func(e string, t []string) {
+		go func(e string) {
 			defer wg.Done()
-			addErr(apiClient.RemoveUser(e, t))
-		}(email, tags)
-	}
-	
-	// 1.5. Hot-Remove for Add users (to prevent "already exists" error on update)
-	addTagsMap, _ := xrayconfig.InboundTagsForUsers(originalCfg, addEmails)
-	for _, email := range addEmails {
-		tags := addTagsMap[email]
-		if len(tags) > 0 {
-			wg.Add(1)
-			go func(e string, t []string) {
-				defer wg.Done()
-				_ = apiClient.RemoveUser(e, t) // Ignore errors if they don't exist
-			}(email, tags)
-		}
+			addErr(engine.BanUser(context.Background(), e))
+		}(email)
 	}
 
 	// Wait for all removals to finish before adding
@@ -106,28 +44,23 @@ func ApplyBatchOperations(cfg *appconfig.Config, payload slave.BatchPayload) Bat
 
 	// 2. Hot-Add/Update
 	for _, u := range payload.Add {
-		params := xrayconfig.ClientParams{
-			Email:   u.Email,
-			UUID:    u.UUID,
-			Auth:    u.Auth,
-			Subfile: u.Subfile,
-			Expire:  u.Expire,
-			Limit:   u.Limit,
-		}
-		tagged, err := xrayconfig.BuildForAllInbounds(xrayCfg, params)
-		if err == nil && len(tagged) > 0 {
-			wg.Add(1)
-			go func(tg []xrayconfig.TaggedClient) {
-				defer wg.Done()
-				addErr(apiClient.AddUser(tg, cfg.Paths.XrayConfig))
-			}(tagged)
-		}
+		wg.Add(1)
+		go func(userCfg domain.VPNUserConfig) {
+			defer wg.Done()
+
+			// Remove first to prevent "already exists" errors on update, ignore errors.
+			_ = engine.BanUser(context.Background(), userCfg.Email)
+
+			
+			
+			addErr(engine.AddUser(context.Background(), userCfg))
+		}(u)
 	}
 
 	wg.Wait()
 
 	if len(errs) > 0 {
-		return BatchApplyResult{Ok: false, Error: fmt.Sprintf("grpc errors: %v", errs)}
+		return BatchApplyResult{Ok: false, Error: fmt.Sprintf("engine errors: %v", errs)}
 	}
 
 	return BatchApplyResult{

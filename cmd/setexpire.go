@@ -1,15 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
-	"xraytool/internal/xrayconfig"
 	"xraytool/internal/user"
 
 	"github.com/spf13/cobra"
 )
 
-func setExpireCmd(getUserSvc func() *user.Service) *cobra.Command {
+func setExpireCmd(deps *AppDeps) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -20,15 +20,19 @@ func setExpireCmd(getUserSvc func() *user.Service) *cobra.Command {
 		Use:   "setexpire",
 		Short: "Update a user's expiry date",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := requireRoot(); err != nil { return err }
+			if err := requireRoot(); err != nil {
+				return err
+			}
 			if email == "" {
 				email = emailAlias
 			}
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			email, err := resolveEmail(email, emailAlias, true, "", p)
-			if err != nil { return err }
+			email, err := resolveEmail(email, emailAlias, true, "", deps.Engine, p)
+			if err != nil {
+				return err
+			}
 
 			if expireVal == "" {
 				fmt.Print("Enter new expiry date (DD-MM-YYYY) or offset (+30): ")
@@ -43,8 +47,8 @@ func setExpireCmd(getUserSvc func() *user.Service) *cobra.Command {
 				Expire: expireVal,
 			}
 
-			svc := getUserSvc()
-			if err := svc.SetExpire(req); err != nil {
+			svc := deps.UserSvc
+			if err := svc.SetExpire(context.Background(), req); err != nil {
 				return p.Errorf("error: %v", err)
 			}
 
@@ -63,7 +67,7 @@ func setExpireCmd(getUserSvc func() *user.Service) *cobra.Command {
 	return cmd
 }
 
-func updateLimitCmd(getUserSvc func() *user.Service) *cobra.Command {
+func updateLimitCmd(deps *AppDeps) *cobra.Command {
 	var (
 		email      string
 		emailAlias string
@@ -82,18 +86,9 @@ func updateLimitCmd(getUserSvc func() *user.Service) *cobra.Command {
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			if email == "" {
-				xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig)
-				if err != nil {
-					p.Errorf("reading xray config: %v", err)
-				}
-				email = selectUserInteractive(xrayCfg, p)
-			}
-			if email == "" {
-				p.Error("email is required")
-			}
-			if !validEmail(email) {
-				p.Error("invalid characters in email (allowed: a-z A-Z 0-9 @ . _ -)")
+			email, err := resolveEmail(email, emailAlias, true, "", deps.Engine, p)
+			if err != nil {
+				return err
 			}
 
 			limitPtr, err := limitPtrFromStr(limitStr)
@@ -106,8 +101,8 @@ func updateLimitCmd(getUserSvc func() *user.Service) *cobra.Command {
 				Limit: limitPtr,
 			}
 
-			svc := getUserSvc()
-			if err := svc.UpdateLimit(req); err != nil {
+			svc := deps.UserSvc
+			if err := svc.UpdateLimit(context.Background(), req); err != nil {
 				return p.Errorf("error: %v", err)
 			}
 
@@ -125,5 +120,3 @@ func updateLimitCmd(getUserSvc func() *user.Service) *cobra.Command {
 	cmd.Flags().StringVar(&limitStr, "limit", "", "New device limit (integer)")
 	return cmd
 }
-
-

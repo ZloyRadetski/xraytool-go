@@ -2,12 +2,12 @@ package server_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-	"fmt"
 
 	"xraytool/internal/database"
 )
@@ -16,11 +16,11 @@ func TestGetPlans(t *testing.T) {
 	r := newTestRouter(t)
 
 	// Add test plans
-	db := database.DB()
-	db.Exec("DELETE FROM plans")
-	db.Create(&database.Plan{Months: 1, BasePrice: 100, GlobalDiscountPercent: 10, IsActive: true})
-	db.Create(&database.Plan{Months: 3, BasePrice: 200, GlobalDiscountPercent: 0, IsActive: true})
-	db.Exec("INSERT INTO plans (months, base_price, is_active) VALUES (6, 300, 0)")
+
+	testDB.Exec("DELETE FROM plans")
+	testDB.Create(&database.Plan{Months: 1, BasePrice: 100, GlobalDiscountPercent: 10, IsActive: true})
+	testDB.Create(&database.Plan{Months: 3, BasePrice: 200, GlobalDiscountPercent: 0, IsActive: true})
+	testDB.Exec("INSERT INTO plans (months, base_price, is_active) VALUES (6, 300, 0)")
 
 	req := httptest.NewRequest("GET", "/api/v1/plans", nil)
 	req.Header.Set("X-API-Key", "test-api-key")
@@ -51,17 +51,15 @@ func TestGetPlans(t *testing.T) {
 func TestValidatePromoCode(t *testing.T) {
 	r := newTestRouter(t)
 
-	db := database.DB()
-	db.Exec("DELETE FROM promo_codes")
-	
+	testDB.Exec("DELETE FROM promo_codes")
+
 	now := time.Now()
 	expired := now.Add(-1 * time.Hour)
-	
 
-	db.Create(&database.PromoCode{Code: "VALID", DiscountPercent: 20, TargetPlatform: "all", IsActive: true})
-	db.Exec("INSERT INTO promo_codes (code, discount_percent, is_active, target_platform) VALUES ('INACTIVE', 20, 0, 'all')")
-	db.Create(&database.PromoCode{Code: "EXPIRED", DiscountPercent: 20, ExpiresAt: &expired, IsActive: true})
-	db.Create(&database.PromoCode{Code: "BOTONLY", DiscountPercent: 20, TargetPlatform: "bot", IsActive: true})
+	testDB.Create(&database.PromoCode{Code: "VALID", DiscountPercent: 20, TargetPlatform: "all", IsActive: true})
+	testDB.Exec("INSERT INTO promo_codes (code, discount_percent, is_active, target_platform) VALUES ('INACTIVE', 20, 0, 'all')")
+	testDB.Create(&database.PromoCode{Code: "EXPIRED", DiscountPercent: 20, ExpiresAt: &expired, IsActive: true})
+	testDB.Create(&database.PromoCode{Code: "BOTONLY", DiscountPercent: 20, TargetPlatform: "bot", IsActive: true})
 
 	tests := []struct {
 		name       string
@@ -104,15 +102,14 @@ func TestValidatePromoCode(t *testing.T) {
 func TestValidatePromoCode_Limits(t *testing.T) {
 	r := newTestRouter(t)
 
-	db := database.DB()
-	db.Exec("DELETE FROM promo_codes")
-	db.Exec("DELETE FROM payments")
+	testDB.Exec("DELETE FROM promo_codes")
+	testDB.Exec("DELETE FROM payments")
 
 	promo := database.PromoCode{Code: "LIMIT", DiscountPercent: 50, MaxUses: 1, UsesCount: 1, IsActive: true}
-	db.Create(&promo)
+	testDB.Create(&promo)
 
 	// Use the promo code once
-	db.Create(&database.Payment{
+	testDB.Create(&database.Payment{
 		UserID: "u1", Amount: 100, Status: "completed", PaymentType: "sub", PromoCodeID: &promo.ID,
 	})
 
@@ -132,19 +129,18 @@ func TestValidatePromoCode_Limits(t *testing.T) {
 func TestCreatePaymentWithPlan(t *testing.T) {
 	r := newTestRouter(t)
 
-	db := database.DB()
-	db.Exec("DELETE FROM plans")
-	db.Exec("DELETE FROM promo_codes")
-	db.Exec("DELETE FROM users")
-	db.Exec("DELETE FROM payments")
+	testDB.Exec("DELETE FROM plans")
+	testDB.Exec("DELETE FROM promo_codes")
+	testDB.Exec("DELETE FROM users")
+	testDB.Exec("DELETE FROM payments")
 
-	db.Create(&database.User{ID: "testu", Username: "tu", Metadata: database.Metadata{"telegram_id": float64(111)}})
-	
+	testDB.Create(&database.User{ID: "testu", Username: "tu", Metadata: database.Metadata{"telegram_id": float64(111)}})
+
 	plan := database.Plan{Months: 1, BasePrice: 1000, GlobalDiscountPercent: 10, IsActive: true} // global price = 900
-	db.Create(&plan)
+	testDB.Create(&plan)
 
 	promo := database.PromoCode{Code: "PROMO20", DiscountPercent: 20, TargetPlatform: "bot", IsActive: true} // promo price = 800
-	db.Create(&promo)
+	testDB.Create(&promo)
 
 	// Valid promo, price should be 800
 	body := `{"telegram_id":111, "payment_type":"sub", "method":"card", "plan_id":` + fmt.Sprint(plan.ID) + `, "promo_code":"PROMO20", "platform":"bot"}`
@@ -161,14 +157,17 @@ func TestCreatePaymentWithPlan(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	paymentID := int64(resp["payment_id"].(float64))
 	var p database.Payment
-	db.First(&p, paymentID)
+	testDB.First(&p, paymentID)
 	if p.Amount != 800 {
 		t.Errorf("expected 800 (best price), got %v", p.Amount)
 	}
-	
+
 	// Create another promo that gives less discount (5%), so global is better
 	promoBad := database.PromoCode{Code: "PROMO5", DiscountPercent: 5, TargetPlatform: "bot", IsActive: true} // promo price = 950
-	db.Create(&promoBad)
+	testDB.Create(&promoBad)
+
+	// Clear previous payments to avoid ErrAlreadyPendingPayment
+	testDB.Exec("DELETE FROM payments")
 
 	body2 := `{"telegram_id":111, "payment_type":"sub", "method":"card", "plan_id":` + fmt.Sprint(plan.ID) + `, "promo_code":"PROMO5", "platform":"bot"}`
 	req2 := httptest.NewRequest("POST", "/api/v1/payments/create", strings.NewReader(body2))
@@ -184,7 +183,7 @@ func TestCreatePaymentWithPlan(t *testing.T) {
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 	paymentID2 := int64(resp2["payment_id"].(float64))
 	var p2 database.Payment
-	db.First(&p2, paymentID2)
+	testDB.First(&p2, paymentID2)
 	if p2.Amount != 900 {
 		t.Errorf("expected 900 (global discount is better), got %v", p2.Amount)
 	}

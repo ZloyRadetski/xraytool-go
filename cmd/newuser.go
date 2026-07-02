@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"xraytool/internal/user"
@@ -8,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newUserCmd(getUserSvc func() *user.Service) *cobra.Command {
+func newUserCmd(deps *AppDeps) *cobra.Command {
 	var (
 		email        string
 		emailAlias   string
@@ -29,7 +30,7 @@ func newUserCmd(getUserSvc func() *user.Service) *cobra.Command {
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			email, err := resolveEmail(email, emailAlias, false, "Enter name (email): ", p)
+			email, err := resolveEmail(email, emailAlias, false, "Enter name (email): ", deps.Engine, p)
 			if err != nil {
 				return err
 			}
@@ -49,11 +50,14 @@ func newUserCmd(getUserSvc func() *user.Service) *cobra.Command {
 				Legacy:  legacy,
 			}
 
-			svc := getUserSvc()
-			resp, err := svc.CreateUser(req)
+			svc := deps.UserSvc
+			resp, err := svc.CreateUser(context.Background(), req)
 			if err != nil {
 				return p.Errorf("error creating user: %v", err)
 			}
+			p.OK("User created successfully!")
+			p.Info("UUID: %s", resp.UUID)
+			p.Info("Subfile: %s", resp.Subfile)
 
 			// Service propagates internally via API if it's master.
 			// No need to manually propagate here.
@@ -83,5 +87,3 @@ func newUserCmd(getUserSvc func() *user.Service) *cobra.Command {
 
 	return cmd
 }
-
-

@@ -14,20 +14,20 @@ func TestReferralRewardForPayment(t *testing.T) {
 
 	// Referrer
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":6001,"username":"Referrer"}`)
-	
+
 	// Referee
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":6002,"username":"Referee"}`)
 
 	// Setup referral in DB
-	db := database.DB()
+
 	var referrer, referee database.User
-	db.Where("username = ?", "Referrer").First(&referrer)
-	db.Where("username = ?", "Referee").First(&referee)
-	
-	db.Model(&referee).Update("referred_by", referrer.ID)
-	
+	testDB.Where("username = ?", "Referrer").First(&referrer)
+	testDB.Where("username = ?", "Referee").First(&referee)
+
+	testDB.Model(&referee).Update("referred_by", referrer.ID)
+
 	var check database.User
-	db.First(&check, "id = ?", referee.ID)
+	testDB.First(&check, "id = ?", referee.ID)
 	if check.ReferredBy == nil || *check.ReferredBy != referrer.ID {
 		t.Fatalf("referred_by not set correctly: %v", check.ReferredBy)
 	}

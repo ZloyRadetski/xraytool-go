@@ -6,6 +6,7 @@ package server
 // (clients-bot/sqltools.py) expects. Any deviation will break the bot.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,44 +16,34 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/google/uuid"
 	"golang.org/x/time/rate"
-	"gorm.io/gorm"
 
 	"xraytool/internal/convert"
-	"xraytool/internal/database"
-	"xraytool/internal/generate"
+	"xraytool/internal/domain"
 	"xraytool/internal/slave"
-	usersvc "xraytool/internal/user"
-	"xraytool/internal/xrayapi"
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/user"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-
-
 // buildUserResponse assembles the full user JSON object the Python bot expects.
 // It enriches a User with subscription, referral counts, and link.
-func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]interface{} {
+func (r *Router) buildUserResponse(user *domain.User) map[string]interface{} {
 	// Load the subscription for this user (there should be one; tolerate absence).
-	var sub database.Subscription
-	db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub)
+	var sub domain.Subscription
+	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if subPtr != nil {
+		sub = *subPtr
+	}
 
 	// Count referral rows where this user is the referrer.
-	var referralCount int64
-	db.Model(&database.ReferralReward{}).Where("referrer_id = ?", user.ID).Count(&referralCount)
+	referralCount, _ := r.userSvc.CountReferrals(context.Background(), user.ID)
 
 	// Sum referral rewards earned by this user.
-	var referralEarned int64
-	db.Model(&database.ReferralReward{}).
-		Where("referrer_id = ?", user.ID).
-		Select("COALESCE(SUM(amount),0)").
-		Scan(&referralEarned)
+	referralEarned, _ := r.userSvc.SumReferralRewards(context.Background(), user.ID)
 
 	// Extract telegram_id from metadata
 	tgID := extractTelegramID(user.Metadata)
@@ -60,7 +51,7 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 	// Build the subscription link.
 	link := ""
 	if r.cfg != nil && r.cfg.Server.Domain != "" && sub.ID != "" {
-		svc := usersvc.NewService(r.db, r.cfg)
+		svc := r.userSvc
 		link = svc.GenerateShareLink("", sub.ID)
 	}
 
@@ -80,7 +71,7 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 
 	var activeDevices int64
 	if sub.ID != "" {
-		db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&activeDevices)
+		activeDevices, _ = r.userSvc.CountActiveDevices(context.Background(), sub.ID)
 	}
 
 	resp := map[string]interface{}{
@@ -108,7 +99,7 @@ func (r *Router) buildUserResponse(db *gorm.DB, user *database.User) map[string]
 }
 
 // buildUsersResponseBulk efficiently builds user responses for a batch of users using 4 queries total.
-func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []map[string]interface{} {
+func (r *Router) buildUsersResponseBulk(users []domain.User) []map[string]interface{} {
 	if len(users) == 0 {
 		return []map[string]interface{}{}
 	}
@@ -119,10 +110,9 @@ func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []ma
 	}
 
 	// 1. Fetch latest subscription for each user
-	var subs []database.Subscription
-	db.Where("user_id IN ?", userIds).Order("created_at desc").Find(&subs)
-	
-	subByUser := make(map[string]database.Subscription)
+	subs, _ := r.userSvc.GetLatestSubscriptionsByUserIDs(context.Background(), userIds)
+
+	subByUser := make(map[string]domain.Subscription)
 	subIds := make([]string, 0, len(subs))
 	for _, s := range subs {
 		// Only take the first (latest) we see since they are ordered by created_at desc
@@ -133,17 +123,7 @@ func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []ma
 	}
 
 	// 2. Fetch referral counts and sums
-	type RefStats struct {
-		ReferrerID string
-		Count      int64
-		Total      int64
-	}
-	var refStats []RefStats
-	db.Model(&database.ReferralReward{}).
-		Where("referrer_id IN ?", userIds).
-		Select("referrer_id, count(*) as count, coalesce(sum(amount),0) as total").
-		Group("referrer_id").
-		Scan(&refStats)
+	refStats, _ := r.userSvc.GetReferralStats(context.Background(), userIds)
 
 	refCountByUser := make(map[string]int64)
 	refSumByUser := make(map[string]int64)
@@ -153,22 +133,9 @@ func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []ma
 	}
 
 	// 3. Fetch active devices
-	type DevStats struct {
-		SubscriptionID string
-		Count          int64
-	}
-	var devStats []DevStats
-	if len(subIds) > 0 {
-		db.Model(&database.Device{}).
-			Where("subscription_id IN ?", subIds).
-			Select("subscription_id, count(*) as count").
-			Group("subscription_id").
-			Scan(&devStats)
-	}
-
 	devCountBySub := make(map[string]int64)
-	for _, ds := range devStats {
-		devCountBySub[ds.SubscriptionID] = ds.Count
+	if len(subIds) > 0 {
+		devCountBySub, _ = r.userSvc.CountDevicesBySubscriptions(context.Background(), subIds)
 	}
 
 	fmtTime := func(t *time.Time) interface{} {
@@ -186,7 +153,7 @@ func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []ma
 
 		link := ""
 		if r.cfg != nil && r.cfg.Server.Domain != "" && sub.ID != "" {
-			svc := usersvc.NewService(r.db, r.cfg)
+			svc := r.userSvc
 			link = svc.GenerateShareLink("", sub.ID)
 		}
 
@@ -220,17 +187,6 @@ func (r *Router) buildUsersResponseBulk(db *gorm.DB, users []database.User) []ma
 	return out
 }
 
-// generateRefCode creates a unique referral code. It retries on collision.
-func generateRefCode(db *gorm.DB) string {
-	for {
-		code := "ref_" + generate.Secret(8)
-		var count int64
-		db.Model(&database.User{}).Where("ref_code = ?", code).Count(&count)
-		if count == 0 {
-			return code
-		}
-	}
-}
 
 // readBody reads and JSON-decodes the request body into dst. Returns false and
 // writes a 400 if parsing fails.
@@ -274,71 +230,27 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-
 	// Idempotency: if user already exists return it.
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
-	existing, err := database.FindUserByPlatformID(db, "telegram", tgIDStr)
+	existing, err := r.userSvc.FindUserByPlatformID(context.Background(), "telegram", tgIDStr)
 	if err == nil && existing != nil {
-		writeJSON(w, http.StatusOK, r.buildUserResponse(db, existing))
+		writeJSON(w, http.StatusOK, r.buildUserResponse(existing))
 		return
 	}
 
-	// Create new user.
-	userID := uuid.New().String()
-	refCode := generateRefCode(db)
-
-	var referredByID *string
-	if body.ReferredByCode != "" {
-		var referrer database.User
-		if err := db.Where("ref_code = ?", body.ReferredByCode).First(&referrer).Error; err == nil {
-			referredByID = &referrer.ID
-		} else {
-			r.log.Warn("register user: invalid ref code provided", "code", body.ReferredByCode)
-		}
-	}
-
-	user := database.User{
-		ID:         userID,
-		Username:   body.Username,
-		Balance:    0,
-		IsAdmin:    false,
-		RefCode:    refCode,
-		ReferredBy: referredByID,
-		Metadata: database.Metadata{
-			"telegram_id":       body.TelegramID,
-			"telegram_username": body.TelegramUsername,
-			"source":            "telegram_bot",
-		},
-	}
-
-	if result := db.Create(&user); result.Error != nil {
-		r.log.Error("register user: db create user", "err", result.Error)
+	u, err := r.userSvc.RegisterTelegramUser(context.Background(), user.RegisterTelegramUserRequest{
+		TelegramID:       body.TelegramID,
+		Username:         body.Username,
+		TelegramUsername: body.TelegramUsername,
+		ReferredByCode:   body.ReferredByCode,
+	})
+	if err != nil {
+		r.log.Error("register user", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 
-	// Create companion subscription record.
-	subID := uuid.New().String()
-	xrayUUID := uuid.New().String()
-	email := fmt.Sprintf("bot_client_%d", body.TelegramID)
-
-	sub := database.Subscription{
-		ID:         subID,
-		UserID:     userID,
-		Email:      email,
-		XrayUUID:   xrayUUID,
-		Status:     "inactive",
-		MaxDevices: 3,
-		AutoRenew:  false,
-	}
-
-	if result := db.Create(&sub); result.Error != nil {
-		r.log.Error("register user: db create subscription", "err", result.Error)
-		// User created but no sub — not fatal, return user anyway.
-	}
-
-	writeJSON(w, http.StatusCreated, r.buildUserResponse(db, &user))
+	writeJSON(w, http.StatusCreated, r.buildUserResponse(u))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,15 +259,14 @@ func (r *Router) handleRegisterUser(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleListUsers(w http.ResponseWriter, req *http.Request) {
-	db := r.db
-	var users []database.User
-	if result := db.Find(&users); result.Error != nil {
-		r.log.Error("list users", "err", result.Error)
+	users, err := r.userSvc.FindAllUsers(context.Background())
+	if err != nil {
+		r.log.Error("list users", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
-	out := r.buildUsersResponseBulk(db, users)
+	out := r.buildUsersResponseBulk(users)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -365,10 +276,9 @@ func (r *Router) handleListUsers(w http.ResponseWriter, req *http.Request) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleListAdmins(w http.ResponseWriter, req *http.Request) {
-	db := r.db
-	var users []database.User
-	if result := db.Where("is_admin = ?", true).Find(&users); result.Error != nil {
-		r.log.Error("list admins", "err", result.Error)
+	users, err := r.userSvc.FindAdmins(context.Background())
+	if err != nil {
+		r.log.Error("list admins", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -393,7 +303,7 @@ func normalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-func extractTelegramID(metadata database.Metadata) int64 {
+func extractTelegramID(metadata domain.Metadata) int64 {
 	if metadata == nil {
 		return 0
 	}
@@ -415,65 +325,8 @@ func extractTelegramID(metadata database.Metadata) int64 {
 // findOrCreateWebUser looks up a user by email. If the user does not exist, it
 // creates a new User + Subscription record inside a single DB transaction.
 // This implements the "open registration" flow (Variant A).
-func (r *Router) findOrCreateWebUser(db *gorm.DB, email string) (*database.User, error) {
-	user, err := database.FindUserByPlatformID(db, "web", email)
-	if err == nil {
-		return user, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, fmt.Errorf("findOrCreateWebUser: db lookup: %w", err)
-	}
-
-	// --- Auto-registration ---
-	r.webRegMu.Lock()
-	defer r.webRegMu.Unlock()
-	
-	// Double check inside the lock
-	user, err = database.FindUserByPlatformID(db, "web", email)
-	if err == nil {
-		return user, nil
-	}
-	var newUser *database.User
-	txErr := db.Transaction(func(tx *gorm.DB) error {
-		userID := uuid.New().String()
-		refCode := generateRefCode(tx)
-
-		u := database.User{
-			ID:      userID,
-			Username: email,
-			Balance: 0,
-			IsAdmin: false,
-			RefCode: refCode,
-			Metadata: database.Metadata{
-				"email":  email,
-				"source": "website",
-			},
-		}
-		if err := tx.Create(&u).Error; err != nil {
-			return fmt.Errorf("create user: %w", err)
-		}
-
-		sub := database.Subscription{
-			ID:         uuid.New().String(),
-			UserID:     userID,
-			Email:      fmt.Sprintf("web_%s", uuid.New().String()[:8]),
-			XrayUUID:   uuid.New().String(),
-			Status:     "inactive",
-			MaxDevices: 3,
-			AutoRenew:  false,
-		}
-		if err := tx.Create(&sub).Error; err != nil {
-			return fmt.Errorf("create subscription: %w", err)
-		}
-
-		newUser = &u
-		return nil
-	})
-	if txErr != nil {
-		return nil, txErr
-	}
-	r.log.Info("web auto-registration", "email", email, "user_id", newUser.ID)
-	return newUser, nil
+func (r *Router) findOrCreateWebUser(email string) (*domain.User, error) {
+	return r.userSvc.FindOrCreateWebUser(context.Background(), email)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -492,8 +345,6 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-
 	// ── Web / Email flow ──────────────────────────────────────────────────────
 	if body.Platform == "web" {
 		email := normalizeEmail(body.Email)
@@ -503,7 +354,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		}
 
 		// Find or auto-create the user account.
-		_, err := r.findOrCreateWebUser(db, email)
+		_, err := r.findOrCreateWebUser(email)
 		if err != nil {
 			r.log.Error("request_code: findOrCreateWebUser", "email", email, "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to process user")
@@ -544,7 +395,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	}
 
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
-	_, err := database.FindUserByPlatformID(db, "telegram", tgIDStr)
+	_, err := r.userSvc.FindUserByPlatformID(context.Background(), "telegram", tgIDStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found. please start the bot first")
 		return
@@ -636,13 +487,12 @@ func (r *Router) handleGetUserByPlatform(w http.ResponseWriter, req *http.Reques
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, r.buildUserResponse(db, user))
+	writeJSON(w, http.StatusOK, r.buildUserResponse(user))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -657,13 +507,12 @@ func (r *Router) handleGetUserByRef(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-	var user database.User
-	if result := db.Where("ref_code = ?", code).First(&user); result.Error != nil {
+	user, err := r.userSvc.FindUserByRefCode(context.Background(), code)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, r.buildUserResponse(db, &user))
+	writeJSON(w, http.StatusOK, r.buildUserResponse(user))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -686,8 +535,7 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -698,16 +546,14 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Atomic update using raw query
-	query := "UPDATE users SET balance = CASE WHEN balance + ? < 0 THEN 0 ELSE balance + ? END WHERE id = ?"
-	if result := db.Exec(query, body.Amount, body.Amount, user.ID); result.Error != nil {
-		r.log.Error("adjust balance", "err", result.Error)
+	if err := r.userSvc.AdjustBalance(context.Background(), user.ID, body.Amount); err != nil {
+		r.log.Error("adjust balance", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
-	var updatedBalance int
-	db.Model(user).Select("balance").Scan(&updatedBalance)
-	writeJSON(w, http.StatusOK, map[string]interface{}{"balance": updatedBalance})
+	updatedUser, _ := r.userSvc.FindUserByID(context.Background(), user.ID)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"balance": updatedUser.Balance})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -730,8 +576,7 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -741,10 +586,8 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if result := db.Model(&database.Subscription{}).
-		Where("user_id = ?", user.ID).
-		Update("max_devices", body.MaxDevices); result.Error != nil {
-		r.log.Error("set max devices", "err", result.Error)
+	if err := r.userSvc.UpdateMaxDevices(context.Background(), user.ID, body.MaxDevices); err != nil {
+		r.log.Error("set max devices", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -768,8 +611,7 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -779,10 +621,8 @@ func (r *Router) handleAutoRenewToggle(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	if result := db.Model(&database.Subscription{}).
-		Where("user_id = ?", user.ID).
-		Update("auto_renew", body.AutoRenew); result.Error != nil {
-		r.log.Error("auto-renew toggle", "err", result.Error)
+	if err := r.userSvc.UpdateAutoRenew(context.Background(), user.ID, body.AutoRenew); err != nil {
+		r.log.Error("auto-renew toggle", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -825,8 +665,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		body.MaxDevices = 3
 	}
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -836,86 +675,17 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Resolve plan price outside the transaction (read-only, no concurrency issue).
-	if body.PlanID != nil {
-		var plan database.Plan
-		if err := db.First(&plan, *body.PlanID).Error; err != nil {
-			writeError(w, http.StatusBadRequest, "invalid plan_id")
-			return
-		}
-		body.PlanTotalPrice = plan.BasePrice
-		if plan.GlobalDiscountPercent > 0 {
-			body.PlanTotalPrice = plan.BasePrice - (plan.BasePrice * plan.GlobalDiscountPercent / 100)
-		}
-		// NOTE: newEndsAt will be computed inside the transaction using the
-		// locked subscription row to prevent double-click race conditions.
-	} else {
-		_, parseErr := convert.ParseExpiryDate(body.NewEndsAt)
-		if parseErr != nil {
+	var newEndsAtPtr *time.Time
+	if body.NewEndsAt != "" {
+		t, err := time.Parse(time.RFC3339, body.NewEndsAt)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid new_ends_at format")
 			return
 		}
+		newEndsAtPtr = &t
 	}
 
-	// Atomic: lock the subscription row, compute new expiry, deduct balance —
-	// all inside a single transaction to prevent double-spend on concurrent requests.
-	var newEndsAt time.Time
-	txErr := db.Transaction(func(tx *gorm.DB) error {
-		// Lock the subscription row for the duration of this transaction.
-		// FOR UPDATE prevents a second concurrent request from reading the
-		// same ends_at and computing an identical (wrong) new expiry.
-		var sub database.Subscription
-		lockQuery := tx.Where("user_id = ?", user.ID).Order("created_at desc")
-		if tx.Dialector.Name() == "postgres" {
-			lockQuery = lockQuery.Set("gorm:query_option", "FOR UPDATE")
-		}
-		if err := lockQuery.First(&sub).Error; err != nil {
-			return fmt.Errorf("subscription not found: %w", err)
-		}
-
-		if body.PlanID != nil {
-			var plan database.Plan
-			if err := tx.First(&plan, *body.PlanID).Error; err != nil {
-				return fmt.Errorf("plan not found: %w", err)
-			}
-			baseTime := time.Now()
-			if sub.EndsAt != nil && sub.EndsAt.After(time.Now()) {
-				baseTime = *sub.EndsAt
-			}
-			newEndsAt = baseTime.AddDate(0, plan.Months, 0)
-		} else {
-			var parseErr error
-			newEndsAt, parseErr = convert.ParseExpiryDate(body.NewEndsAt)
-			if parseErr != nil {
-				return parseErr
-			}
-		}
-
-		// Only deduct if price > 0.
-		if body.PlanTotalPrice > 0 {
-			result := tx.Model(&database.User{}).
-				Where("id = ? AND balance >= ?", user.ID, body.PlanTotalPrice).
-				Update("balance", gorm.Expr("balance - ?", body.PlanTotalPrice))
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected == 0 {
-				return fmt.Errorf("insufficient balance")
-			}
-		}
-
-		now := time.Now()
-		return tx.Model(&database.Subscription{}).
-			Where("user_id = ?", user.ID).
-			Updates(map[string]interface{}{
-				"status":      "active",
-				"ends_at":     newEndsAt,
-				"max_devices": body.MaxDevices,
-				"starts_at":   now,
-				"updated_at":  now,
-			}).Error
-	})
-
+	txErr := r.userSvc.AutoRenewSubscription(context.Background(), user.ID, body.PlanID, body.PlanTotalPrice, newEndsAtPtr, body.MaxDevices)
 	if txErr != nil {
 		if txErr.Error() == "insufficient balance" {
 			writeError(w, http.StatusPaymentRequired, "insufficient balance")
@@ -927,12 +697,12 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Fetch the updated subscription and ensure user is unbanned in Xray config
-	var updatedSub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).First(&updatedSub).Error; err == nil {
+	updatedSub, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err == nil {
 		// Delete any sent notification flags so they can be re-triggered when this sub nears expiration
-		db.Where("subscription_id = ?", updatedSub.ID).Delete(&database.SubscriptionNotification{})
-		
-		r.unbanUserInXrayAsync(updatedSub)
+		r.userSvc.DeleteNotificationsBySubID(context.Background(), updatedSub.ID)
+
+		r.unbanUserInXrayAsync(*updatedSub)
 	} else {
 		r.log.Error("failed to find subscription after auto-renew for unban", "user_id", user.ID, "err", err)
 	}
@@ -961,8 +731,7 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -974,12 +743,12 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 
 	// Merge into existing metadata map.
 	if user.Metadata == nil {
-		user.Metadata = database.Metadata{}
+		user.Metadata = domain.Metadata{}
 	}
 	user.Metadata[body.Key] = body.Value
 
-	if result := db.Model(user).Updates(database.User{Metadata: user.Metadata}); result.Error != nil {
-		r.log.Error("set metadata", "err", result.Error)
+	if err := r.userSvc.UpdateUser(context.Background(), user); err != nil {
+		r.log.Error("set metadata", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -1006,47 +775,14 @@ func (r *Router) handleAdminListUsers(w http.ResponseWriter, req *http.Request) 
 		limit = l
 	}
 
-	db := r.db
-	query := db.Model(&database.User{})
-
-	if search != "" {
-		if db.Dialector.Name() == "postgres" {
-			likeQ := "%" + search + "%"
-			query = query.Where("username ILIKE ? OR metadata::text ILIKE ?", likeQ, likeQ)
-		} else {
-			searchLower := strings.ToLower(search)
-			searchUpper := strings.ToUpper(search)
-			
-			searchTitle := ""
-			if r, n := utf8.DecodeRuneInString(searchLower); n > 0 {
-				searchTitle = strings.ToUpper(string(r)) + searchLower[n:]
-			}
-			
-			likeLower := "%" + searchLower + "%"
-			likeUpper := "%" + searchUpper + "%"
-			likeTitle := "%" + searchTitle + "%"
-			likeOrig := "%" + search + "%"
-			
-			query = query.Where(
-				"username LIKE ? OR username LIKE ? OR username LIKE ? OR username LIKE ? OR "+
-				"metadata LIKE ? OR metadata LIKE ? OR metadata LIKE ? OR metadata LIKE ?",
-				likeLower, likeUpper, likeTitle, likeOrig,
-				likeLower, likeUpper, likeTitle, likeOrig,
-			)
-		}
-	}
-
-	var total int64
-	query.Count(&total)
-
-	var users []database.User
-	if err := query.Offset((page - 1) * limit).Limit(limit).Find(&users).Error; err != nil {
-		r.log.Error("admin list users: db query error", "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to query users")
+	users, total, err := r.userSvc.ListUsers(context.Background(), page, limit, search)
+	if err != nil {
+		r.log.Error("admin list users", "err", err)
+		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
-	out := r.buildUsersResponseBulk(db, users)
+	out := r.buildUsersResponseBulk(users)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"total": total,
@@ -1064,41 +800,28 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	db := r.db
-
 	// Find subscription by email.
-	var sub database.Subscription
-	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
+	subPtr, err := r.userSvc.GetSubscriptionByEmail(context.Background(), email)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
+	sub := *subPtr
 
-	// 1. Remove from Xray config and API to make the ban instant
-	var tags []string
-	modErr := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
-		t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
-		tags = t
-		return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
-	})
-
-	if modErr != nil {
-		r.log.Error("admin block user: xrayconfig update failed", "err", modErr)
-		writeError(w, http.StatusInternalServerError, "failed to update xray config")
+	// 1. Remove from engine config and memory via abstraction
+	if err := r.engine.RemoveUser(context.Background(), sub.Email); err != nil {
+		r.log.Error("admin block user: engine remove failed", "email", sub.Email, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to remove user from engine")
 		return
-	}
-
-	if len(tags) > 0 {
-		apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
-		_ = apiClient.RemoveUser(sub.Email, tags)
 	}
 
 	// 2. Add to limitedDB (Removed)
 	// 3. Update DB Status
-	if result := db.Model(&sub).Updates(map[string]interface{}{
+	if err := r.userSvc.UpdateSubscriptionFields(context.Background(), sub.ID, map[string]interface{}{
 		"status":     "blocked",
 		"updated_at": time.Now(),
-	}); result.Error != nil {
-		r.log.Error("admin block user: db status update failed", "err", result.Error)
+	}); err != nil {
+		r.log.Error("admin block user: db status update failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to update db status")
 		return
 	}
@@ -1138,10 +861,8 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 		_ = json.Unmarshal(data, &body)
 	}
 
-	db := r.db
-
-	var sub database.Subscription
-	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
+	sub, err := r.userSvc.GetSubscriptionByEmail(context.Background(), email)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
@@ -1154,14 +875,14 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 		updates["max_devices"] = *body.Limit
 	}
 
-	if result := db.Model(&sub).Updates(updates); result.Error != nil {
-		r.log.Error("admin unblock user", "err", result.Error)
+	if err := r.userSvc.UpdateSubscriptionFields(context.Background(), sub.ID, updates); err != nil {
+		r.log.Error("admin unblock user", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
 	// Also unblock the global user record just in case they were globally banned
-	db.Model(&database.User{}).Where("id = ?", sub.UserID).Update("is_blocked", false)
+	r.userSvc.UpdateIsBlocked(context.Background(), sub.UserID, false)
 
 	// If Anti-Fraud module is active, force lift any soft-ban on this user.
 	if r.forceUnban != nil {
@@ -1169,14 +890,15 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	}
 
 	// Reload sub from DB so unbanUserInXray receives fresh max_devices / status.
-	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
+	sub, err = r.userSvc.GetSubscriptionByEmail(context.Background(), email)
+	if err != nil {
 		r.log.Error("admin unblock user: reload subscription", "err", err)
 		writeError(w, http.StatusInternalServerError, "db reload error")
 		return
 	}
 
 	// 2. Put user back into Xray config & API memory
-	r.unbanUserInXrayAsync(sub)
+	r.unbanUserInXrayAsync(*sub)
 
 	r.log.Warn("admin action", "action", "unblock", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1208,38 +930,37 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	db := r.db
-
-	var sub database.Subscription
-	if result := db.Where("email = ?", email).Order("created_at desc").First(&sub); result.Error != nil {
+	sub, err := r.userSvc.GetSubscriptionByEmail(context.Background(), email)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
 
-	if result := db.Model(&sub).Updates(map[string]interface{}{
+	if err := r.userSvc.UpdateSubscriptionFields(context.Background(), sub.ID, map[string]interface{}{
 		"ends_at":    expireTime,
 		"status":     "active",
 		"updated_at": time.Now(),
-	}); result.Error != nil {
-		r.log.Error("admin set expire", "err", result.Error)
+	}); err != nil {
+		r.log.Error("admin set expire", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
 	// Also unblock the global user record just in case they were globally banned
-	db.Model(&database.User{}).Where("id = ?", sub.UserID).Update("is_blocked", false)
+	r.userSvc.UpdateIsBlocked(context.Background(), sub.UserID, false)
 
 	// Reload sub from DB so unbanUserInXray receives the updated ends_at / status.
-	if err := db.Where("email = ?", email).Order("created_at desc").First(&sub).Error; err != nil {
+	sub, err = r.userSvc.GetSubscriptionByEmail(context.Background(), email)
+	if err != nil {
 		r.log.Error("admin set expire: reload subscription", "err", err)
 		writeError(w, http.StatusInternalServerError, "db reload error")
 		return
 	}
 
 	// Delete any sent notification flags so they can be re-triggered
-	db.Where("subscription_id = ?", sub.ID).Delete(&database.SubscriptionNotification{})
+	r.userSvc.DeleteNotificationsBySubID(context.Background(), sub.ID)
 
-	r.unbanUserInXrayAsync(sub)
+	r.unbanUserInXrayAsync(*sub)
 
 	r.log.Warn("admin action", "action", "set-expire", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1254,21 +975,21 @@ func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err != nil {
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
+	sub := *subPtr
 
-	var devices []database.Device
-	if err := db.Where("subscription_id = ?", sub.ID).Find(&devices).Error; err != nil {
+	devices, err := r.userSvc.FindDevicesBySubscriptionID(context.Background(), sub.ID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to query devices")
 		return
 	}
@@ -1282,36 +1003,41 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 	deviceIDStr := req.PathValue("device_id")
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil || user == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err != nil {
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
+	sub := *subPtr
 
-	var device database.Device
-	if err := db.Where("id = ? AND subscription_id = ?", deviceIDStr, sub.ID).First(&device).Error; err != nil {
+	deviceID, err := strconv.ParseInt(deviceIDStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid device ID")
+		return
+	}
+
+	device, err := r.userSvc.FindDeviceByIDAndSubscription(context.Background(), deviceID, sub.ID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
 
-	if err := db.Delete(&device).Error; err != nil {
+	if err := r.userSvc.DeleteDevice(context.Background(), device.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete device")
 		return
 	}
 
 	// Auto-unblock if limit is resolved
-	var count int64
-	db.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&count)
+	count, _ := r.userSvc.CountActiveDevices(context.Background(), sub.ID)
 	if count <= int64(sub.MaxDevices) && sub.Status == "blocked" {
 		if sub.EndsAt == nil || sub.EndsAt.After(time.Now()) {
-			db.Model(&sub).Update("status", "active")
+			r.userSvc.UpdateSubscriptionFields(context.Background(), sub.ID, map[string]interface{}{"status": "active"})
 			r.unbanUserInXrayAsync(sub)
 			r.log.Info("auto-unblocked user after device deletion", "email", sub.Email)
 		}
@@ -1320,7 +1046,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (r *Router) unbanUserInXrayAsync(sub database.Subscription) {
+func (r *Router) unbanUserInXrayAsync(sub domain.Subscription) {
 	r.bgTasks.Add(1)
 	go func() {
 		defer r.bgTasks.Done()
@@ -1328,7 +1054,7 @@ func (r *Router) unbanUserInXrayAsync(sub database.Subscription) {
 	}()
 }
 
-func (r *Router) unbanUserInXray(sub database.Subscription) {
+func (r *Router) unbanUserInXray(sub domain.Subscription) {
 	// Remove from limitedDB (Removed)
 	// We must re-add them to Xray config json & hot reload
 	subfile := ""
@@ -1342,38 +1068,20 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 		expireVal = sub.EndsAt.Format("02.01.2006")
 	}
 
-	limitF := float64(sub.MaxDevices)
-	params := xrayconfig.ClientParams{
-		Email:   sub.Email,
-		UUID:    sub.XrayUUID,
-		Auth:    "", 
-		Subfile: subfile,
-		Expire:  expireVal,
-		Limit:   &limitF,
+	limitInt := sub.MaxDevices
+
+	userCfg := domain.VPNUserConfig{
+		Email:      sub.Email,
+		UUID:       sub.XrayUUID,
+		Subfile:    subfile,
+		Expire:     expireVal,
+		MaxDevices: limitInt,
 	}
 
-	var payload []xrayconfig.TaggedClient
-
-	err := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(xrayCfg xrayconfig.RawConfig) error {
-		var innerErr error
-		payload, innerErr = xrayconfig.BuildForAllInbounds(xrayCfg, params)
-		if innerErr != nil {
-			return innerErr
-		}
-		return xrayconfig.AddUserToInbounds(xrayCfg, payload)
-	})
-
-	if err != nil {
-		r.log.Error("failed to modify xray config for unban", "err", err)
-		return
+	if err := r.engine.AddUser(context.Background(), userCfg); err != nil {
+		r.log.Error("failed to add user to engine for unban", "email", sub.Email, "err", err)
 	}
 
-	apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
-	if err := apiClient.AddUser(payload, r.cfg.Paths.XrayConfig); err != nil {
-		r.log.Error("hot-add failed", "email", sub.Email, "err", err)
-	}
-
-	// Propagate to slaves
 	if r.cfg.IsMaster() {
 		client := slave.NewClient(
 			r.cfg.SlaveAPI.ConnectTimeout,
@@ -1388,7 +1096,7 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 			"subfile": subfile,
 			"expire":  expireVal,
 			"auth":    "",
-			"limit":   fmt.Sprintf("%.0f", limitF),
+			"limit":   fmt.Sprintf("%d", limitInt),
 		}
 
 		go func() {
@@ -1402,42 +1110,32 @@ func (r *Router) unbanUserInXray(sub database.Subscription) {
 	}
 }
 
-
-
 // POST /api/v1/admin/users/{platform}/{id}/global-ban
 func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) {
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
 	// Set IsBlocked to true
-	if result := db.Model(user).Update("is_blocked", true); result.Error != nil {
-		r.log.Error("admin global ban user: update db failed", "err", result.Error)
+	if err := r.userSvc.UpdateIsBlocked(context.Background(), user.ID, true); err != nil {
+		r.log.Error("admin global ban user: update db failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 
 	// Find the user's subscription to remove them from Xray
-	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err == nil && sub.Email != "" {
-		// Remove from Xray config
-		var tags []string
-		modErr := xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
-			t, _ := xrayconfig.InboundTagsForUser(cfg, sub.Email)
-			tags = t
-			return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
-		})
-		if modErr == nil && len(tags) > 0 {
-			apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
-			_ = apiClient.RemoveUser(sub.Email, tags)
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err == nil && subPtr != nil && subPtr.Email != "" {
+		sub := *subPtr
+		if err := r.engine.RemoveUser(context.Background(), sub.Email); err != nil {
+			r.log.Warn("global-ban: engine remove failed", "email", sub.Email, "err", err)
 		}
-		
+
 		// Optional: propagate to slaves
 		if r.cfg.IsMaster() {
 			client := slave.NewClient(
@@ -1459,24 +1157,23 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := r.db
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
 	// Set IsBlocked to false
-	if result := db.Model(user).Update("is_blocked", false); result.Error != nil {
-		r.log.Error("admin global unban user: update db failed", "err", result.Error)
+	if err := r.userSvc.UpdateIsBlocked(context.Background(), user.ID, false); err != nil {
+		r.log.Error("admin global unban user: update db failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 
 	// If the subscription is active, re-add to Xray
-	var sub database.Subscription
-	if err := db.Where("user_id = ?", user.ID).Order("created_at desc").First(&sub).Error; err == nil && sub.Email != "" && sub.Status == "active" {
-		r.unbanUserInXrayAsync(sub)
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err == nil && subPtr != nil && subPtr.Email != "" && subPtr.Status == "active" {
+		r.unbanUserInXrayAsync(*subPtr)
 	}
 
 	r.log.Warn("admin action", "action", "global-unban", "id", idStr, "caller_ip", getClientIP(req))
@@ -1518,88 +1215,38 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 	platform := req.PathValue("platform")
 	idStr := req.PathValue("id")
 
-	db := r.db
-
-	user, err := database.FindUserByPlatformID(db, platform, idStr)
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	tx := db.Begin()
-	if tx.Error != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start db transaction")
-		return
-	}
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
 
-	var subs []database.Subscription
-	if err := tx.Where("user_id = ?", user.ID).Find(&subs).Error; err != nil {
-		tx.Rollback()
-		writeError(w, http.StatusInternalServerError, "failed to find subscriptions")
-		return
-	}
-
-	for _, sub := range subs {
-		// 1. Delete dependent tables
-		tx.Where("subscription_id = ?", sub.ID).Delete(&database.Device{})
-		tx.Where("subscription_id = ?", sub.ID).Delete(&database.SubscriptionNotification{})
-		tx.Where("email = ?", sub.Email).Delete(&database.AntifraudBan{})
-	}
-
-	// 2. Delete subscriptions
-	if err := tx.Where("user_id = ?", user.ID).Delete(&database.Subscription{}).Error; err != nil {
-		tx.Rollback()
-		writeError(w, http.StatusInternalServerError, "failed to delete subscriptions")
-		return
-	}
-
-	// 3. Delete payments and referrals
-	tx.Where("user_id = ?", user.ID).Delete(&database.Payment{})
-	tx.Where("referrer_id = ? OR referred_id = ?", user.ID, user.ID).Delete(&database.ReferralReward{})
-
-	// 4. Delete user
-	if err := tx.Delete(&user).Error; err != nil {
-		tx.Rollback()
+	if err := r.userSvc.DeleteUserAndData(context.Background(), user.ID); err != nil {
+		r.log.Error("admin delete user: db transaction failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
 
-	// Commit transaction
-	if err := tx.Commit().Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
-		return
-	}
+	// 5. Remove from Xray config and memory
+	if subPtr != nil {
+		sub := *subPtr
+		if err := r.engine.RemoveUser(context.Background(), sub.Email); err != nil {
+			r.log.Error("failed to remove user from engine", "email", sub.Email, "err", err)
+		}
 
-	// 5. Remove from Xray config and reload
-	xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
-	if err == nil {
-		for _, sub := range subs {
-			// Remove from runtime
-			apiClient := xrayapi.NewGRPCClient(r.cfg.Xray.APIAddr)
-			tags, _ := xrayconfig.InboundTagsForUser(xrayCfg, sub.Email)
-			if len(tags) > 0 {
-				_ = apiClient.RemoveUser(sub.Email, tags)
-			}
-
-			// Remove from config on disk
-			_ = xrayconfig.Modify(r.cfg.Paths.XrayConfig, func(cfg xrayconfig.RawConfig) error {
-				return xrayconfig.RemoveUserFromAllInbounds(cfg, sub.Email)
-			})
-
-			// Propagate to slaves
-			if r.cfg.IsMaster() {
-				client := slave.NewClient(
-					r.cfg.SlaveAPI.ConnectTimeout,
-					r.cfg.SlaveAPI.RequestTimeout,
-					r.cfg.SlaveAPI.RemotePath,
-				)
-				reg := slave.NewRegistry(r.cfg.SlaveServers, client)
-				go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
-			}
+		if r.cfg.IsMaster() {
+			client := slave.NewClient(
+				r.cfg.SlaveAPI.ConnectTimeout,
+				r.cfg.SlaveAPI.RequestTimeout,
+				r.cfg.SlaveAPI.RemotePath,
+			)
+			reg := slave.NewRegistry(r.cfg.SlaveServers, client)
+			go reg.PropagateAll("rmuser", map[string]string{"email": sub.Email})
 		}
 	}
 
 	r.log.Warn("admin action", "action", "delete-user", "id", idStr, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "success", "ok": true, "message": "User permanently deleted"})
 }
-

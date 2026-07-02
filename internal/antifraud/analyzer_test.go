@@ -1,27 +1,29 @@
 package antifraud
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
+	"xraytool/internal/vpn"
 )
 
 // setupTestDB creates an isolated SQLite database for testing.
-// Each call gets its own temp-file DB to prevent cross-test contamination.
+// Each call gets its own unique in-memory DB to prevent cross-test contamination and file locking issues on Windows.
 func setupTestDB(t testing.TB) *gorm.DB {
 	t.Helper()
-	// Use a unique file per test; TempDir is cleaned up automatically.
-	path := filepath.Join(t.TempDir(), "test.db")
+	dbName := "test_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	path := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{
 		Logger: nil, // silent
 	})
@@ -40,17 +42,15 @@ func TestAnalyzer_Enforce(t *testing.T) {
 		sqlDB.Close()
 	}()
 
-	cfg := &appconfig.Config{
-		AntiFraud: appconfig.AntiFraudConf{
-			BanDuration: "1h",
-		},
+	cfg := &Config{
+		BanDuration: "1h",
 	}
 
 	state := newState()
 	bs := newBanStore()
 	log := slog.Default()
 
-	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 3, db, log)
+	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, log)
 
 	email := "badguy@example.com"
 	an.enforce(email, "test reason")
@@ -74,10 +74,8 @@ func TestAnalyzer_HandleEvent_DefaultOneDevice(t *testing.T) {
 		sqlDB.Close()
 	}()
 
-	cfg := &appconfig.Config{
-		AntiFraud: appconfig.AntiFraudConf{
-			BanDuration: "1h",
-		},
+	cfg := &Config{
+		BanDuration: "1h",
 	}
 
 	state := newState()
@@ -85,7 +83,7 @@ func TestAnalyzer_HandleEvent_DefaultOneDevice(t *testing.T) {
 	log := slog.Default()
 
 	// maxIPs = 2, no subscription in DB → device limit defaults to 1 → threshold = 2*1 = 2
-	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 2, db, log)
+	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 2, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, log)
 
 	email := "user@x.com"
 
@@ -114,10 +112,8 @@ func TestAnalyzer_HandleEvent_MultiDevice(t *testing.T) {
 		sqlDB.Close()
 	}()
 
-	cfg := &appconfig.Config{
-		AntiFraud: appconfig.AntiFraudConf{
-			BanDuration: "1h",
-		},
+	cfg := &Config{
+		BanDuration: "1h",
 	}
 
 	// Create a subscription with MaxDevices = 2
@@ -136,7 +132,7 @@ func TestAnalyzer_HandleEvent_MultiDevice(t *testing.T) {
 	log := slog.Default()
 
 	// maxIPs = 3, MaxDevices = 2 → dynamic threshold = 3 * 2 = 6
-	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 3, db, log)
+	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, log)
 
 	// Pre-warm the device cache synchronously so the async fetch does not
 	// race with the handleEvent calls below.
@@ -160,8 +156,8 @@ func TestAnalyzer_GetDeviceLimit_Fallback(t *testing.T) {
 		sqlDB.Close()
 	}()
 
-	cfg := &appconfig.Config{}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	cfg := &Config{}
+	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// User not in DB — should return 1 (safe fallback)
 	limit := an.getDeviceLimit("unknown@example.com")
@@ -185,8 +181,8 @@ func TestAnalyzer_GetDeviceLimit_CacheHit(t *testing.T) {
 		MaxDevices: 5,
 	})
 
-	cfg := &appconfig.Config{}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	cfg := &Config{}
+	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Warm the cache synchronously with a bulk refresh (same path used in production).
 	an.refreshDeviceCache()
@@ -220,8 +216,8 @@ func TestAnalyzer_RefreshDeviceCache(t *testing.T) {
 		Email: "refresh@x.com", Status: "active", MaxDevices: 4,
 	})
 
-	cfg := &appconfig.Config{}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	cfg := &Config{}
+	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	an.refreshDeviceCache()
 
@@ -274,13 +270,13 @@ func TestUnbanCleaner_ProcessExpired(t *testing.T) {
 		Reason:    "active ban",
 	})
 
-	cfg := &appconfig.Config{}
+	cfg := &Config{}
 	bs := newBanStore()
 	bs.setBan("expired@x.com", past)
 	bs.setBan("active@x.com", future)
 	log := slog.Default()
 
-	uc := newUnbanCleaner(cfg, bs, db, log)
+	uc := newUnbanCleaner(cfg, bs, database.NewRegistry(db), &mockFailEngine{}, nil, log)
 
 	// Run processExpired
 	uc.processExpired()
@@ -289,7 +285,7 @@ func TestUnbanCleaner_ProcessExpired(t *testing.T) {
 	assert.False(t, bs.isBanned("expired@x.com"))
 	var count int64
 	db.Model(&database.AntifraudBan{}).Where("email = ?", "expired@x.com").Count(&count)
-	// Note: Since we changed tryUnban to require a successful Xray call, 
+	// Note: Since we changed tryUnban to require a successful Xray call,
 	// and Xray config is missing in this test, the DB record will NOT be deleted.
 	// We just verify it doesn't panic and behaves as expected on failure.
 	assert.Equal(t, int64(1), count, "expired DB record should NOT be deleted if Xray call fails")
@@ -298,6 +294,14 @@ func TestUnbanCleaner_ProcessExpired(t *testing.T) {
 	assert.True(t, bs.isBanned("active@x.com"))
 	db.Model(&database.AntifraudBan{}).Where("email = ?", "active@x.com").Count(&count)
 	assert.Equal(t, int64(1), count, "active DB record should remain")
+}
+
+type mockFailEngine struct {
+	vpn.NoopEngine
+}
+
+func (mockFailEngine) UnbanUser(ctx context.Context, email string) error {
+	return fmt.Errorf("simulated failure")
 }
 
 // generateIP produces a deterministic IP string for testing.

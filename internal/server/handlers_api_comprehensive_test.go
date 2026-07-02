@@ -17,7 +17,6 @@ import (
 // Tests for handleCreatePayment
 func TestCreatePayment_Comprehensive(t *testing.T) {
 	r := newTestRouter(t)
-	db := database.DB()
 
 	// Register user
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":555001,"username":"TestPay"}`)
@@ -42,21 +41,21 @@ func TestCreatePayment_Comprehensive(t *testing.T) {
 
 	// Create a plan with unique months
 	plan := database.Plan{Months: 99, BasePrice: 1000, GlobalDiscountPercent: 10, IsActive: true}
-	db.Create(&plan)
+	testDB.Create(&plan)
 
 	// Create a promo code
 	promo := database.PromoCode{Code: "TESTPROMO20", DiscountPercent: 20, MaxUses: 1, TargetPlatform: "all", IsActive: true}
-	db.Create(&promo)
+	testDB.Create(&promo)
 
 	// 4. Create payment with plan_id (should apply promo over global discount because 20 > 10)
 	w4 := doAuth(r, "POST", "/api/v1/payments/create", fmt.Sprintf(`{"telegram_id":555001,"payment_type":"subscription","plan_id":%d,"promo_code":"TESTPROMO20","platform":"all"}`, plan.ID))
 	if w4.Code != http.StatusCreated {
 		t.Fatalf("Expected 201 for plan+promo, got %d. body: %s", w4.Code, w4.Body.String())
 	}
-	
+
 	pid := int(jsonBody(t, w4)["payment_id"].(float64))
 	var p database.Payment
-	db.First(&p, pid)
+	testDB.First(&p, pid)
 	if p.Amount != 800 {
 		t.Errorf("Expected amount 800 (20%% off 1000), got %d", p.Amount)
 	}
@@ -76,20 +75,19 @@ func TestCreatePayment_Comprehensive(t *testing.T) {
 
 func TestValidatePromoCode_Comprehensive(t *testing.T) {
 	r := newTestRouter(t)
-	db := database.DB()
 
 	// Create promo codes
 	activePromo := database.PromoCode{Code: "ACTIVE10", DiscountPercent: 10, TargetPlatform: "android", IsActive: true}
 	inactivePromo := database.PromoCode{Code: "INACTIVE", DiscountPercent: 50, TargetPlatform: "all", IsActive: true}
-	db.Create(&inactivePromo)
-	db.Model(&inactivePromo).Update("is_active", false)
-	
+	testDB.Create(&inactivePromo)
+	testDB.Model(&inactivePromo).Update("is_active", false)
+
 	now := time.Now()
 	expiredTime := now.Add(-1 * time.Hour)
 	expiredPromo := database.PromoCode{Code: "EXPIRED", DiscountPercent: 20, TargetPlatform: "all", IsActive: true, ExpiresAt: &expiredTime}
-	
-	db.Create(&activePromo)
-	db.Create(&expiredPromo)
+
+	testDB.Create(&activePromo)
+	testDB.Create(&expiredPromo)
 
 	tests := []struct {
 		name       string
@@ -116,12 +114,12 @@ func TestValidatePromoCode_Comprehensive(t *testing.T) {
 
 	// Test already used by user
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":666001,"username":"PromoUser"}`)
-	
+
 	var u database.User
-	db.Where("username = ?", "PromoUser").First(&u)
+	testDB.Where("username = ?", "PromoUser").First(&u)
 
 	// Create a completed payment with ACTIVE10
-	db.Create(&database.Payment{
+	testDB.Create(&database.Payment{
 		UserID: u.ID, Amount: 100, Status: "completed", PaymentType: "sub", Method: "test", PromoCodeID: &activePromo.ID,
 	})
 
@@ -133,15 +131,14 @@ func TestValidatePromoCode_Comprehensive(t *testing.T) {
 
 func TestPlatgaCallback_Comprehensive(t *testing.T) {
 	r := newTestRouter(t)
-	db := database.DB()
 
 	// Register user
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":777001,"username":"PlatgaUser"}`)
 	var u database.User
-	db.Where("username = ?", "PlatgaUser").First(&u)
+	testDB.Where("username = ?", "PlatgaUser").First(&u)
 
 	extID := "ext_12345"
-	db.Create(&database.Payment{
+	testDB.Create(&database.Payment{
 		UserID: u.ID, Amount: 500, Status: "pending", PaymentType: "sub", Method: "platega", ExternalID: &extID,
 	})
 
@@ -149,7 +146,7 @@ func TestPlatgaCallback_Comprehensive(t *testing.T) {
 	payloadInvalid := []byte(`{invalid}`)
 	mac := hmac.New(sha256.New, []byte("test-platega-secret"))
 	mac.Write(payloadInvalid)
-	
+
 	reqInvalid := httptest.NewRequest("POST", "/api/v1/payments/platega/callback", bytes.NewReader(payloadInvalid))
 	reqInvalid.Header.Set("X-Platega-Signature", hex.EncodeToString(mac.Sum(nil)))
 	wInvalid := httptest.NewRecorder()
@@ -166,7 +163,7 @@ func TestPlatgaCallback_Comprehensive(t *testing.T) {
 	reqSuccess.Header.Set("Content-Type", "application/json")
 	// Platega sends the secret as plain text in X-Secret header
 	reqSuccess.Header.Set("X-Secret", "test-platega-secret")
-	
+
 	wSuccess := httptest.NewRecorder()
 	r.ServeHTTP(wSuccess, reqSuccess)
 	if wSuccess.Code != http.StatusOK {
@@ -175,7 +172,7 @@ func TestPlatgaCallback_Comprehensive(t *testing.T) {
 
 	// Check if payment was updated
 	var p database.Payment
-	db.Where("external_id = ?", extID).First(&p)
+	testDB.Where("external_id = ?", extID).First(&p)
 	if p.Status != "completed" {
 		t.Errorf("Expected payment status to be completed, got %s", p.Status)
 	}

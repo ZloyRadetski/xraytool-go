@@ -51,7 +51,7 @@ func TestDispatcherSync(t *testing.T) {
 		Webhooks: []string{ts.URL},
 	}
 
-	dispatcher := NewDispatcher(cfg)
+	dispatcher := NewDispatcher(&Config{Webhooks: cfg.Webhooks})
 
 	data := map[string]interface{}{"key": "value"}
 	dispatcher.DispatchSync("test_event", data, nil)
@@ -80,7 +80,7 @@ func TestDispatcherRetry(t *testing.T) {
 		Webhooks: []string{ts.URL},
 	}
 
-	dispatcher := NewDispatcher(cfg)
+	dispatcher := NewDispatcher(&Config{Webhooks: cfg.Webhooks})
 
 	// Override client to have short timeout and avoid long test delays
 	// Note: We can't easily override backoff slice in the sendWithRetry without refactoring,
@@ -131,7 +131,7 @@ func TestDispatcher_Dispatch_Async(t *testing.T) {
 	defer ts2.Close()
 
 	cfg := &appconfig.Config{Webhooks: []string{ts1.URL, ts2.URL}}
-	d := NewDispatcher(cfg)
+	d := NewDispatcher(&Config{Webhooks: cfg.Webhooks})
 
 	data := map[string]interface{}{"info": "test_data"}
 	metadata := map[string]interface{}{"user_id": "123"}
@@ -182,7 +182,7 @@ func TestDispatcher_NilConfig(t *testing.T) {
 func TestDispatcher_DeadWebhook_Fallback(t *testing.T) {
 	// Provide a URL that will definitely fail to connect immediately
 	cfg := &appconfig.Config{Webhooks: []string{"http://127.0.0.1:0"}}
-	d := NewDispatcher(cfg)
+	d := NewDispatcher(&Config{Webhooks: cfg.Webhooks})
 	// Speed up the backoff for test
 	d.client.Timeout = 1 * time.Millisecond
 	d.Dispatch("dead.event", nil, nil)

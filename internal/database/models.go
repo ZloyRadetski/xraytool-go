@@ -26,7 +26,7 @@ type User struct {
 	// ReferredBy is the ID of the user who referred this user (nullable FK → User.ID).
 	ReferredBy *string `gorm:"type:text;index"`
 	// Metadata stores platform-specific data as a JSON object.
-	Metadata  Metadata `gorm:"serializer:json"`
+	Metadata Metadata `gorm:"serializer:json"`
 	// IsBlocked indicates if the user is globally banned.
 	IsBlocked bool `gorm:"default:false;not null"`
 	CreatedAt time.Time
@@ -101,16 +101,16 @@ type Payment struct {
 	PlanID *int64 `gorm:"index"`
 	// PromoCodeID is the ID of the promo code used (if any).
 	PromoCodeID *int64 `gorm:"index"`
-	CreatedAt  time.Time
+	CreatedAt   time.Time
 }
 
 // Plan represents a subscription plan.
 type Plan struct {
-	ID                    int64     `gorm:"primaryKey;autoIncrement"`
-	Months                int       `gorm:"uniqueIndex;not null"`
-	BasePrice             int       `gorm:"not null"`
-	GlobalDiscountPercent int       `gorm:"default:0;not null"`
-	IsActive              bool      `gorm:"default:true;not null"`
+	ID                    int64 `gorm:"primaryKey;autoIncrement"`
+	Months                int   `gorm:"uniqueIndex;not null"`
+	BasePrice             int   `gorm:"not null"`
+	GlobalDiscountPercent int   `gorm:"default:0;not null"`
+	IsActive              bool  `gorm:"default:true;not null"`
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
@@ -147,14 +147,14 @@ type ReferralReward struct {
 
 // SubscriptionNotification records that a specific webhook warning was sent for a subscription.
 type SubscriptionNotification struct {
-	SubscriptionID string `gorm:"primaryKey;type:text"`
-	WarningLevel   string `gorm:"primaryKey;type:text"`
+	SubscriptionID string    `gorm:"primaryKey;type:text"`
+	WarningLevel   string    `gorm:"primaryKey;type:text"`
 	SentAt         time.Time `gorm:"autoCreateTime"`
 }
 
 // AntifraudBan records a temporary soft-ban imposed by the anti-fraud system.
 // The ban lives only in Xray memory — the user is removed from Xray runtime but
-// NOT from xrayconfig.json on disk. When ExpiresAt passes, the Unban Cleaner
+// NOT from vpn.json on disk. When ExpiresAt passes, the Unban Cleaner
 // verifies the subscription is still active in the DB before re-adding the user.
 //
 // Index on Email: fast lookup during subscription serving and syncstates.

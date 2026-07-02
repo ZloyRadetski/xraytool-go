@@ -5,14 +5,15 @@ import (
 	"os"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
+	"xraytool/internal/vpn"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -68,17 +69,17 @@ func TestProcessSQL_AntiFraudBan(t *testing.T) {
 		Headers:    make(map[string]string),
 	}
 
-	cm := NewCacheManager(cfg)
+	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
 
 	// 2. Mock isBanned to return TRUE
 	isBanned := func(email string) bool {
 		return email == "banned@example.com"
 	}
 
-	dispatcher := events.NewDispatcher(cfg)
+	dispatcher := events.NewDispatcher(&events.Config{Webhooks: []string{}})
 
 	// 3. Process
-	res := ProcessSQL(context.Background(), db, cm, dispatcher, req, isBanned)
+	res := ProcessSQL(context.Background(), database.NewRegistry(db), cm, dispatcher, req, isBanned)
 
 	// 4. Verify result is the dummy config
 	assert.Equal(t, 200, res.StatusCode, "Should return 200 OK")
@@ -126,17 +127,17 @@ func TestProcessSQL_Normal(t *testing.T) {
 		Headers:    make(map[string]string),
 	}
 
-	cm := NewCacheManager(cfg)
+	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
 
 	// 2. Mock isBanned to return FALSE
 	isBanned := func(email string) bool {
 		return false
 	}
 
-	dispatcher := events.NewDispatcher(cfg)
+	dispatcher := events.NewDispatcher(&events.Config{Webhooks: []string{}})
 
 	// 3. Process
-	res := ProcessSQL(context.Background(), db, cm, dispatcher, req, isBanned)
+	res := ProcessSQL(context.Background(), database.NewRegistry(db), cm, dispatcher, req, isBanned)
 
 	// 4. Verify result is NOT the dummy config, but real generation
 	// Note: generating real configs will fail inside ProcessSQL because xray_config.json is missing,

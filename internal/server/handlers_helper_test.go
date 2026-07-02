@@ -1,33 +1,36 @@
 package server_test
 
 import (
+	"xraytool/internal/domain"
+	"xraytool/internal/payment"
+	"xraytool/internal/user"
+
+	"gorm.io/gorm"
+
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"testing"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
+	"xraytool/internal/events"
 	"xraytool/internal/server"
 	"xraytool/internal/subscription"
+	"xraytool/internal/vpn"
+)
+
+var (
+	testDB  *gorm.DB
+	testReg domain.Registry
 )
 
 func TestMain(m *testing.M) {
-	// Initialize in-memory SQLite for all handler tests
-	f, _ := os.CreateTemp("", "xraytool_test_*.db")
-	f.Close()
-	defer os.Remove(f.Name())
-
-	if err := database.Init(database.Config{
-		Driver:      "sqlite",
-		SQLitePath:  f.Name(),
-		AutoMigrate: true,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "db init failed: %v\n", err)
-		os.Exit(1)
-	}
+	db, _ := database.NewConnection(database.Config{Driver: "sqlite", SQLitePath: ":memory:", Silent: true, AutoMigrate: true})
+	testDB = db
+	testReg = database.NewRegistry(db)
 	os.Exit(m.Run())
 }
 
@@ -47,8 +50,13 @@ func newTestRouter(t *testing.T) *server.Router {
 			XrayConfig: f.Name(),
 		},
 	}
-	cm := subscription.NewCacheManager(cfg)
-	return server.New(cfg, "test-api-key", cm, database.DB())
+	engine := &vpn.NoopEngine{}
+	cm := subscription.NewCacheManager(cfg, engine)
+	dispatcher := events.NewDispatcher(&events.Config{Webhooks: []string{}})
+	userSvc := user.NewService(testReg, user.Config{IsMaster: true, Domain: cfg.Server.Domain}, engine, nil, slog.Default())
+	paymentSvc := payment.NewService(testReg, dispatcher, slog.Default())
+
+	return server.New(cfg, "test-api-key", cm, engine, userSvc, paymentSvc, dispatcher, slog.Default())
 }
 
 func do(r *server.Router, method, path, body string, apiKey string) *httptest.ResponseRecorder {

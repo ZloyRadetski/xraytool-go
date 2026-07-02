@@ -4,20 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"log/slog"
 	"xraytool/internal/convert"
-	"xraytool/internal/database"
+	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
-	usersvc "xraytool/internal/user"
-	"log/slog"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -25,7 +20,7 @@ import (
 //
 // isBanned is a function provided by the antifraud module; pass nil to disable
 // anti-fraud checks (useful for tests or when the module is disabled).
-func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *events.Dispatcher, req *Request, isBanned func(email string) bool) *Response {
+func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, dispatcher *events.Dispatcher, req *Request, isBanned func(email string) bool) *Response {
 	cfg := cm.cfg
 
 	// 1. Resolve Client ID from request (xray_uuid)
@@ -59,20 +54,8 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 	}
 
 	// 3. Load Subscription and User from Database
-	var sub database.Subscription
-	// Backward compatibility: match new ID, old XrayUUID, or old subfile in metadata
-	var subs []database.Subscription
-	var query *gorm.DB
-	if db.Dialector.Name() == "postgres" {
-		query = db.WithContext(ctx).Where("id = ? OR xray_uuid = ? OR metadata::jsonb ->> 'subfile' = ? OR metadata::jsonb ->> 'subfile' = ?",
-			clientId, clientId, clientId, clientId+".txt")
-	} else {
-		query = db.WithContext(ctx).Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?",
-			clientId, clientId, clientId, clientId+".txt")
-	}
-
-	var user database.User
-	if err := query.Limit(1).Find(&subs).Error; err != nil {
+	subPtr, err := reg.Subscriptions().FindByClientIdentifier(ctx, clientId)
+	if err != nil {
 		logger.Errorf("[ProcessSQL] DB error fetching subscription %s: %v", clientId, err)
 		return failResponse(500, "Database error")
 	}
@@ -84,8 +67,10 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 	}
 
 	var source string
+	var sub domain.Subscription
+	var user domain.User
 
-	if len(subs) == 0 {
+	if subPtr == nil {
 		source = "xray config"
 		// Fallback: Check if user exists in xray_config.json directly (e.g. admin)
 		var foundEmail string
@@ -111,7 +96,7 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 
 		if foundEmail != "" {
 			// User exists only in config! Mock the sub and user objects
-			sub = database.Subscription{
+			sub = domain.Subscription{
 				ID:         clientId,
 				XrayUUID:   foundUUID,
 				Email:      foundEmail,
@@ -125,14 +110,13 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 		}
 	} else {
 		source = "database"
-		sub = subs[0]
-		if err := db.WithContext(ctx).Where("id = ?", sub.UserID).First(&user).Error; err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				logger.Errorf("[ProcessSQL] DB error fetching user for sub %s: %v", sub.ID, err)
-				return failResponse(500, "Database error")
-			}
+		sub = *subPtr
+		userPtr, err := reg.Users().FindByID(ctx, sub.UserID)
+		if err != nil {
+			logger.Errorf("[ProcessSQL] DB error fetching user for sub %s: %v", sub.ID, err)
 			return failResponse(404, "User not found")
 		}
+		user = *userPtr
 	}
 
 	isBlockedUser := sub.Status == "expired" || sub.Status == "blocked" || sub.Status == "inactive"
@@ -148,19 +132,18 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 		res := &Response{
 			StatusCode: 200,
 			Headers: map[string]string{
-				"Content-Type":      "text/plain; charset=utf-8",
+				"Content-Type":        "text/plain; charset=utf-8",
 				"Content-Disposition": `attachment; filename="configs.txt"`,
-				"Profile-Title":     "Torvalds VPN",
-				"X-Reject-Reason":   "antifraud_ban",
-				"Cache-Control":     "no-store, no-cache, must-revalidate, max-age=0",
-				"Pragma":            "no-cache",
+				"Profile-Title":       "Torvalds VPN",
+				"X-Reject-Reason":     "antifraud_ban",
+				"Cache-Control":       "no-store, no-cache, must-revalidate, max-age=0",
+				"Pragma":              "no-cache",
 			},
 			Body: generateDummyVless(cm.cfg.Subscription.DummyConfigs.AntiFraud),
 		}
 		slog.Default().Info("antifraud: serving dummy subscription", "email", email)
 		return res
 	}
-
 
 	// We still need to pull user's specific passwords from Xray config
 	// because they are generated dynamically or stored only in Xray.
@@ -223,59 +206,7 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 
 		if !unsupportedClient && hwid != "" {
 			// SQL-based Device tracking
-
-			now := time.Now()
-
-			err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				var device database.Device
-				res := tx.Where("subscription_id = ? AND hw_id = ?", sub.ID, hwid).Limit(1).Find(&device)
-
-				if res.Error != nil {
-					return res.Error
-				}
-
-				if res.RowsAffected == 0 {
-					// Check device limit before inserting
-					// Lock the parent subscription row to prevent concurrent inserts from exceeding the limit
-					var dummy database.Subscription
-					if db.Dialector.Name() == "postgres" {
-						tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", sub.ID).First(&dummy)
-					} else if db.Dialector.Name() == "sqlite" {
-						// Force a write lock in SQLite by touching the subscription record
-						tx.Exec("UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", sub.ID)
-					}
-
-					var currentCount int64
-					tx.Model(&database.Device{}).Where("subscription_id = ?", sub.ID).Count(&currentCount)
-
-					if currentCount >= int64(deviceLimit) {
-						deviceLimitReached = true
-						return nil // Don't error out, just don't insert
-					}
-
-					newDevice := database.Device{
-						SubscriptionID: sub.ID,
-						HWID:           hwid,
-						DeviceModel:    deviceModel,
-						DeviceOS:       deviceOs,
-						VerOS:          verOs,
-						UserAgent:      req.UserAgent,
-						RequestCount:   1,
-						FirstSeen:      now,
-						LastSeen:       now,
-					}
-					return tx.Create(&newDevice).Error
-				} else {
-					return tx.Model(&device).Updates(map[string]interface{}{
-						"last_seen":     now,
-						"request_count": gorm.Expr("request_count + 1"),
-						"device_model":  deviceModel,
-						"device_os":     deviceOs,
-						"ver_os":        verOs,
-						"user_agent":    req.UserAgent,
-					}).Error
-				}
-			})
+			deviceLimitReached, err = reg.Devices().TrackDevice(ctx, sub.ID, hwid, deviceModel, deviceOs, verOs, req.UserAgent, deviceLimit)
 
 			if err != nil {
 				logger.Errorf("[ProcessSQL] SQL error in device check for subscription %s: %v", sub.ID, err)
@@ -407,8 +338,12 @@ func ProcessSQL(ctx context.Context, db *gorm.DB, cm *CacheManager, dispatcher *
 		return failResponse(500, "No templates found in subscription config")
 	}
 
-	svc := usersvc.NewService(nil, cfg)
-	canonicalSubLink := svc.GenerateShareLink(getRequestHost(req, cfg.Server.Domain), clientId)
+	domainStr := cfg.Server.Domain
+	hostStr := getRequestHost(req, domainStr)
+	if hostStr != "" {
+		domainStr = hostStr
+	}
+	canonicalSubLink := fmt.Sprintf("https://%s/client?id=%s", domainStr, clientId)
 	renderedHeader := generateHeader(email, canonicalSubLink, subHeader, fmt.Sprintf("%d", expireTs), fmt.Sprintf("%d", uploadBytes), fmt.Sprintf("%d", downloadBytes), isBlockedUser, deviceLimit)
 
 	meta := parseHeaderMetadata(renderedHeader)

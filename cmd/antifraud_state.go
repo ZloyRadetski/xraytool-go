@@ -4,90 +4,81 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
+	"time"
 
 	"github.com/spf13/cobra"
-
-	"xraytool/internal/appconfig"
 )
 
-func init() {
-	rootCmd.AddCommand(antiFraudStateCmd)
-}
+func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "ips",
+		Short: "Show current connected users and their active IP count (AntiFraud)",
+		Long:  "Fetches the live snapshot of tracked IPs from the running Anti-Fraud module.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if deps.Cfg == nil {
+				return fmt.Errorf("failed to load config")
+			}
 
-var antiFraudStateCmd = &cobra.Command{
-	Use:   "ips",
-	Short: "Show current connected users and their active IP count (AntiFraud)",
-	Long:  "Fetches the live snapshot of tracked IPs from the running Anti-Fraud module.",
-	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := appconfig.Load(cfgFile)
-		if err != nil {
-			fmt.Printf("ERROR|failed to load config: %v\n", err)
-			os.Exit(1)
-		}
+			if !deps.Cfg.AntiFraud.Enabled {
+				fmt.Println("Anti-Fraud is DISABLED in config.")
+				return nil
+			}
 
-		if !cfg.AntiFraud.Enabled {
-			fmt.Println("Anti-Fraud is DISABLED in config.")
-			os.Exit(0)
-		}
+			apiKey := deps.Cfg.Server.APIKey
+			if apiKey == "" {
+				return fmt.Errorf("server.api_key not found in xraytool.yml")
+			}
 
-		apiKey := cfg.Server.APIKey
-		if apiKey == "" {
-			fmt.Printf("ERROR|server.api_key not found in xraytool.yml\n")
-			os.Exit(1)
-		}
+			url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/admin/antifraud/state", deps.Cfg.Ports.APIServer)
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			if err != nil {
+				return fmt.Errorf("creating request: %v", err)
+			}
 
-		url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/admin/antifraud/state", cfg.Ports.APIServer)
-		req, err := http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			fmt.Printf("ERROR|creating request: %v\n", err)
-			os.Exit(1)
-		}
+			req.Header.Set("X-API-Key", apiKey)
 
-		req.Header.Set("X-API-Key", apiKey)
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("API request failed (is the server running?): %v", err)
+			}
+			defer resp.Body.Close()
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			fmt.Printf("ERROR|API request failed (is the server running?): %v\n", err)
-			os.Exit(1)
-		}
-		defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("API returned status: %d", resp.StatusCode)
+			}
 
-		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("ERROR|API returned status: %d\n", resp.StatusCode)
-			os.Exit(1)
-		}
+			var result struct {
+				Enabled      bool           `json:"enabled"`
+				State        map[string]int `json:"state"`
+				ActiveSlaves int            `json:"active_slaves"`
+			}
 
-		var result struct {
-			Enabled      bool           `json:"enabled"`
-			State        map[string]int `json:"state"`
-			ActiveSlaves int            `json:"active_slaves"`
-		}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return fmt.Errorf("failed to decode response: %v", err)
+			}
 
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			fmt.Printf("ERROR|failed to decode response: %v\n", err)
-			os.Exit(1)
-		}
+			if !result.Enabled {
+				fmt.Println("Anti-Fraud is disabled on the server.")
+				return nil
+			}
 
-		if !result.Enabled {
-			fmt.Println("Anti-Fraud is disabled on the server.")
-			return
-		}
+			fmt.Printf("Active Slaves reporting stats: %d\n", result.ActiveSlaves)
 
-		fmt.Printf("Active Slaves reporting stats: %d\n", result.ActiveSlaves)
-		
-		if len(result.State) == 0 {
-			fmt.Println("No active IPs currently tracked.")
-			return
-		}
+			if len(result.State) == 0 {
+				fmt.Println("No active IPs currently tracked.")
+				return nil
+			}
 
-		fmt.Printf("Active Users (Tracking IPs over %s):\n", cfg.AntiFraud.IPLimitTTL)
-		fmt.Println("---------------------------------------------------------")
-		for email, count := range result.State {
-			fmt.Printf("%-35s : %d IP(s)\n", email, count)
-		}
-		fmt.Println("---------------------------------------------------------")
-		fmt.Printf("Total tracked users: %d\n", len(result.State))
-	},
+			fmt.Printf("Active Users (Tracking IPs over %s):\n", deps.Cfg.AntiFraud.IPLimitTTL)
+			fmt.Println("---------------------------------------------------------")
+			for email, count := range result.State {
+				fmt.Printf("%-35s : %d IP(s)\n", email, count)
+			}
+			fmt.Println("---------------------------------------------------------")
+			fmt.Printf("Total tracked users: %d\n", len(result.State))
+			return nil
+		},
+	}
+	return cmd
 }

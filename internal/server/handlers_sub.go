@@ -27,11 +27,8 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	// 3. Get remote IP
-	remoteAddr := req.Header.Get("X-Real-IP")
-	if remoteAddr == "" {
-		remoteAddr = getClientIP(req)
-	}
+	// 3. Get remote IP securely
+	remoteAddr := getClientIP(req)
 
 	ua := strings.ToLower(req.UserAgent())
 	isBot := false
@@ -58,7 +55,7 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// 5. Execute subscription process directly in memory using SQL Database
-	subRes := subscription.ProcessSQL(req.Context(), r.db, r.cm, r.dispatcher, subReq, r.isBanned)
+	subRes := r.userSvc.ProcessSQLSubscription(req.Context(), r.cm, r.dispatcher, subReq, r.isBanned)
 
 	// 6. Send headers and write body
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")

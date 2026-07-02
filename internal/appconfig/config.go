@@ -16,6 +16,7 @@ import (
 // Config is the top-level xraytool configuration.
 type Config struct {
 	Mode          string                 `yaml:"mode"` // "master" or "slave"
+	Engine        EngineConf             `yaml:"engine"`
 	Server        ServerConf             `yaml:"server"`
 	Paths         PathsConf              `yaml:"paths"`
 	Xray          XrayConf               `yaml:"xray"`
@@ -33,6 +34,14 @@ type Config struct {
 	SlaveServers  map[string]slave.Entry `yaml:"slave_servers"`
 	AntiFraud     AntiFraudConf          `yaml:"anti_fraud"`
 	Mailer        MailerConf             `yaml:"mailer"`
+}
+
+// EngineConf selects the VPN proxy engine implementation.
+// Setting type to an empty string or "xray" uses the default Xray-core adapter.
+// Future values: "singbox", "mihomo", etc.
+type EngineConf struct {
+	// Type is the engine identifier: "xray" (default), "singbox", …
+	Type string `yaml:"type"`
 }
 
 // WorkerConf holds background worker settings.

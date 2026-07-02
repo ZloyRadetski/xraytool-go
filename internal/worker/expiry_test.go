@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
+	"xraytool/internal/vpn"
 )
 
 // setupTestDB creates an SQLite database in a temp directory and runs AutoMigrate.
@@ -47,7 +49,7 @@ func setupTestWorker(t *testing.T, db *gorm.DB, cfg *appconfig.Config) *ExpiryWo
 		os.WriteFile(cfg.Paths.XrayConfig, []byte(`{"inbounds":[]}`), 0644)
 	}
 
-	return NewExpiryWorker(db, cfg, nil, nil, logger)
+	return NewExpiryWorker(database.NewRegistry(db), cfg, nil, &vpn.NoopEngine{}, logger)
 }
 
 func TestExpiryWorker_ProcessOnce_Expired(t *testing.T) {
@@ -60,15 +62,15 @@ func TestExpiryWorker_ProcessOnce_Expired(t *testing.T) {
 		UserID:   "user-1",
 		XrayUUID: "uuid-sub-1",
 		Email:    "test@example.com",
-		Status: "active",
-		EndsAt: &endsAt,
+		Status:   "active",
+		EndsAt:   &endsAt,
 	}
 	db.Create(&sub)
 
 	cfg := &appconfig.Config{}
 	worker := setupTestWorker(t, db, cfg)
 
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	var updatedSub database.Subscription
 	db.First(&updatedSub, "id = ?", "sub-1")
@@ -88,8 +90,8 @@ func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 		UserID:   "user-1",
 		XrayUUID: "uuid-sub-2",
 		Email:    "test2@example.com",
-		Status: "active",
-		EndsAt: &endsAt,
+		Status:   "active",
+		EndsAt:   &endsAt,
 	}
 	db.Create(&sub)
 
@@ -101,7 +103,7 @@ func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 	worker := setupTestWorker(t, db, cfg)
 
 	// First run should trigger the 24h warning, but not the 6h warning.
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	var notifs []database.SubscriptionNotification
 	db.Find(&notifs)
@@ -115,7 +117,7 @@ func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 
 	// Second run should NOT trigger anything new because 24h is already recorded
 	// and we are not yet within the 6h window.
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	db.Find(&notifs)
 	if len(notifs) != 1 {
@@ -126,7 +128,7 @@ func TestExpiryWorker_ProcessOnce_Warnings(t *testing.T) {
 	endsAtNew := time.Now().Add(5 * time.Hour)
 	db.Model(&sub).Update("ends_at", endsAtNew)
 
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	db.Find(&notifs)
 	if len(notifs) != 2 {
@@ -166,7 +168,7 @@ func TestExpiryWorker_InvalidDuration(t *testing.T) {
 	}
 	worker := setupTestWorker(t, db, cfg)
 
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	var notifs []database.SubscriptionNotification
 	db.Find(&notifs)
@@ -210,7 +212,7 @@ func TestExpiryWorker_IgnoreUnlimitedAndBlocked(t *testing.T) {
 		},
 	}
 	worker := setupTestWorker(t, db, cfg)
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	var unlimSub database.Subscription
 	db.First(&unlimSub, "id = ?", "sub-unlim")
@@ -245,7 +247,7 @@ func TestExpiryWorker_EmptyWarningsConfig(t *testing.T) {
 		},
 	}
 	worker := setupTestWorker(t, db, cfg)
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	var notifs []database.SubscriptionNotification
 	db.Find(&notifs)
@@ -279,7 +281,7 @@ func TestExpiryWorker_UnorderedConfigAndMultipleHits(t *testing.T) {
 
 	// First run should trigger 72h, 24h, and 3h simultaneously (since 2h < all of them)
 	// But it should NOT trigger 1h.
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	var notifs []database.SubscriptionNotification
 	db.Find(&notifs)
@@ -320,7 +322,7 @@ func TestExpiryWorker_BatchMixedUsers(t *testing.T) {
 		},
 	}
 	worker := setupTestWorker(t, db, cfg)
-	worker.ProcessOnce()
+	worker.ProcessOnce(context.Background())
 
 	// 1. sub-exp should be expired
 	var subExp database.Subscription

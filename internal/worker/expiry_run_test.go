@@ -7,6 +7,7 @@ import (
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
+	"xraytool/internal/domain"
 )
 
 func TestExpiryWorker_Run(t *testing.T) {
@@ -19,7 +20,7 @@ func TestExpiryWorker_Run(t *testing.T) {
 	worker := setupTestWorker(t, db, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	// Start the worker in a goroutine
 	done := make(chan struct{})
 	go func() {
@@ -52,7 +53,7 @@ func TestExpiryWorker_Run_InvalidInterval(t *testing.T) {
 	worker := setupTestWorker(t, db, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -86,7 +87,14 @@ func TestExpiryWorker_HandleExpired(t *testing.T) {
 	cfg := &appconfig.Config{}
 	worker := setupTestWorker(t, db, cfg)
 
-	worker.handleExpired(sub)
+	worker.handleExpired(context.Background(), domain.Subscription{
+		ID:       sub.ID,
+		UserID:   sub.UserID,
+		XrayUUID: sub.XrayUUID,
+		Email:    sub.Email,
+		Status:   sub.Status,
+		EndsAt:   sub.EndsAt,
+	})
 
 	var updatedSub database.Subscription
 	db.First(&updatedSub, "id = ?", "sub-handle")

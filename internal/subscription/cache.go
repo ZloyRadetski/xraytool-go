@@ -7,25 +7,27 @@ import (
 	"time"
 
 	"xraytool/internal/appconfig"
+	"xraytool/internal/domain"
 	"xraytool/internal/logger"
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/vpn"
 )
 
 // CacheManager handles in-memory caching of frequently read files
 // (config.json, templates, limited_users.db) to eliminate disk I/O
 // and parsing overhead during subscription delivery.
 type CacheManager struct {
-	mu sync.RWMutex
+	mu        sync.RWMutex
 	refreshMu sync.Mutex
 
-	cfg *appconfig.Config
+	cfg    *appconfig.Config
+	engine domain.Engine
 
 	// Cached Data
-	xrayConfig   xrayconfig.RawConfig
-	activeUsers  map[string]*ActiveUser
-	subTemplate  string
-	routeGlobal  string
-	routeRU      string
+	xrayConfig  vpn.RawConfig
+	activeUsers map[string]*ActiveUser
+	subTemplate string
+	routeGlobal string
+	routeRU     string
 
 	// ModTimes to detect file changes on disk
 	xrayConfigModTime  time.Time
@@ -34,17 +36,17 @@ type CacheManager struct {
 	routeGlobalModTime time.Time
 	routeRUModTime     time.Time
 
-
 	// done is closed by Stop() to signal the flush worker to exit.
 	done chan struct{}
 }
 
 // NewCacheManager initializes a new cache manager.
-func NewCacheManager(cfg *appconfig.Config) *CacheManager {
+func NewCacheManager(cfg *appconfig.Config, engine domain.Engine) *CacheManager {
 	cm := &CacheManager{
-		cfg:          cfg,
-		activeUsers:  make(map[string]*ActiveUser),
-		done:         make(chan struct{}),
+		cfg:         cfg,
+		engine:      engine,
+		activeUsers: make(map[string]*ActiveUser),
+		done:        make(chan struct{}),
 	}
 	return cm
 }
@@ -99,7 +101,7 @@ func (c *CacheManager) refreshXrayConfig() {
 	}
 
 	logger.Infof("[Cache] Обнаружено изменение %s. Обновление индекса пользователей...", path)
-	cfg, err := xrayconfig.Read(path)
+	cfg, err := vpn.Read(path)
 	if err != nil {
 		logger.Errorf("[Cache] Ошибка чтения Xray config: %v", err)
 		return
@@ -177,11 +179,9 @@ func (c *CacheManager) refreshXrayConfig() {
 	c.activeUsers = newActiveUsers
 	c.xrayConfigModTime = info.ModTime()
 	c.mu.Unlock()
-	
+
 	logger.Infof("[Cache] Индекс Xray обновлен. Загружено %d пользователей.", len(newActiveUsers))
 }
-
-
 
 func (c *CacheManager) refreshTemplates() {
 	// Sub Template
@@ -293,7 +293,7 @@ func (c *CacheManager) GetTemplates() (sub string, routeGlobal string, routeRU s
 }
 
 // GetRawConfig returns a copy of the xray config if needed for reading reality keys etc.
-func (c *CacheManager) GetRawConfig() xrayconfig.RawConfig {
+func (c *CacheManager) GetRawConfig() vpn.RawConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.xrayConfig

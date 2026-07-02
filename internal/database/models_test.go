@@ -71,7 +71,7 @@ func TestPayment_DefaultTimestamp(t *testing.T) {
 
 func TestPlan_DefaultValues(t *testing.T) {
 	db := newTestDB(t)
-	
+
 	plan := database.Plan{Months: 24, BasePrice: 3000}
 	err := db.Create(&plan).Error
 	if err != nil {
@@ -91,7 +91,7 @@ func TestPlan_DefaultValues(t *testing.T) {
 
 func TestPromoCode_DefaultValues(t *testing.T) {
 	db := newTestDB(t)
-	
+
 	promo := database.PromoCode{Code: "TESTCODE", DiscountPercent: 10}
 	err := db.Create(&promo).Error
 	if err != nil {
@@ -121,13 +121,13 @@ func TestPayment_WithPlanAndPromoCode(t *testing.T) {
 
 	planID := int64(1)
 	promoID := int64(1)
-	
+
 	payment := database.Payment{
-		UserID: user.ID,
-		Amount: 100,
-		Status: "completed",
+		UserID:      user.ID,
+		Amount:      100,
+		Status:      "completed",
 		PaymentType: "subscription",
-		PlanID: &planID,
+		PlanID:      &planID,
 		PromoCodeID: &promoID,
 	}
 

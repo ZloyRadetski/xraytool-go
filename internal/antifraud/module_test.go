@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
+	"xraytool/internal/vpn"
 )
 
 func TestModule_IsBannedAndForceUnban(t *testing.T) {
@@ -18,9 +18,9 @@ func TestModule_IsBannedAndForceUnban(t *testing.T) {
 		sqlDB.Close()
 	}()
 
-	cfg := &appconfig.Config{}
+	cfg := &Config{}
 	log := slog.Default()
-	m := New(cfg, db, log)
+	m := New(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, log)
 
 	// Create an active ban in the DB
 	email := "test@example.com"
@@ -55,7 +55,7 @@ func TestModule_IsBannedAndForceUnban(t *testing.T) {
 func TestBanStore(t *testing.T) {
 	bs := newBanStore()
 	email := "test@example.com"
-	
+
 	// Not banned initially
 	assert.False(t, bs.isBanned(email))
 

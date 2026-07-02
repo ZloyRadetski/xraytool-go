@@ -39,7 +39,7 @@ type Entry struct {
 	Bearer           string `json:"bearer" yaml:"bearer"`
 	BearerToken      string `json:"bearer_token" yaml:"bearer_token"`
 	BearerTokenCamel string `json:"bearerToken" yaml:"bearerToken"`
-	AuthHeader       string `json:"auth_header" yaml:"auth_header"`   // full "Header-Name: value"
+	AuthHeader       string `json:"auth_header" yaml:"auth_header"`     // full "Header-Name: value"
 	Authorization    string `json:"authorization" yaml:"authorization"` // ditto
 
 	Insecure      bool `json:"insecure" yaml:"insecure"`

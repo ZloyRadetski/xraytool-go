@@ -1,14 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
-	"xraytool/internal/antifraud"
-	"xraytool/internal/slave"
+	"xraytool/internal/domain"
 	"xraytool/internal/stats"
 	"xraytool/internal/subscription"
-	"xraytool/internal/xrayconfig"
 	"xraytool/internal/user"
 )
 
@@ -51,7 +50,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			return
 		}
 		var payloadReq struct {
-			Events []antifraud.SlaveIPEvent `json:"events"`
+			Events []domain.FraudEvent `json:"events"`
 		}
 		if err := json.Unmarshal([]byte(body.Payload), &payloadReq); err != nil || len(payloadReq.Events) == 0 {
 			writeError(w, http.StatusBadRequest, "invalid or empty events payload")
@@ -62,31 +61,52 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 
 	case "usersnapshot":
-		xrayCfg, err := xrayconfig.Read(r.cfg.Paths.XrayConfig)
-		if err != nil {
-			r.log.Error("internal sync: failed to read xray config for snapshot", "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to read xray config")
-			return
-		}
-		snap := slave.BuildMasterSnapshot(xrayCfg)
+		snapshotData := r.userSvc.BuildMasterSnapshot(context.Background())
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(snap)
+		json.NewEncoder(w).Encode(snapshotData)
 		return
 
 	case "apply-batch":
-		var payload slave.BatchPayload
-		if err := json.Unmarshal([]byte(body.Payload), &payload); err != nil {
+		var payloadDTO struct {
+			Add []struct {
+				Email   string   `json:"email"`
+				UUID    string   `json:"uuid,omitempty"`
+				Auth    string   `json:"auth,omitempty"`
+				Subfile string   `json:"subfile"`
+				Expire  string   `json:"expire"`
+				Limit   *float64 `json:"limit,omitempty"`
+			} `json:"add"`
+			Remove []string `json:"remove"`
+		}
+		if err := json.Unmarshal([]byte(body.Payload), &payloadDTO); err != nil {
 			r.log.Error("internal sync: invalid payload", "err", err)
 			writeError(w, http.StatusBadRequest, "invalid payload")
 			return
 		}
-		result := subscription.ApplyBatchOperations(r.cfg, payload)
+
+		var payload domain.BatchPayload
+		payload.Remove = payloadDTO.Remove
+		for _, u := range payloadDTO.Add {
+			cfg := domain.VPNUserConfig{
+				Email:   u.Email,
+				UUID:    u.UUID,
+				Auth:    u.Auth,
+				Subfile: u.Subfile,
+				Expire:  u.Expire,
+			}
+			if u.Limit != nil {
+				cfg.MaxDevices = int(*u.Limit)
+			}
+			payload.Add = append(payload.Add, cfg)
+		}
+
+		result := subscription.ApplyBatchOperations(r.engine, payload)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 		return
 
 	case "cli-stats":
-		result := stats.GenerateLocalStats(r.cfg)
+		result := stats.GenerateLocalStats(r.cfg, r.engine)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 		return
@@ -97,39 +117,33 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			return
 		}
 
-		req := user.CreateUserRequest{
+		if _, err := r.userSvc.CreateUser(req.Context(), user.CreateUserRequest{
 			Email:  body.Email,
 			UUID:   body.UUID,
-			SkipDB: true, // Internal sync shouldn't save to DB directly if slaves share DB, or just follows Xray propagation.
-		}
-		svc := user.NewService(r.db, r.cfg)
-		if _, err := svc.CreateUser(req); err != nil {
+			SkipDB: true,
+		}); err != nil {
 			r.log.Error("internal sync: failed to create user", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to create user")
 			return
 		}
 
 	case "rmuser":
-		req := user.ModifyUserRequest{
+		if err := r.userSvc.BlockOrRemoveUser(req.Context(), user.ModifyUserRequest{
 			Email:  body.Email,
 			Action: "rm",
 			Legacy: false,
 			SkipDB: true,
-		}
-		svc := user.NewService(r.db, r.cfg)
-		if err := svc.BlockOrRemoveUser(req); err != nil {
+		}); err != nil {
 			r.log.Error("internal sync: rmuser failed", "err", err)
 		}
 
 	case "limit":
-		req := user.ModifyUserRequest{
+		if err := r.userSvc.BlockOrRemoveUser(req.Context(), user.ModifyUserRequest{
 			Email:  body.Email,
 			Action: "limit",
 			Legacy: false,
 			SkipDB: true,
-		}
-		svc := user.NewService(r.db, r.cfg)
-		if err := svc.BlockOrRemoveUser(req); err != nil {
+		}); err != nil {
 			r.log.Error("internal sync: limit failed", "err", err)
 		}
 
@@ -140,24 +154,20 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			writeError(w, http.StatusBadRequest, "invalid limit")
 			return
 		}
-		req := user.UpdateLimitRequest{
+		if err := r.userSvc.UpdateLimit(req.Context(), user.UpdateLimitRequest{
 			Email:  body.Email,
 			Limit:  limit,
 			SkipDB: true,
-		}
-		svc := user.NewService(r.db, r.cfg)
-		if err := svc.UpdateLimit(req); err != nil {
+		}); err != nil {
 			r.log.Error("internal sync: setlimit failed", "err", err)
 		}
 
 	case "setexpire":
-		req := user.SetExpireRequest{
+		if err := r.userSvc.SetExpire(req.Context(), user.SetExpireRequest{
 			Email:  body.Email,
 			Expire: body.Expire,
 			SkipDB: true,
-		}
-		svc := user.NewService(r.db, r.cfg)
-		if err := svc.SetExpire(req); err != nil {
+		}); err != nil {
 			r.log.Error("internal sync: setexpire failed", "err", err)
 		}
 
@@ -168,7 +178,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			writeError(w, http.StatusBadRequest, "invalid limit")
 			return
 		}
-		req := user.UnlimitUserRequest{
+		if _, err := r.userSvc.UnlimitUser(req.Context(), user.UnlimitUserRequest{
 			Email:   body.Email,
 			UUID:    body.UUID,
 			Subfile: body.Subfile,
@@ -177,9 +187,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			Limit:   limit,
 			Legacy:  false,
 			SkipDB:  true,
-		}
-		svc := user.NewService(r.db, r.cfg)
-		if _, err := svc.UnlimitUser(req); err != nil {
+		}); err != nil {
 			r.log.Error("internal sync: unlimit failed", "err", err)
 		}
 

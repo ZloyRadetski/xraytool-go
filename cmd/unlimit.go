@@ -1,7 +1,7 @@
-
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"xraytool/internal/user"
@@ -11,7 +11,7 @@ import (
 
 const minSubfileLen = 5 // Minimum valid subfile identifier length
 
-func unlimitCmd(getUserSvc func() *user.Service) *cobra.Command {
+func unlimitCmd(deps *AppDeps) *cobra.Command {
 	var (
 		email        string
 		emailAlias   string
@@ -25,15 +25,19 @@ func unlimitCmd(getUserSvc func() *user.Service) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "unlimit",
-		Short: "Unblock a previously blocked user",
+		Short: "Unblock a user (removes from limited DB, adds back to xray)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := requireRoot(); err != nil { return err }
+			if err := requireRoot(); err != nil {
+				return err
+			}
 
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
 
-			email, err := resolveEmail(email, emailAlias, false, "Enter name (email) to unblock: ", p)
-			if err != nil { return err }
+			email, err := resolveEmail(email, emailAlias, false, "Enter name (email) to unblock: ", deps.Engine, p)
+			if err != nil {
+				return err
+			}
 
 			limitPtr, err := limitPtrFromStr(limitStr)
 			if err != nil {
@@ -50,8 +54,8 @@ func unlimitCmd(getUserSvc func() *user.Service) *cobra.Command {
 				Legacy:  legacy,
 			}
 
-			svc := getUserSvc()
-			resp, err := svc.UnlimitUser(req)
+			svc := deps.UserSvc
+			resp, err := svc.UnlimitUser(context.Background(), req)
 			if err != nil {
 				return p.Errorf("error unlimiting user: %v", err)
 			}

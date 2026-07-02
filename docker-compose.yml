@@ -11,7 +11,7 @@ services:
       # Проброс всей папки с настройками, базой и состояниями
       - ./data:/etc/xraytool
       # Прямой проброс конфига ядра Xray
-      - /usr/local/etc/xray/config.json:/usr/local/etc/xray/config.json
+      - /usr/local/etc/xray:/usr/local/etc/xray
       # Проброс /tmp для передачи файлов payloads Xray API на хост
       - /tmp:/tmp
       # Проброс папки для сохранения GeoIP/Geosite баз при апдейте

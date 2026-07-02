@@ -1,11 +1,11 @@
 package stats
 
 import (
+	"context"
 	"time"
 
 	"xraytool/internal/appconfig"
-	"xraytool/internal/xrayapi"
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/domain"
 )
 
 type MergedUser struct {
@@ -42,32 +42,26 @@ func sumField(users []MergedUser, f func(MergedUser) int64) int64 {
 	return s
 }
 
-// GenerateLocalStats retrieves traffic stats directly from the local node.
-func GenerateLocalStats(cfg *appconfig.Config) NodeStatsReport {
+// GenerateLocalStats retrieves traffic stats from the VPN engine via the
+// vpn.Engine abstraction, then merges them into the persistent state.
+//
+// No xrayapi or xrayconfig imports — the engine adapter is responsible for
+// knowing how to query stats from the underlying VPN process.
+func GenerateLocalStats(cfg *appconfig.Config, engine domain.Engine) NodeStatsReport {
 	statePath := cfg.Paths.StatsState
-	
-	apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
-	rawStats, err := apiClient.QueryStats()
+
+	// Query raw stats from the engine (e.g. Xray gRPC StatsService).
+	rawStats, err := engine.QueryStats(context.Background())
 	if err != nil {
-		rawStats = nil
+		// Non-fatal: proceed with an empty sample set.  The persistent state
+		// still accumulates correctly from previous ticks.
+		rawStats = []domain.TrafficStat{}
 	}
 
-	samples := make([]LiveSample, len(rawStats))
-	for i, s := range rawStats {
-		samples[i] = LiveSample{Email: s.Email, Up: s.Up, Down: s.Down}
-	}
-
-	if xrayCfg, err := xrayconfig.Read(cfg.Paths.XrayConfig); err == nil {
-		inUsers, _ := xrayconfig.ListUsers(xrayCfg)
-		existing := make(map[string]bool, len(samples))
-		for _, s := range samples {
-			existing[s.Email] = true
-		}
-		for _, u := range inUsers {
-			if e := u.Email(); !existing[e] {
-				samples = append(samples, LiveSample{Email: e})
-			}
-		}
+	// Convert engine-agnostic TrafficStat → stats.LiveSample.
+	samples := make([]LiveSample, 0, len(rawStats))
+	for _, s := range rawStats {
+		samples = append(samples, LiveSample{Email: s.Email, Up: s.Up, Down: s.Down})
 	}
 
 	state, err := Load(statePath, cfg.DetailedRetentionSeconds())

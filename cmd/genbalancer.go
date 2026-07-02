@@ -86,7 +86,7 @@ type routingStrategySettings struct {
 // Command
 // ---------------------------------------------------------------------------
 
-func genBalancerCmd() *cobra.Command {
+func genBalancerCmd(deps *AppDeps) *cobra.Command {
 	var (
 		subURL     string
 		remarks    string
@@ -111,11 +111,11 @@ With --upsert-sub, the path is taken automatically from the tool config
 			// Resolve --upsert-sub → path from config
 			effectiveUpsert := upsertInto
 			if upsertSub {
-				if cfg == nil {
+				if deps.Cfg == nil {
 					return fmt.Errorf("--upsert-sub requires a valid config file (use --config)")
 				}
 				if effectiveUpsert == "" {
-					effectiveUpsert = cfg.Paths.JSONSubscriptionTemplate
+					effectiveUpsert = deps.Cfg.Paths.JSONSubscriptionTemplate
 				}
 				if effectiveUpsert == "" {
 					return fmt.Errorf("--upsert-sub: paths.json_subscription_template is not set in config")

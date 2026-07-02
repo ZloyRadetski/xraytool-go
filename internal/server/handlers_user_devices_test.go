@@ -11,7 +11,7 @@ func TestDevices(t *testing.T) {
 
 	// User
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":7001,"username":"DeviceUser"}`)
-	
+
 	// Set Max Devices
 	wSet := doAuth(r, "POST", "/api/v1/users/telegram/7001/max-devices", `{"max_devices":5}`)
 	if wSet.Code != http.StatusOK {
@@ -35,7 +35,7 @@ func TestDevices(t *testing.T) {
 	}
 
 	// Delete Device (not found)
-	wDelD := doAuth(r, "DELETE", "/api/v1/users/telegram/7001/devices/no-such-id", "")
+	wDelD := doAuth(r, "DELETE", "/api/v1/users/telegram/7001/devices/99999", "")
 	if wDelD.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", wDelD.Code)
 	}

@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"xraytool/internal/appconfig"
 	"xraytool/internal/generate"
 	"xraytool/internal/logger"
 )
@@ -37,8 +36,14 @@ type Dispatcher struct {
 	wg       sync.WaitGroup
 }
 
+// Config holds settings for the event dispatcher.
+type Config struct {
+	Webhooks      []string
+	WebhookSecret string
+}
+
 // NewDispatcher creates a new event dispatcher with the given config.
-func NewDispatcher(cfg *appconfig.Config) *Dispatcher {
+func NewDispatcher(cfg *Config) *Dispatcher {
 	if cfg == nil {
 		return &Dispatcher{
 			webhooks: []string{},
@@ -74,11 +79,7 @@ func (d *Dispatcher) Dispatch(eventType string, data map[string]interface{}, use
 
 	logger.Infof("[EVENT_DISPATCHER] Dispatching event %s (type: %s) to %d webhooks asynchronously", event.EventID, event.EventType, len(d.webhooks))
 
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
-		d.broadcast(event)
-	}()
+	d.broadcast(event)
 }
 
 // DispatchSync sends an event synchronously, blocking until all webhooks are sent (or fail).
@@ -127,15 +128,13 @@ func (d *Dispatcher) broadcast(event Event) {
 		return
 	}
 
-	var wg sync.WaitGroup
 	for _, webhookURL := range d.webhooks {
-		wg.Add(1)
+		d.wg.Add(1)
 		go func(url string) {
-			defer wg.Done()
+			defer d.wg.Done()
 			d.sendWithRetry(context.Background(), url, event.EventID, payload)
 		}(webhookURL)
 	}
-	wg.Wait()
 }
 
 func (d *Dispatcher) sendWithRetry(ctx context.Context, url, eventID string, payload []byte) {

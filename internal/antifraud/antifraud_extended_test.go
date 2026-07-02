@@ -2,7 +2,7 @@ package antifraud
 
 // antifraud_extended_test.go — расширенные тесты для:
 //   - deviceLimitCache (конкурентность, edge-cases, bulk refresh)
-//   - slaveReporter (батчинг, flush, пустой буфер)
+//   - propagator (батчинг, flush, пустой буфер)
 //   - Module.IngestEvents (инъекция событий со slave)
 //   - Динамический порог (dry-run + multi-device)
 //   - Бенчмарки новых горячих путей
@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
-
-	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
+	"xraytool/internal/domain"
+	"xraytool/internal/vpn"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ func TestGetDeviceLimit_ZeroMaxDevicesTreatedAsFallback(t *testing.T) {
 	defer closeSQLite(t, db)
 
 	// Напрямую записываем 0 в кэш (симуляция некорректного MaxDevices=0 в БД).
-	an := newAnalyzer(&appconfig.Config{}, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.deviceCache.mu.Lock()
 	an.deviceCache.limits["zero@x.com"] = 0
 	an.deviceCache.mu.Unlock()
@@ -61,7 +61,7 @@ func TestGetDeviceLimit_CachePersistsAfterRefresh(t *testing.T) {
 		Email: "old@x.com", Status: "active", MaxDevices: 3,
 	})
 
-	an := newAnalyzer(&appconfig.Config{}, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	assert.Equal(t, 3, an.getDeviceLimit("old@x.com"))
@@ -87,7 +87,7 @@ func TestGetDeviceLimit_ConcurrentReads(t *testing.T) {
 		Email: "concurrent@x.com", Status: "active", MaxDevices: 4,
 	})
 
-	an := newAnalyzer(&appconfig.Config{}, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	var wg sync.WaitGroup
@@ -114,7 +114,7 @@ func TestGetDeviceLimit_ConcurrentRefreshAndRead(t *testing.T) {
 		Email: "race@x.com", Status: "active", MaxDevices: 2,
 	})
 
-	an := newAnalyzer(&appconfig.Config{}, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	var wg sync.WaitGroup
 	// Несколько горутин читают
@@ -154,14 +154,12 @@ func TestHandleEvent_DryRun_MultiDevice(t *testing.T) {
 		Email: email, Status: "active", MaxDevices: 3,
 	})
 
-	cfg := &appconfig.Config{
-		AntiFraud: appconfig.AntiFraudConf{
-			DryRun: true, BanDuration: "1h",
-		},
+	cfg := &Config{
+		DryRun: true, BanDuration: "1h",
 	}
 
 	bs := newBanStore()
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 2, db, slog.Default())
+	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 2, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	// threshold = 2 * 3 = 6
 
 	// 7 уникальных IP — в dry-run режиме бан не должен быть применён
@@ -183,12 +181,12 @@ func TestHandleEvent_AlreadyBanned_SkipsProcessing(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	cfg := &appconfig.Config{AntiFraud: appconfig.AntiFraudConf{BanDuration: "1h"}}
+	cfg := &Config{BanDuration: "1h"}
 	state := newState()
 	bs := newBanStore()
 	bs.setBan("banned@x.com", time.Now().Add(time.Hour))
 
-	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 1, db, slog.Default())
+	an := newAnalyzer(cfg, state, bs, nil, 5*time.Minute, 1, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Добавляем события для уже забаненного юзера
 	for i := 0; i < 10; i++ {
@@ -212,9 +210,9 @@ func TestHandleEvent_ExactlyAtThreshold_NoBan(t *testing.T) {
 		Email: email, Status: "active", MaxDevices: 2,
 	})
 
-	cfg := &appconfig.Config{AntiFraud: appconfig.AntiFraudConf{BanDuration: "1h"}}
+	cfg := &Config{BanDuration: "1h"}
 	bs := newBanStore()
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	// threshold = 3 * 2 = 6
 	an.refreshDeviceCache() // pre-warm so async fetch doesn't race with events
 
@@ -238,9 +236,9 @@ func TestHandleEvent_OneOverThreshold_Bans(t *testing.T) {
 		Email: email, Status: "active", MaxDevices: 2,
 	})
 
-	cfg := &appconfig.Config{AntiFraud: appconfig.AntiFraudConf{BanDuration: "1h"}}
+	cfg := &Config{BanDuration: "1h"}
 	bs := newBanStore()
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	// threshold = 3 * 2 = 6
 	an.refreshDeviceCache() // pre-warm
 
@@ -258,10 +256,10 @@ func TestHandleEvent_SameIPRepeated_NoBan(t *testing.T) {
 	defer closeSQLite(t, db)
 
 	email := "oneloc@x.com"
-	cfg := &appconfig.Config{AntiFraud: appconfig.AntiFraudConf{BanDuration: "1h"}}
+	cfg := &Config{BanDuration: "1h"}
 	bs := newBanStore()
 	// maxIPs = 1, MaxDevices fallback = 1 → threshold = 1
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 1, db, slog.Default())
+	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 1, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Один и тот же IP 100 раз
 	for i := 0; i < 100; i++ {
@@ -270,128 +268,7 @@ func TestHandleEvent_SameIPRepeated_NoBan(t *testing.T) {
 	assert.False(t, bs.isBanned(email), "same IP repeated must not trigger ban")
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// slaveReporter — unit tests
-// ─────────────────────────────────────────────────────────────────────────────
 
-// TestSlaveReporter_AddAndFlush проверяет накопление батча и сброс буфера.
-func TestSlaveReporter_AddAndFlush(t *testing.T) {
-	cfg := &appconfig.Config{
-		SlaveAPI: appconfig.SlaveAPIConf{
-			ConnectTimeout: time.Second,
-			RequestTimeout: time.Second,
-			RemotePath:     "/api/v1/internal/xray/sync",
-		},
-		// Путь к несуществующему файлу — PropagateAll вернёт empty slice.
-		Paths: appconfig.PathsConf{},
-	}
-
-	r := newSlaveReporter(cfg, slog.Default())
-
-	r.add(event{email: "a@x.com", ip: "1.1.1.1"})
-	r.add(event{email: "b@x.com", ip: "2.2.2.2"})
-
-	// Перед flush буфер содержит 2 элемента
-	r.mu.Lock()
-	assert.Len(t, r.buf, 2, "buffer should hold 2 events before flush")
-	r.mu.Unlock()
-
-	// flush вызывает PropagateAll (не найдёт серверов — ok, не паникует)
-	r.flush()
-
-	// После flush буфер очищен
-	r.mu.Lock()
-	assert.Len(t, r.buf, 0, "buffer must be empty after flush")
-	r.mu.Unlock()
-}
-
-// TestSlaveReporter_FlushEmptyBuffer проверяет что flush() при пустом буфере
-// завершается без паники и без ошибок.
-func TestSlaveReporter_FlushEmptyBuffer(t *testing.T) {
-	cfg := &appconfig.Config{
-		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{},
-	}
-	r := newSlaveReporter(cfg, slog.Default())
-	assert.NotPanics(t, r.flush, "flush on empty buffer must not panic")
-}
-
-// TestSlaveReporter_ConcurrentAdds проверяет thread-safety метода add()
-// при параллельных вызовах (запускать с -race).
-func TestSlaveReporter_ConcurrentAdds(t *testing.T) {
-	cfg := &appconfig.Config{
-		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{},
-	}
-	r := newSlaveReporter(cfg, slog.Default())
-
-	var wg sync.WaitGroup
-	const goroutines = 50
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
-			r.add(event{email: fmt.Sprintf("u%d@x.com", n), ip: generateIP(n)})
-		}(i)
-	}
-	wg.Wait()
-
-	r.mu.Lock()
-	count := len(r.buf)
-	r.mu.Unlock()
-	assert.Equal(t, goroutines, count, "all concurrent adds must be recorded")
-}
-
-// TestSlaveReporter_FlushResetsBuffer проверяет что после flush нового вызова
-// add() снова накапливает в чистый буфер.
-func TestSlaveReporter_FlushResetsBuffer(t *testing.T) {
-	cfg := &appconfig.Config{
-		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{},
-	}
-	r := newSlaveReporter(cfg, slog.Default())
-
-	r.add(event{email: "a@x.com", ip: "1.1.1.1"})
-	r.flush()
-	r.add(event{email: "b@x.com", ip: "2.2.2.2"})
-
-	r.mu.Lock()
-	require.Len(t, r.buf, 1)
-	assert.Equal(t, "b@x.com", r.buf[0].Email, "buffer after flush must contain only new events")
-	r.mu.Unlock()
-}
-
-// TestSlaveReporter_RunAndStop проверяет что горутина reporter.run() корректно
-// завершается при отмене контекста и делает финальный flush.
-func TestSlaveReporter_RunAndStop(t *testing.T) {
-	cfg := &appconfig.Config{
-		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: 50 * time.Millisecond, RequestTimeout: 50 * time.Millisecond},
-		Paths:    appconfig.PathsConf{},
-	}
-	r := newSlaveReporter(cfg, slog.Default())
-	r.add(event{email: "shutdown@x.com", ip: "9.9.9.9"})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		r.run(ctx)
-		close(done)
-	}()
-
-	cancel()
-
-	select {
-	case <-done:
-		// ok
-	case <-time.After(2 * time.Second):
-		t.Fatal("slaveReporter.run did not stop within 2s after ctx cancel")
-	}
-
-	// Буфер должен быть пуст после финального flush при shutdown
-	r.mu.Lock()
-	assert.Len(t, r.buf, 0, "buffer must be drained on shutdown flush")
-	r.mu.Unlock()
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module.IngestEvents — unit tests
@@ -403,29 +280,22 @@ func TestModule_IngestEvents_ValidEvents(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	cfg := &appconfig.Config{
-		AntiFraud: appconfig.AntiFraudConf{
-			Enabled:     true,
-			BanDuration: "1h",
-			IPLimitTTL:  "3m",
-		},
+	cfg := &Config{
+		Enabled:     true,
+		BanDuration: "1h",
+		IPLimitTTL:  "3m",
 	}
-	m := New(cfg, db, slog.Default())
+	m := New(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
 
-	events := []SlaveIPEvent{
+	events := []domain.FraudEvent{
 		{Email: "slave@x.com", IP: "10.0.0.1"},
 		{Email: "slave@x.com", IP: "10.0.0.2"},
 	}
 
 	m.IngestEvents("1.1.1.1", events)
 
-	// Даём анализатору время обработать события из канала
-	time.Sleep(50 * time.Millisecond)
-
-	// События должны были попасть в канал (проверяем длину канала или State)
-	// Если канал ещё не прочитан — проверяем что он непустой
-	assert.GreaterOrEqual(t, len(m.eventCh), 0,
-		"IngestEvents must not panic or block")
+	// События должны были попасть в канал
+	require.Equal(t, 2, len(m.eventCh), "IngestEvents must not block and channel must enqueue events")
 }
 
 // TestModule_IngestEvents_SkipsInvalid проверяет что события с пустыми
@@ -434,13 +304,13 @@ func TestModule_IngestEvents_SkipsInvalid(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	m := New(&appconfig.Config{}, db, slog.Default())
+	m := New(&Config{}, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
 	initialLen := len(m.eventCh)
 
-	m.IngestEvents("1.1.1.1", []SlaveIPEvent{
-		{Email: "", IP: "1.1.1.1"},   // пустой email
-		{Email: "u@x.com", IP: ""},   // пустой IP
-		{Email: "", IP: ""},          // оба пустых
+	m.IngestEvents("1.1.1.1", []domain.FraudEvent{
+		{Email: "", IP: "1.1.1.1"}, // пустой email
+		{Email: "u@x.com", IP: ""}, // пустой IP
+		{Email: "", IP: ""},        // оба пустых
 	})
 
 	assert.Equal(t, initialLen, len(m.eventCh), "invalid events must not be enqueued")
@@ -452,7 +322,7 @@ func TestModule_IngestEvents_FullChannel_DoesNotBlock(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	m := New(&appconfig.Config{}, db, slog.Default())
+	m := New(&Config{}, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Заполняем канал до предела
 	for i := 0; i < cap(m.eventCh); i++ {
@@ -463,7 +333,7 @@ func TestModule_IngestEvents_FullChannel_DoesNotBlock(t *testing.T) {
 	// IngestEvents должен вернуться мгновенно, не блокируясь
 	done := make(chan struct{})
 	go func() {
-		m.IngestEvents("1.1.1.1", []SlaveIPEvent{{Email: "new@x.com", IP: "5.5.5.5"}})
+		m.IngestEvents("1.1.1.1", []domain.FraudEvent{{Email: "new@x.com", IP: "5.5.5.5"}})
 		close(done)
 	}()
 
@@ -481,14 +351,14 @@ func TestModule_IngestEvents_ConcurrentCalls(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	m := New(&appconfig.Config{}, db, slog.Default())
+	m := New(&Config{}, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			m.IngestEvents("1.1.1.1", []SlaveIPEvent{
+			m.IngestEvents("1.1.1.1", []domain.FraudEvent{
 				{Email: fmt.Sprintf("u%d@x.com", n), IP: generateIP(n)},
 			})
 		}(i)
@@ -541,36 +411,44 @@ func TestIntegration_SlaveEvents_TriggerBan(t *testing.T) {
 		MaxDevices: 1, // threshold = maxIPs(2) * 1 = 2
 	})
 
-	cfg := &appconfig.Config{
-		AntiFraud: appconfig.AntiFraudConf{
-			Enabled:     true,
-			BanDuration: "1h",
-			IPLimitTTL:  "3m",
-			MaxIPs:      2,
-		},
+	cfg := &Config{
+		Enabled:               true,
+		BanDuration:           "1h",
+		IPLimitTTL:            "3m",
+		SuspiciousIPThreshold: 2,
 	}
 
-	m := New(cfg, db, slog.Default())
+	m := New(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Стартуем только анализатор (без tailer и rotator)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	an := newAnalyzer(cfg, m.state, m.banStore, m.eventCh, 3*time.Minute, 2, db, slog.Default())
-	go an.run(ctx)
+	an := newAnalyzer(cfg, m.state, m.banStore, m.eventCh, 3*time.Minute, 2, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		an.run(ctx)
+	}()
+	defer wg.Wait()
+	defer cancel()
 
 	// Инжектируем события как если бы они пришли со slave
-	m.IngestEvents("1.1.1.1", []SlaveIPEvent{
+	m.IngestEvents("1.1.1.1", []domain.FraudEvent{
 		{Email: email, IP: "10.1.1.1"},
 		{Email: email, IP: "10.1.1.2"},
 	})
 	// Пока не бан — порог не превышен
 
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return m.state.ActiveIPCount(email) == 2
+	}, 1*time.Second, 10*time.Millisecond, "Events must be processed")
+
 	assert.False(t, m.IsBanned(email), "2 IPs at threshold 2 must not ban")
 
 	// Третий IP — должен вызвать бан
-	m.IngestEvents("1.1.1.1", []SlaveIPEvent{
+	m.IngestEvents("1.1.1.1", []domain.FraudEvent{
 		{Email: email, IP: "10.1.1.3"},
 	})
 
@@ -598,7 +476,7 @@ func BenchmarkGetDeviceLimit_CacheHit(b *testing.B) {
 		MaxDevices: 5,
 	})
 
-	an := newAnalyzer(&appconfig.Config{}, newState(), newBanStore(), nil, time.Minute, 3, db, slog.Default())
+	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	b.ResetTimer()
@@ -620,8 +498,8 @@ func BenchmarkHandleEvent_WithDeviceCache(b *testing.B) {
 		Email: "benchhandle@x.com", Status: "active", MaxDevices: 3,
 	})
 
-	cfg := &appconfig.Config{AntiFraud: appconfig.AntiFraudConf{BanDuration: "1h"}}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, 3*time.Minute, 3, db, slog.Default())
+	cfg := &Config{BanDuration: "1h"}
+	an := newAnalyzer(cfg, newState(), newBanStore(), nil, 3*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	ips := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
@@ -633,26 +511,6 @@ func BenchmarkHandleEvent_WithDeviceCache(b *testing.B) {
 	}
 }
 
-// BenchmarkSlaveReporter_Add измеряет throughput добавления в батч-буфер.
-func BenchmarkSlaveReporter_Add(b *testing.B) {
-	cfg := &appconfig.Config{
-		SlaveAPI: appconfig.SlaveAPIConf{ConnectTimeout: time.Second, RequestTimeout: time.Second},
-		Paths:    appconfig.PathsConf{},
-	}
-	r := newSlaveReporter(cfg, slog.Default())
-	e := event{email: "bench@x.com", ip: "1.2.3.4"}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		r.add(e)
-		if len(r.buf) >= 512 {
-			r.mu.Lock()
-			r.buf = r.buf[:0]
-			r.mu.Unlock()
-		}
-	}
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

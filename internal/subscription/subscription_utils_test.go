@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"xraytool/internal/xrayconfig"
+	"xraytool/internal/vpn"
 )
 
 func TestParseDateToTimestamp(t *testing.T) {
@@ -198,7 +198,7 @@ func TestRealityUtils(t *testing.T) {
 			}
 		]
 	}`
-	var cfg xrayconfig.RawConfig
+	var cfg vpn.RawConfig
 	err := json.Unmarshal([]byte(cfgJSON), &cfg)
 	if err != nil {
 		t.Fatalf("Failed to parse config: %v", err)
@@ -219,7 +219,7 @@ func TestRealityUtils(t *testing.T) {
 		t.Errorf("Unexpected ShortID: %s", sid)
 	}
 
-	var emptyCfg xrayconfig.RawConfig
+	var emptyCfg vpn.RawConfig
 	json.Unmarshal([]byte("{}"), &emptyCfg)
 	if pk := firstRealityPrivateKey(emptyCfg); pk != "" {
 		t.Errorf("Expected empty private key, got %s", pk)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -15,31 +16,30 @@ import (
 
 	"xraytool/internal/antifraud"
 	"xraytool/internal/appconfig"
-	"xraytool/internal/database"
-	"xraytool/internal/events"
+	"xraytool/internal/domain"
 	"xraytool/internal/logger"
 	"xraytool/internal/server"
+	"xraytool/internal/slave"
 	"xraytool/internal/subscription"
+	"xraytool/internal/vpn"
 	"xraytool/internal/worker"
-	"xraytool/internal/xrayapi"
 
 	"github.com/spf13/cobra"
 )
 
-
-
 func getClientIP(r *http.Request) string {
-	ip := r.Header.Get("X-Real-IP")
-	if ip == "" {
-		ip = r.RemoteAddr
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteIP = r.RemoteAddr
 	}
 
-	port := r.Header.Get("X-Real-Port")
-	if port != "" && !strings.Contains(ip, ":") {
-		ip = ip + ":" + port
+	if remoteIP == "127.0.0.1" || remoteIP == "::1" || remoteIP == "localhost" {
+		ip := r.Header.Get("X-Real-IP")
+		if ip != "" && net.ParseIP(ip) != nil {
+			return ip
+		}
 	}
-
-	return ip
+	return remoteIP
 }
 
 func logIntruder(r *http.Request, reason string) {
@@ -78,7 +78,7 @@ func isPathAllowed(cfg *appconfig.Config, path string) bool {
 	return false
 }
 
-func startServerCmd() *cobra.Command {
+func startServerCmd(deps *AppDeps) *cobra.Command {
 	var port int
 	var runMigrations bool
 	var configPath string
@@ -95,57 +95,93 @@ func startServerCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("fatal error: %v", err)
 			}
-			if cfg.Server.APIKey == "" || cfg.Server.APIKey == "CHANGE_ME_IN_CONFIG" {
+			if deps.Cfg.Server.APIKey == "" || deps.Cfg.Server.APIKey == "CHANGE_ME_IN_CONFIG" {
 				return fmt.Errorf("FATAL: server.api_key не может быть пустым или дефолтным в xraytool.yml")
 			}
 
-			if !cmd.Flags().Changed("port") && cfg != nil {
-				port = cfg.Ports.APIServer
+			if !cmd.Flags().Changed("port") && deps.Cfg != nil {
+				port = deps.Cfg.Ports.APIServer
 			}
 
 			// ── Step 5.1: Check Database ─────────────────────────
-			dbReady := database.DB() != nil
+			dbReady := deps.Registry != nil
 			if dbReady {
-				logger.Infof("[DB] Database ready (driver: %s)", cfg.Database.Driver)
+				logger.Infof("[DB] Database ready (driver: %s)", deps.Cfg.Database.Driver)
 			} else {
 				logger.Errorf("[!] Database not ready")
 			}
 
 			// Graceful shutdown: close DB connection when server exits.
 			defer func() {
-				if err := database.Close(); err != nil {
-					logger.Errorf("[DB] Failed to close database: %v", err)
+				for _, cleanup := range deps.Cleanup {
+					cleanup()
 				}
 			}()
+
+			// ── Step 5.1.5: Build the VPN Engine (Composition Root) ───────────────
+			// This is the ONLY place in the entire codebase that decides which
+			// concrete engine adapter to use. Everything downstream receives
+			// a vpn.Engine interface and is fully engine-agnostic.
+			var vpnEngine domain.Engine
+			switch deps.Cfg.Engine.Type {
+			// Future engines go here:
+			// case "singbox":
+			//     vpnEngine = singbox.New(deps.Cfg.Singbox.APIAddr, deps.Cfg.Paths.SingboxConfig, slog.Default())
+			default:
+				// Default: Xray-core adapter
+				vpnEngine = vpn.NewAdapter(deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayConfig, slog.Default())
+				logger.Infof("[ENGINE] Using Xray-core adapter (grpc_addr=%s)", deps.Cfg.Xray.APIAddr)
+			}
 
 			mux := http.NewServeMux()
 			xraytoolPath := executablePath
 
 			// Initialize CacheManager globally for the server
-			cacheManager := subscription.NewCacheManager(cfg)
+			cacheManager := subscription.NewCacheManager(deps.Cfg, vpnEngine)
 			cacheManager.Refresh()
-
-			// Initialize Dispatcher globally for the server to reuse http.Client
-			dispatcher := events.NewDispatcher(cfg)
 
 			// ── Step 5.2: Mount REST API router (when DB is ready) ────────────
 			var apiRouter *server.Router
 			if dbReady {
-				apiRouter = server.New(cfg, cfg.Server.APIKey, cacheManager, database.DB())
+				var reporter domain.FraudEventReporter
+
+				slaveClient := slave.NewClient(deps.Cfg.SlaveAPI.ConnectTimeout, deps.Cfg.SlaveAPI.RequestTimeout, deps.Cfg.SlaveAPI.RemotePath)
+
+				if !deps.Cfg.IsMaster() && deps.Cfg.MasterAPI.URL != "" && deps.Cfg.AntiFraud.ReportToMaster {
+					entry := slave.Entry{
+						URL:      deps.Cfg.MasterAPI.URL,
+						APIKey:   deps.Cfg.MasterAPI.APIKey,
+						Insecure: deps.Cfg.MasterAPI.Insecure,
+					}
+					repAdp := slave.NewFraudReporterAdapter(slaveClient, entry, slog.Default())
+					go repAdp.Run(context.Background())
+					reporter = repAdp
+				}
+
+				apiRouter = server.New(deps.Cfg, deps.Cfg.Server.APIKey, cacheManager, vpnEngine, deps.UserSvc, deps.PaymentSvc, deps.Dispatcher, slog.Default())
 
 				// 🟢 Anti-Fraud Module 🟢──────────────────────────────────────────────
-				if cfg.AntiFraud.Enabled {
-					afModule := antifraud.New(cfg, database.DB(), slog.Default())
-					// On master: expose IngestEvents so slaves can forward IP events here.
-					// On slave: IngestEvents is unused (nil hook is safe — router guards it).
-					var ingestFn func(string, []antifraud.SlaveIPEvent)
-					if cfg.IsMaster() {
+				if deps.Cfg.AntiFraud.Enabled {
+					afConfig := &antifraud.Config{
+						Enabled:               deps.Cfg.AntiFraud.Enabled,
+						DryRun:                deps.Cfg.AntiFraud.DryRun,
+						LogPath:               deps.Cfg.AntiFraud.LogPath,
+						LogRotationSizeMB:     deps.Cfg.AntiFraud.LogRotationSizeMB,
+						IPLimitTTL:            deps.Cfg.AntiFraud.IPLimitTTL,
+						BanDuration:           deps.Cfg.AntiFraud.BanDuration,
+						SuspiciousIPThreshold: deps.Cfg.AntiFraud.MaxIPs,
+						ReportToMaster:        deps.Cfg.AntiFraud.ReportToMaster,
+						IsMaster:              deps.Cfg.IsMaster(),
+					}
+					afModule := antifraud.New(afConfig, deps.Registry, vpnEngine, vpnEngine, deps.Propagator, reporter, slog.Default())
+					var ingestFn func(string, []domain.FraudEvent)
+					if deps.Cfg.IsMaster() {
 						ingestFn = afModule.IngestEvents
 					}
 					apiRouter.WithAntiFraud(afModule.IsBanned, afModule.ForceUnban, afModule.GetSnapshot, ingestFn)
 					go afModule.Run(context.Background())
 					logger.Infof("[ANTIFRAUD] Anti-Fraud module started (log_path=%s, max_ips=%d)",
-						cfg.AntiFraud.LogPath, cfg.AntiFraud.MaxIPs)
+						deps.Cfg.AntiFraud.LogPath, deps.Cfg.AntiFraud.MaxIPs)
 				} else {
 					logger.Infof("[ANTIFRAUD] Anti-Fraud module DISABLED in config")
 				}
@@ -153,11 +189,10 @@ func startServerCmd() *cobra.Command {
 				mux.Handle("/", apiRouter)
 				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
 
-				if cfg.Worker.Enabled {
-					apiClient := xrayapi.NewGRPCClient(cfg.Xray.APIAddr)
-					wkr := worker.NewExpiryWorker(database.DB(), cfg, events.NewDispatcher(cfg), apiClient, slog.Default())
+				if deps.Cfg.Worker.Enabled {
+					wkr := worker.NewExpiryWorker(deps.Registry, deps.Cfg, deps.Dispatcher, vpnEngine, slog.Default())
 					go wkr.Run(context.Background())
-					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", cfg.Worker.ExpiryInterval)
+					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", deps.Cfg.Worker.ExpiryInterval)
 				} else {
 					logger.Infof("[WORKER] Background Expiry Worker is DISABLED in config")
 				}
@@ -172,7 +207,7 @@ func startServerCmd() *cobra.Command {
 
 			logger.Infof(" Server:  127.0.0.1:%d", port)
 			logger.Infof(" Script:  %s", xraytoolPath)
-			logger.Infof(" Allowed: %s", strings.Join(cfg.Server.AllowedDirs, ", "))
+			logger.Infof(" Allowed: %s", strings.Join(deps.Cfg.Server.AllowedDirs, ", "))
 
 			logger.Infof("API server listening on 127.0.0.1:%d", port)
 
@@ -189,6 +224,7 @@ func startServerCmd() *cobra.Command {
 			// and webhook deliveries before the process exits.
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+			done := make(chan struct{})
 			go func() {
 				<-quit
 				logger.Infof("[SHUTDOWN] Received termination signal — shutting down gracefully")
@@ -206,14 +242,17 @@ func startServerCmd() *cobra.Command {
 					apiRouter.Shutdown()
 				} else {
 					logger.Infof("[SHUTDOWN] Waiting for in-flight webhook deliveries...")
-					dispatcher.Shutdown()
+					deps.Dispatcher.Shutdown()
 				}
 				logger.Infof("[SHUTDOWN] All background tasks complete. Bye.")
+				close(done)
 			}()
 
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Errorf("API Server failed: %v", err)
+				return err
 			}
+			<-done
 			return nil
 		},
 	}

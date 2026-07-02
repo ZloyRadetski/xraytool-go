@@ -10,7 +10,7 @@ import (
 func TestListPayments(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":4001,"username":"PaymentUser"}`)
-	
+
 	wCreate := doAuth(r, "POST", "/api/v1/payments/create", `{"telegram_id":4001,"amount":100,"payment_type":"subscription","method":"cryptobot"}`)
 	if wCreate.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", wCreate.Code)
@@ -37,7 +37,7 @@ func TestListPayments(t *testing.T) {
 func TestGetPayment(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":4002,"username":"PaymentUser2"}`)
-	
+
 	wCreate := doAuth(r, "POST", "/api/v1/payments/create", `{"telegram_id":4002,"amount":250,"payment_type":"balance","method":"stars"}`)
 	pid := int(jsonBody(t, wCreate)["payment_id"].(float64))
 
