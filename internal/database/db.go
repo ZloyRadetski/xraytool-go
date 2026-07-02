@@ -3,6 +3,10 @@ package database
 import (
 	"fmt"
 
+	"log"
+	"os"
+	"time"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -30,7 +34,20 @@ func NewConnection(cfg Config) (*gorm.DB, error) {
 	var gormDB *gorm.DB
 	var err error
 
-	gormConfig := &gorm.Config{}
+	// Customize GORM logger to avoid spamming "record not found" and queries in production
+	gormLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             time.Second,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+
+	gormConfig := &gorm.Config{
+		Logger: gormLogger,
+	}
 	if cfg.Silent {
 		gormConfig.Logger = logger.Default.LogMode(logger.Silent)
 	}
