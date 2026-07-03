@@ -159,6 +159,7 @@ func (t *tailer) run(ctx context.Context) {
 		f      *os.File
 		reader *bufio.Scanner
 		offset int64
+		isFirstRun = true
 	)
 
 	openFile := func() {
@@ -170,13 +171,24 @@ func (t *tailer) run(ctx context.Context) {
 		if err != nil {
 			f = nil
 			reader = nil
-			offset = 0
 			return
 		}
-		// Seek to the last known offset so we don't re-process old lines.
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			offset = 0
+		
+		if isFirstRun {
+			// On very first startup, skip old logs to avoid mass false-positives
+			// because they would all be assigned time.Now().
+			if end, err := f.Seek(0, io.SeekEnd); err == nil {
+				offset = end
+			}
+			isFirstRun = false
+		} else {
+			// Seek to the last known offset so we don't re-process old lines.
+			// When rotated, offset is 0, so it reads from beginning of new file.
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				offset = 0
+			}
 		}
+
 		reader = bufio.NewScanner(f)
 		// Increase the buffer to handle very long log lines without crashing.
 		reader.Buffer(make([]byte, 128*1024), 128*1024)

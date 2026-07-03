@@ -82,8 +82,14 @@ func (r *FraudReporterAdapter) flush() {
 		r.mu.Unlock()
 		return
 	}
-	batch := make([]domain.FraudEvent, len(r.buf))
-	copy(batch, r.buf)
+	
+	// Chunk size to prevent 413 Request Entity Too Large
+	chunkSize := 1000
+	if len(r.buf) < chunkSize {
+		chunkSize = len(r.buf)
+	}
+	batch := make([]domain.FraudEvent, chunkSize)
+	copy(batch, r.buf[:chunkSize])
 	r.mu.Unlock()
 
 	type slaveIPEvent struct {
@@ -114,17 +120,23 @@ func (r *FraudReporterAdapter) flush() {
 	}
 
 	_, err = r.client.Call(r.entry, "antifraud-events", map[string]string{"payload": string(payload)})
+	
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
 	if err != nil {
 		r.log.Warn("antifraud slave reporter adapter: failed to reach master", slog.String("err", err.Error()))
+		// Drop the buffer to prevent permanent blockage (e.g. if Nginx returns 413)
+		// We drop the whole buffer because old IPs are no longer relevant for the 3-minute window anyway.
+		r.buf = r.buf[:0]
 		return
 	}
 
-	r.mu.Lock()
-	if len(r.buf) == len(batch) {
+	// Remove processed chunk from buffer
+	if len(r.buf) <= len(batch) {
 		r.buf = r.buf[:0]
 	} else {
 		n := copy(r.buf, r.buf[len(batch):])
 		r.buf = r.buf[:n]
 	}
-	r.mu.Unlock()
 }
