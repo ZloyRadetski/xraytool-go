@@ -86,6 +86,16 @@ func (s *Service) FindAll(ctx context.Context) ([]domain.Payment, error) {
 	return s.registry.Payments().FindAll(ctx)
 }
 
+// ScrubOldPayments deletes the external_id from payments older than a specific duration to protect user privacy.
+func (s *Service) ScrubOldPayments(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	count, err := s.registry.Payments().ScrubOldExternalIDs(ctx, cutoff)
+	if err == nil && count > 0 {
+		s.log.Info("scrubbed old payment external IDs", "count", count, "cutoff", cutoff)
+	}
+	return count, err
+}
+
 
 
 // FindPaymentsByFilters is a specific method matching handlers.

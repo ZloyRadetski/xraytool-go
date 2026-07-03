@@ -101,6 +101,7 @@ type PaymentRepository interface {
 	FindByExternalID(ctx context.Context, extID string) (*Payment, error)
 	CountByPromoAndUser(ctx context.Context, promoID int64, userID string, status string) (int64, error)
 	CountByUserAndPromo(ctx context.Context, userID string, promoID int64) (int64, error)
+	ScrubOldExternalIDs(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // PlanRepository is the driven port for plan persistence.

@@ -193,6 +193,11 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 					wkr := worker.NewExpiryWorker(deps.Registry, deps.Cfg, deps.Dispatcher, vpnEngine, slog.Default())
 					go wkr.Run(context.Background())
 					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", deps.Cfg.Worker.ExpiryInterval)
+
+					// Start the Data Scrubber for Privacy
+					scrubber := worker.NewScrubberWorker(deps.PaymentSvc, slog.Default())
+					go scrubber.Run(context.Background())
+					logger.Infof("[WORKER] Background Privacy Scrubber started (7-day payment footprint retention)")
 				} else {
 					logger.Infof("[WORKER] Background Expiry Worker is DISABLED in config")
 				}

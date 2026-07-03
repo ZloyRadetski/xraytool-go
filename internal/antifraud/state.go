@@ -4,6 +4,9 @@
 package antifraud
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -14,7 +17,7 @@ type ipEntry struct {
 }
 
 // userIPState stores the set of active IP addresses for one email.
-// The map key is the raw IP string (without port).
+// The map key is the hashed IP string to protect user privacy.
 type userIPState struct {
 	ips map[string]ipEntry
 }
@@ -34,14 +37,26 @@ type userIPState struct {
 //   - Large IP churn: Clean runs every 15s, preventing unbounded map growth.
 type State struct {
 	mu    sync.Mutex
+	salt  []byte
 	users map[string]*userIPState
 }
 
-// newState allocates an empty State.
+// newState allocates an empty State and generates a random salt for IP hashing.
 func newState() *State {
+	salt := make([]byte, 32)
+	_, _ = rand.Read(salt)
 	return &State{
+		salt:  salt,
 		users: make(map[string]*userIPState, 64),
 	}
+}
+
+// hashIP computes a salted SHA-256 hash of the IP address.
+func (s *State) hashIP(ip string) string {
+	h := sha256.New()
+	h.Write([]byte(ip))
+	h.Write(s.salt)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // AddEvent records a connection event for the given email+IP pair.
@@ -58,7 +73,8 @@ func (s *State) AddEvent(email, ip string, ttl time.Duration, now time.Time) int
 		s.users[email] = u
 	}
 
-	u.ips[ip] = ipEntry{lastSeen: now}
+	ipHash := s.hashIP(ip)
+	u.ips[ipHash] = ipEntry{lastSeen: now}
 
 	// Inline TTL pruning on every write to keep the hot path O(active IPs),
 	// not O(all ever-seen IPs). This avoids the Clean goroutine having to
