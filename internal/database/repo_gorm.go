@@ -676,7 +676,7 @@ func (r *gormPaymentRepo) CountByUserAndPromo(ctx context.Context, userID string
 
 func (r *gormPaymentRepo) ScrubOldExternalIDs(ctx context.Context, cutoff time.Time) (int64, error) {
 	res := r.db.WithContext(ctx).Model(&Payment{}).
-		Where("status IN ('completed', 'failed', 'canceled') AND updated_at < ? AND external_id IS NOT NULL", cutoff).
+		Where("status IN ('completed', 'failed', 'canceled') AND created_at < ? AND external_id IS NOT NULL", cutoff).
 		Update("external_id", nil)
 	return res.RowsAffected, wrapError(res.Error)
 }
