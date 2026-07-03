@@ -85,6 +85,9 @@ type AntiFraudConf struct {
 	// so that master has a global view across all nodes for fraud detection.
 	// The master node must have anti_fraud.enabled: true.
 	ReportToMaster bool `yaml:"report_to_master"`
+	// SaltSecret is an optional shared secret between Master and Slaves to ensure
+	// deterministic IP hashing when Master and Slaves use different auth API keys.
+	SaltSecret string `yaml:"salt_secret"`
 }
 
 // MailerConf holds configuration for transactional email delivery via Resend.

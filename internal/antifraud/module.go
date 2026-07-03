@@ -110,8 +110,8 @@ func (m *Module) IsBanned(email string) bool {
 
 // SnapshotData holds the state of the antifraud module.
 type SnapshotData struct {
-	State        map[string]int `json:"state"`
-	ActiveSlaves int            `json:"active_slaves"`
+	State        map[string][]string `json:"state"`
+	ActiveSlaves int                 `json:"active_slaves"`
 }
 
 // GetSnapshot returns the current state of active IP counts and active slave nodes.

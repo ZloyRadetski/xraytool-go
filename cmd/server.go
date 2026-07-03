@@ -166,6 +166,9 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 					if !deps.Cfg.IsMaster() && deps.Cfg.MasterAPI.APIKey != "" {
 						saltAPIKey = deps.Cfg.MasterAPI.APIKey
 					}
+					if deps.Cfg.AntiFraud.SaltSecret != "" {
+						saltAPIKey = deps.Cfg.AntiFraud.SaltSecret
+					}
 
 					afConfig := &antifraud.Config{
 						Enabled:               deps.Cfg.AntiFraud.Enabled,

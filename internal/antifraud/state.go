@@ -157,12 +157,18 @@ func (s *State) ActiveIPCount(email string) int {
 
 // Snapshot returns a debug snapshot of all tracked emails and their IP counts.
 // Not used in the hot path — only for diagnostics.
-func (s *State) Snapshot() map[string]int {
+func (s *State) Snapshot() map[string][]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make(map[string]int, len(s.users))
+	res := make(map[string][]string, len(s.users))
 	for email, u := range s.users {
-		out[email] = len(u.ips)
+		if len(u.ips) > 0 {
+			var hashes []string
+			for h := range u.ips {
+				hashes = append(hashes, h)
+			}
+			res[email] = hashes
+		}
 	}
-	return out
+	return res
 }

@@ -49,9 +49,9 @@ func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			var result struct {
-				Enabled      bool           `json:"enabled"`
-				State        map[string]int `json:"state"`
-				ActiveSlaves int            `json:"active_slaves"`
+				Enabled      bool                `json:"enabled"`
+				State        map[string][]string `json:"state"`
+				ActiveSlaves int                 `json:"active_slaves"`
 			}
 
 			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -59,21 +59,23 @@ func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			if !result.Enabled {
-				fmt.Println("Anti-Fraud is disabled on the server.")
+				fmt.Println("Anti-Fraud is currently DISABLED on the server.")
 				return nil
 			}
 
-			fmt.Printf("Active Slaves reporting stats: %d\n", result.ActiveSlaves)
-
+			fmt.Printf("Active Slaves reporting stats: %d\n\n", result.ActiveSlaves)
 			if len(result.State) == 0 {
-				fmt.Println("No active IPs currently tracked.")
+				fmt.Println("No active users tracked by AntiFraud in the current time window.")
 				return nil
 			}
 
-			fmt.Printf("Active Users (Tracking IPs over %s):\n", deps.Cfg.AntiFraud.IPLimitTTL)
+			fmt.Println("Current Active IP Counts:")
+			for email, hashes := range result.State {
+				fmt.Printf("  %s: %d IPs (Hashes: %v)\n", email, len(hashes), hashes)
+			}
 			fmt.Println("---------------------------------------------------------")
-			for email, count := range result.State {
-				fmt.Printf("%-35s : %d IP(s)\n", email, count)
+			for email, hashes := range result.State {
+				fmt.Printf("%-35s : %d IP(s)\n", email, len(hashes))
 			}
 			fmt.Println("---------------------------------------------------------")
 			fmt.Printf("Total tracked users: %d\n", len(result.State))
