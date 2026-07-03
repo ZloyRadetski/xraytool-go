@@ -162,6 +162,11 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 
 				// 🟢 Anti-Fraud Module 🟢──────────────────────────────────────────────
 				if deps.Cfg.AntiFraud.Enabled {
+					saltAPIKey := deps.Cfg.Server.APIKey
+					if !deps.Cfg.IsMaster() && deps.Cfg.MasterAPI.APIKey != "" {
+						saltAPIKey = deps.Cfg.MasterAPI.APIKey
+					}
+
 					afConfig := &antifraud.Config{
 						Enabled:               deps.Cfg.AntiFraud.Enabled,
 						DryRun:                deps.Cfg.AntiFraud.DryRun,
@@ -172,7 +177,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 						SuspiciousIPThreshold: deps.Cfg.AntiFraud.MaxIPs,
 						ReportToMaster:        deps.Cfg.AntiFraud.ReportToMaster,
 						IsMaster:              deps.Cfg.IsMaster(),
-						APIKey:                deps.Cfg.Server.APIKey,
+						APIKey:                saltAPIKey,
 					}
 					afModule := antifraud.New(afConfig, deps.Registry, vpnEngine, vpnEngine, deps.Propagator, reporter, slog.Default())
 					var ingestFn func(string, []domain.FraudEvent)
