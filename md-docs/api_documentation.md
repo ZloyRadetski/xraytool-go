@@ -1,7 +1,4 @@
 # Документация REST API (xraytool-go)
-
-Привет! Я изучил роутинг и хендлеры нашего приложения. Как Senior Go Developer, хочу отметить, что структура API выглядит логично, но важно всегда поддерживать актуальную документацию для интеграции с клиентами (в данном случае с Python Telegram ботом). 
-
 Ниже представлена **подробнейшая документация по всем API эндпоинтам** с примерами валидных запросов и ответов.
 
 ---
@@ -577,6 +574,22 @@ X-API-Key: secret
 }
 ```
 
+### 24.1. `DELETE /api/v1/admin/users/{platform}/{id}`
+Полное удаление пользователя из базы данных и выдворение из Xray. Действие необратимо.
+
+**Пример запроса:**
+```http
+DELETE /api/v1/admin/users/telegram/123456789 HTTP/1.1
+X-API-Key: secret
+```
+
+**Пример ответа (200 OK):**
+```json
+{
+  "ok": true
+}
+```
+
 ---
 ## 💳 Тарифы и Промокоды (Protected)
 
@@ -654,12 +667,51 @@ X-API-Key: secret
 ## ⚙️ Внутренние методы (Internal)
 
 ### 32. `POST /api/v1/internal/xray/sync`
-Принудительная синхронизация состояния БД с ядром Xray.
-**Пример запроса:**
+Единый роут для кластерной синхронизации и общения Master-Slave. Принимает тело JSON, где поле `action` определяет операцию.
+
+**Пример синхронизации пакета изменений (apply-batch):**
 ```http
 POST /api/v1/internal/xray/sync HTTP/1.1
+Content-Type: application/json
 X-API-Key: secret
+
+{
+  "action": "apply-batch",
+  "payload": "{\"add\": [{\"Email\": \"bot_client_1\"}], \"remove\": [\"old_uuid\"]}"
+}
 ```
+
+**Пример создания пользователя на слейве (newuser):**
+```http
+POST /api/v1/internal/xray/sync HTTP/1.1
+Content-Type: application/json
+X-API-Key: secret
+
+{
+  "action": "newuser",
+  "email": "bot_client_123",
+  "uuid": "xray-uuid-string",
+  "expire": "2026-12-31T23:59:59Z",
+  "limit": "3",
+  "subfile": "xray-uuid-string",
+  "auth": "secret-auth-token"
+}
+```
+*(Поддерживаемые actions: `apply-batch`, `newuser`, `rmuser`, `setexpire`, `limit`, `setlimit`, `unlimit`, `usersnapshot`, `cli-stats`, `antifraud-events`)*
+
+---
+## 📁 REST Файлы и Конфиги
+
+Эндпоинты для обновления статических ссылок и загрузки файлов.
+
+### 33. `POST /api/rest/update-links`
+Обновление публичных ссылок для скачивания клиентов. Требует авторизации.
+
+### 34. `POST /api/rest/upload`
+Загрузка файлов на бэкенд (сертификаты, конфигурации).
+
+### 35. `GET /api/rest/download`
+Скачивание файлов с бэкенда.
 
 ---
 ## 📤 Исходящие вебхуки (Outbound Webhooks)
