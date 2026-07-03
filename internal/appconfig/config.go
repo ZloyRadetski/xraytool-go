@@ -78,9 +78,11 @@ type AntiFraudConf struct {
 	// During the ban, the user is removed from Xray memory only; the config on disk is untouched.
 	BanDuration string `yaml:"ban_duration"`
 	// LogRotationSizeMB is the file size threshold (in MB) that triggers log rotation.
-	// Rotation: rename to .old → gRPC RestartLogger → read .old → delete .old.
+	// LogRotationSizeMB sets the max size of the access log in Megabytes before it is rotated.
 	LogRotationSizeMB int `yaml:"log_rotation_size_mb"`
-	// ReportToMaster enables forwarding of IP events to the master server (slave-only).
+	// LogRotationMaxAge sets the maximum time a log file can exist before rotation (e.g. "5m").
+	LogRotationMaxAge string `yaml:"log_rotation_max_age"`
+	// ReportToMaster must be true on Slave nodes to enable sending batched IPs to Master.
 	// When true, the slave batches observed IP events every 5s and sends them to master
 	// so that master has a global view across all nodes for fraud detection.
 	// The master node must have anti_fraud.enabled: true.

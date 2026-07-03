@@ -175,6 +175,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 						DryRun:                deps.Cfg.AntiFraud.DryRun,
 						LogPath:               deps.Cfg.AntiFraud.LogPath,
 						LogRotationSizeMB:     deps.Cfg.AntiFraud.LogRotationSizeMB,
+						LogRotationMaxAge:     deps.Cfg.AntiFraud.LogRotationMaxAge,
 						IPLimitTTL:            deps.Cfg.AntiFraud.IPLimitTTL,
 						BanDuration:           deps.Cfg.AntiFraud.BanDuration,
 						SuspiciousIPThreshold: deps.Cfg.AntiFraud.MaxIPs,

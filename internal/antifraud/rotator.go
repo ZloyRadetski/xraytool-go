@@ -31,11 +31,13 @@ type rotator struct {
 	notifyCh     chan<- struct{} // signals tailer to switch to fresh file
 	log          *slog.Logger
 	tickInterval time.Duration
+	lastRotation time.Time
+	maxAge       time.Duration
 }
 
 const rotatorTickInterval = 10 * time.Second
 
-func newRotator(logPath string, maxMB int, loggerCtrl domain.LoggerController, notifyCh chan<- struct{}, log *slog.Logger) *rotator {
+func newRotator(logPath string, maxMB int, maxAge time.Duration, loggerCtrl domain.LoggerController, notifyCh chan<- struct{}, log *slog.Logger) *rotator {
 	return &rotator{
 		logPath:      logPath,
 		maxBytes:     int64(maxMB) * 1024 * 1024,
@@ -43,12 +45,14 @@ func newRotator(logPath string, maxMB int, loggerCtrl domain.LoggerController, n
 		notifyCh:     notifyCh,
 		log:          log,
 		tickInterval: rotatorTickInterval,
+		lastRotation: time.Now(),
+		maxAge:       maxAge,
 	}
 }
 
 // run starts the rotation ticker. Blocks until ctx is cancelled.
 func (r *rotator) run(ctx context.Context) {
-	r.log.Info("antifraud rotator: starting", "path", r.logPath, "limit_mb", r.maxBytes/1024/1024)
+	r.log.Info("antifraud rotator: starting", "path", r.logPath, "limit_mb", r.maxBytes/1024/1024, "max_age", r.maxAge)
 	defer r.log.Info("antifraud rotator: stopped")
 
 	ticker := time.NewTicker(r.tickInterval)
@@ -71,7 +75,18 @@ func (r *rotator) tryRotate() {
 		return
 	}
 
-	if info.Size() < r.maxBytes {
+	if info.Size() == 0 {
+		return
+	}
+
+	timeToRotate := false
+	if info.Size() >= r.maxBytes {
+		timeToRotate = true
+	} else if time.Since(r.lastRotation) >= r.maxAge {
+		timeToRotate = true
+	}
+
+	if !timeToRotate {
 		return
 	}
 
@@ -142,4 +157,6 @@ func (r *rotator) tryRotate() {
 	} else {
 		r.log.Info("antifraud rotator: old log removed, RAM freed", "path", oldPath)
 	}
+
+	r.lastRotation = time.Now()
 }

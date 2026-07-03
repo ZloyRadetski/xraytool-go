@@ -56,6 +56,7 @@ type Config struct {
 	DryRun                bool
 	LogPath               string
 	LogRotationSizeMB     int
+	LogRotationMaxAge     string
 	IPLimitTTL            string
 	BanDuration           string
 	SuspiciousIPThreshold int
@@ -208,9 +209,22 @@ func (m *Module) Run(ctx context.Context) {
 	// Channel for Rotator → Tailer "file renamed, re-open" signal.
 	rotateCh := make(chan struct{}, 1)
 
+	var maxAge time.Duration
+	if m.cfg.LogRotationMaxAge != "" {
+		if parsed, err := time.ParseDuration(m.cfg.LogRotationMaxAge); err == nil {
+			maxAge = parsed
+		} else {
+			m.log.Warn("antifraud: invalid log_rotation_max_age, using default 5m", "err", err)
+			maxAge = 5 * time.Minute
+		}
+	} else {
+		maxAge = 5 * time.Minute
+	}
+
 	rot := newRotator(
 		m.cfg.LogPath,
 		m.cfg.LogRotationSizeMB,
+		maxAge,
 		m.loggerCtrl,
 		rotateCh,
 		m.log,
