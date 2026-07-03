@@ -111,7 +111,12 @@ func (a *analyzer) handleEvent(e event) {
 	}
 
 	now := time.Now()
-	count := a.state.AddEvent(e.email, e.ip, a.ipTTL, now)
+	var count int
+	if e.isHashed {
+		count = a.state.AddHashedEvent(e.email, e.ip, a.ipTTL, now)
+	} else {
+		count = a.state.AddEvent(e.email, e.ip, a.ipTTL, now)
+	}
 
 	// Dynamic threshold: base limit × number of devices the user is allowed.
 	devices := a.getDeviceLimit(e.email)
@@ -119,7 +124,13 @@ func (a *analyzer) handleEvent(e event) {
 
 	// Forward to master for global aggregation (slave mode only, fire-and-forget).
 	if a.reporter != nil {
-		a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: e.ip}})
+		// Slave hashes the IP *before* sending to master to prevent raw IP from traversing the network.
+		// If e.isHashed is already true, we just send it. If false, we hash it.
+		ipToSend := e.ip
+		if !e.isHashed {
+			ipToSend = a.state.HashIP(e.ip)
+		}
+		a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: ipToSend}})
 		// If this slave is configured to report to master, the master makes the final
 		// decision. We skip local enforcement because the slave doesn't have the full DB
 		// (so it doesn't know the user's real max_devices).

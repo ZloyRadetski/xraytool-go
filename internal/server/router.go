@@ -62,9 +62,9 @@ type Router struct {
 	userSvc    *usersvc.Service
 	paymentSvc *payment.Service
 	// antifraud hooks — nil when the module is disabled.
-	isBanned    func(email string) bool
-	forceUnban  func(email string)
-	getSnapshot func() antifraud.SnapshotData
+	isBanned       func(email string) bool
+	forceUnban     func(email string)
+	getSnapshot    func() antifraud.SnapshotData
 	// ingestEvents is called when master receives IP events from a slave node.
 	// nil when the module is disabled or when running in slave mode.
 	ingestEvents func(slaveID string, events []domain.FraudEvent)

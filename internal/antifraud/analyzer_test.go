@@ -46,7 +46,7 @@ func TestAnalyzer_Enforce(t *testing.T) {
 		BanDuration: "1h",
 	}
 
-	state := newState()
+	state := newState("dummy-test-key")
 	bs := newBanStore()
 	log := slog.Default()
 
@@ -78,7 +78,7 @@ func TestAnalyzer_HandleEvent_DefaultOneDevice(t *testing.T) {
 		BanDuration: "1h",
 	}
 
-	state := newState()
+	state := newState("dummy-test-key")
 	bs := newBanStore()
 	log := slog.Default()
 
@@ -127,7 +127,7 @@ func TestAnalyzer_HandleEvent_MultiDevice(t *testing.T) {
 		MaxDevices: 2,
 	})
 
-	state := newState()
+	state := newState("dummy-test-key")
 	bs := newBanStore()
 	log := slog.Default()
 
@@ -157,7 +157,7 @@ func TestAnalyzer_GetDeviceLimit_Fallback(t *testing.T) {
 	}()
 
 	cfg := &Config{}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// User not in DB — should return 1 (safe fallback)
 	limit := an.getDeviceLimit("unknown@example.com")
@@ -182,7 +182,7 @@ func TestAnalyzer_GetDeviceLimit_CacheHit(t *testing.T) {
 	})
 
 	cfg := &Config{}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Warm the cache synchronously with a bulk refresh (same path used in production).
 	an.refreshDeviceCache()
@@ -217,7 +217,7 @@ func TestAnalyzer_RefreshDeviceCache(t *testing.T) {
 	})
 
 	cfg := &Config{}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	an.refreshDeviceCache()
 

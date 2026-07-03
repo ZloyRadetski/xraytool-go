@@ -36,7 +36,7 @@ func TestGetDeviceLimit_ZeroMaxDevicesTreatedAsFallback(t *testing.T) {
 	defer closeSQLite(t, db)
 
 	// Напрямую записываем 0 в кэш (симуляция некорректного MaxDevices=0 в БД).
-	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(&Config{}, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.deviceCache.mu.Lock()
 	an.deviceCache.limits["zero@x.com"] = 0
 	an.deviceCache.mu.Unlock()
@@ -61,7 +61,7 @@ func TestGetDeviceLimit_CachePersistsAfterRefresh(t *testing.T) {
 		Email: "old@x.com", Status: "active", MaxDevices: 3,
 	})
 
-	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(&Config{}, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	assert.Equal(t, 3, an.getDeviceLimit("old@x.com"))
@@ -87,7 +87,7 @@ func TestGetDeviceLimit_ConcurrentReads(t *testing.T) {
 		Email: "concurrent@x.com", Status: "active", MaxDevices: 4,
 	})
 
-	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(&Config{}, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	var wg sync.WaitGroup
@@ -114,7 +114,7 @@ func TestGetDeviceLimit_ConcurrentRefreshAndRead(t *testing.T) {
 		Email: "race@x.com", Status: "active", MaxDevices: 2,
 	})
 
-	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(&Config{}, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	var wg sync.WaitGroup
 	// Несколько горутин читают
@@ -159,7 +159,7 @@ func TestHandleEvent_DryRun_MultiDevice(t *testing.T) {
 	}
 
 	bs := newBanStore()
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 2, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), bs, nil, 5*time.Minute, 2, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	// threshold = 2 * 3 = 6
 
 	// 7 уникальных IP — в dry-run режиме бан не должен быть применён
@@ -182,7 +182,7 @@ func TestHandleEvent_AlreadyBanned_SkipsProcessing(t *testing.T) {
 	defer closeSQLite(t, db)
 
 	cfg := &Config{BanDuration: "1h"}
-	state := newState()
+	state := newState("dummy-test-key")
 	bs := newBanStore()
 	bs.setBan("banned@x.com", time.Now().Add(time.Hour))
 
@@ -212,7 +212,7 @@ func TestHandleEvent_ExactlyAtThreshold_NoBan(t *testing.T) {
 
 	cfg := &Config{BanDuration: "1h"}
 	bs := newBanStore()
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	// threshold = 3 * 2 = 6
 	an.refreshDeviceCache() // pre-warm so async fetch doesn't race with events
 
@@ -238,7 +238,7 @@ func TestHandleEvent_OneOverThreshold_Bans(t *testing.T) {
 
 	cfg := &Config{BanDuration: "1h"}
 	bs := newBanStore()
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), bs, nil, 5*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	// threshold = 3 * 2 = 6
 	an.refreshDeviceCache() // pre-warm
 
@@ -259,7 +259,7 @@ func TestHandleEvent_SameIPRepeated_NoBan(t *testing.T) {
 	cfg := &Config{BanDuration: "1h"}
 	bs := newBanStore()
 	// maxIPs = 1, MaxDevices fallback = 1 → threshold = 1
-	an := newAnalyzer(cfg, newState(), bs, nil, 5*time.Minute, 1, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), bs, nil, 5*time.Minute, 1, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 
 	// Один и тот же IP 100 раз
 	for i := 0; i < 100; i++ {
@@ -476,7 +476,7 @@ func BenchmarkGetDeviceLimit_CacheHit(b *testing.B) {
 		MaxDevices: 5,
 	})
 
-	an := newAnalyzer(&Config{}, newState(), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(&Config{}, newState("dummy-test-key"), newBanStore(), nil, time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	b.ResetTimer()
@@ -499,7 +499,7 @@ func BenchmarkHandleEvent_WithDeviceCache(b *testing.B) {
 	})
 
 	cfg := &Config{BanDuration: "1h"}
-	an := newAnalyzer(cfg, newState(), newBanStore(), nil, 3*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
+	an := newAnalyzer(cfg, newState("dummy-test-key"), newBanStore(), nil, 3*time.Minute, 3, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	an.refreshDeviceCache()
 
 	ips := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}

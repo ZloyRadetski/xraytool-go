@@ -4,7 +4,7 @@
 package antifraud
 
 import (
-	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"
@@ -36,44 +36,77 @@ type userIPState struct {
 //   - Empty email/ip: guarded by callers (parser.go guarantees non-empty values).
 //   - Large IP churn: Clean runs every 15s, preventing unbounded map growth.
 type State struct {
-	mu    sync.Mutex
-	salt  []byte
-	users map[string]*userIPState
+	mu       sync.Mutex
+	apiKey   string
+	saltDate string
+	salt     []byte
+	users    map[string]*userIPState
 }
 
-// newState allocates an empty State and generates a random salt for IP hashing.
-func newState() *State {
-	salt := make([]byte, 32)
-	_, _ = rand.Read(salt)
-	return &State{
-		salt:  salt,
-		users: make(map[string]*userIPState, 64),
+// newState allocates an empty State and initializes the salt.
+func newState(apiKey string) *State {
+	s := &State{
+		apiKey: apiKey,
+		users:  make(map[string]*userIPState, 64),
 	}
+	s.updateSaltLocked(time.Now().UTC())
+	return s
 }
 
-// hashIP computes a salted SHA-256 hash of the IP address.
-func (s *State) hashIP(ip string) string {
+// updateSaltLocked recalculates the salt if the UTC date has changed.
+func (s *State) updateSaltLocked(now time.Time) {
+	dateStr := now.Format("2006-01-02")
+	if s.saltDate == dateStr && s.salt != nil {
+		return
+	}
+	// Deterministic salt: HMAC-SHA256(Date, APIKey)
+	mac := hmac.New(sha256.New, []byte(s.apiKey))
+	mac.Write([]byte(dateStr))
+	s.salt = mac.Sum(nil)
+	s.saltDate = dateStr
+}
+
+// HashIP computes a salted SHA-256 hash of the IP address.
+func (s *State) HashIP(ip string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateSaltLocked(time.Now().UTC())
+	return s.hashIPLocked(ip)
+}
+
+// hashIPLocked computes the hash while the lock is already held.
+func (s *State) hashIPLocked(ip string) string {
 	h := sha256.New()
 	h.Write([]byte(ip))
 	h.Write(s.salt)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// AddEvent records a connection event for the given email+IP pair.
-// It returns the current number of unique active IPs for this email after the update.
-//
-// Callers: Analyzer.handleEvent
+// AddEvent records a connection event for the given email+IP pair (raw IP).
+// Callers: Analyzer.handleEvent (on Master)
 func (s *State) AddEvent(email, ip string, ttl time.Duration, now time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.updateSaltLocked(now.UTC())
+	ipHash := s.hashIPLocked(ip)
+	return s.addHashedEventLocked(email, ipHash, ttl, now)
+}
 
+// AddHashedEvent records an event where the IP is already hashed (from Slave).
+func (s *State) AddHashedEvent(email, ipHash string, ttl time.Duration, now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.addHashedEventLocked(email, ipHash, ttl, now)
+}
+
+// addHashedEventLocked handles the insertion and pruning.
+func (s *State) addHashedEventLocked(email, ipHash string, ttl time.Duration, now time.Time) int {
 	u, ok := s.users[email]
 	if !ok {
 		u = &userIPState{ips: make(map[string]ipEntry, 4)}
 		s.users[email] = u
 	}
 
-	ipHash := s.hashIP(ip)
 	u.ips[ipHash] = ipEntry{lastSeen: now}
 
 	// Inline TTL pruning on every write to keep the hot path O(active IPs),

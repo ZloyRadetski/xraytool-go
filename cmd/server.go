@@ -172,6 +172,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 						SuspiciousIPThreshold: deps.Cfg.AntiFraud.MaxIPs,
 						ReportToMaster:        deps.Cfg.AntiFraud.ReportToMaster,
 						IsMaster:              deps.Cfg.IsMaster(),
+						APIKey:                deps.Cfg.Server.APIKey,
 					}
 					afModule := antifraud.New(afConfig, deps.Registry, vpnEngine, vpnEngine, deps.Propagator, reporter, slog.Default())
 					var ingestFn func(string, []domain.FraudEvent)

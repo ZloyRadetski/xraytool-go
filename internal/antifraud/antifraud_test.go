@@ -108,7 +108,7 @@ func TestStripPort_Empty(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestState_AddEvent_CountsUniqueIPs(t *testing.T) {
-	s := newState()
+	s := newState("dummy-test-key")
 	ttl := 5 * time.Minute
 	now := time.Now()
 
@@ -122,7 +122,7 @@ func TestState_AddEvent_CountsUniqueIPs(t *testing.T) {
 }
 
 func TestState_AddEvent_SameIPNotDoubled(t *testing.T) {
-	s := newState()
+	s := newState("dummy-test-key")
 	ttl := 5 * time.Minute
 	now := time.Now()
 
@@ -134,7 +134,7 @@ func TestState_AddEvent_SameIPNotDoubled(t *testing.T) {
 }
 
 func TestState_AddEvent_StaleIPsPruned(t *testing.T) {
-	s := newState()
+	s := newState("dummy-test-key")
 	shortTTL := 50 * time.Millisecond
 
 	past := time.Now().Add(-1 * time.Second) // already expired
@@ -148,7 +148,7 @@ func TestState_AddEvent_StaleIPsPruned(t *testing.T) {
 }
 
 func TestState_Clean_RemovesExpiredEntries(t *testing.T) {
-	s := newState()
+	s := newState("dummy-test-key")
 	ttl := 50 * time.Millisecond
 
 	past := time.Now().Add(-1 * time.Second)
@@ -165,7 +165,7 @@ func TestState_Clean_RemovesExpiredEntries(t *testing.T) {
 }
 
 func TestState_Clean_RemovesEmptyUserEntries(t *testing.T) {
-	s := newState()
+	s := newState("dummy-test-key")
 	ttl := 1 * time.Millisecond
 
 	past := time.Now().Add(-1 * time.Second)
@@ -184,7 +184,7 @@ func TestState_Clean_RemovesEmptyUserEntries(t *testing.T) {
 }
 
 func TestState_MultipleUsers_Isolated(t *testing.T) {
-	s := newState()
+	s := newState("dummy-test-key")
 	ttl := 5 * time.Minute
 	now := time.Now()
 
@@ -238,7 +238,7 @@ func BenchmarkParseLine(b *testing.B) {
 }
 
 func BenchmarkState_AddEvent(b *testing.B) {
-	s := newState()
+	s := newState("dummy-test-key")
 	ttl := 3 * time.Minute
 	ips := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"}
 	b.ReportAllocs()

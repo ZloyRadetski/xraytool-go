@@ -13,8 +13,9 @@ import (
 // event represents a parsed connection event from the Xray access log.
 // Both fields are guaranteed non-empty by the parser before sending.
 type event struct {
-	email string
-	ip    string
+	email    string
+	ip       string
+	isHashed bool
 }
 
 // --- Parser constants ---

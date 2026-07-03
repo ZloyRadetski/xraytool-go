@@ -62,6 +62,7 @@ type Config struct {
 	ReportToMaster        bool
 
 	IsMaster          bool
+	APIKey            string
 }
 
 // Module is the public API for the anti-fraud component.
@@ -95,7 +96,7 @@ func New(cfg *Config, registry domain.Registry, banner domain.SoftBanner, logger
 		reporter:     reporter,
 		log:          log.With("component", "antifraud"),
 		banStore:     newBanStore(),
-		state:        newState(),
+		state:        newState(cfg.APIKey),
 		activeSlaves: make(map[string]time.Time),
 		eventCh:      make(chan event, 1000),
 	}
@@ -134,16 +135,9 @@ func (m *Module) GetSnapshot() SnapshotData {
 	}
 }
 
-// IngestEvents accepts IP events forwarded by slave nodes and feeds them into
-// the master's analyzer via the shared event channel.
-//
-// This is the integration point for the slave → master IP aggregation feature.
+// IngestEvents is the integration point for the slave → master IP aggregation feature.
 // It is called from the internal HTTP handler (handlers_internal.go) when the
 // master receives an "antifraud-events" action from a slave.
-//
-// Design notes:
-//   - Events are injected into the same eventCh that the tailer uses.
-//   - slaveID is used to track how many unique slaves are reporting.
 func (m *Module) IngestEvents(slaveID string, events []domain.FraudEvent) {
 	if slaveID != "" {
 		m.slavesMu.Lock()
@@ -155,11 +149,11 @@ func (m *Module) IngestEvents(slaveID string, events []domain.FraudEvent) {
 		if e.Email == "" || e.IP == "" {
 			continue
 		}
+		// The IP is already hashed by the Slave. Pass it to a special channel or just use IsHashed=true.
+		// Wait, event struct only has email and ip. Let's add isHashed to event.
 		select {
-		case m.eventCh <- event{email: e.Email, ip: e.IP}:
+		case m.eventCh <- event{email: e.Email, ip: e.IP, isHashed: true}:
 		default:
-			// Channel full — drop to avoid blocking the HTTP handler.
-			// The slave will retry on the next 5-second flush.
 		}
 	}
 }
