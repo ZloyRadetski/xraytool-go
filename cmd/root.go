@@ -81,6 +81,7 @@ func NewRootCmd() *cobra.Command {
 		migrateLegacyDBCmd(deps),
 		syncXrayCmd(deps),
 		applyBatchCmd(deps),
+		rotateKeysCmd(deps),
 	)
 
 	return rootCmd
