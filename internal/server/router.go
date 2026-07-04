@@ -277,3 +277,8 @@ func (r *Router) handleNotFound(w http.ResponseWriter, req *http.Request) {
 	r.logIntruder(req, "hit undefined route")
 	http.NotFound(w, req)
 }
+
+// Config returns the configuration. Useful for tests.
+func (r *Router) Config() *appconfig.Config {
+	return r.cfg
+}

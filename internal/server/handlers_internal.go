@@ -32,7 +32,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" && body.Action != "usersnapshot" && body.Action != "apply-batch" && body.Action != "cli-stats" && body.Action != "antifraud-events" {
+	if body.Email == "" && body.Action != "usersnapshot" && body.Action != "apply-batch" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
