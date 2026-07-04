@@ -37,6 +37,12 @@ type UserMutator interface {
 	RemoveUsersBulk(ctx context.Context, emails []string) error
 	SetExpire(ctx context.Context, email string, expire string) error
 	SetLimit(ctx context.Context, email string, limit float64) error
+
+	// RebuildInbound hot-rebuilds a single inbound by its tag.
+	// This is needed for protocols like hysteria2 that do not support
+	// per-user hot-add/hot-remove — the entire inbound is removed and
+	// re-added with the updated client list.
+	RebuildInbound(ctx context.Context, tag string) error
 }
 
 // TrafficReader handles reading metrics.

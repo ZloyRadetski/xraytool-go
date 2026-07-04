@@ -15,6 +15,7 @@ package vpn
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -128,6 +129,9 @@ func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error 
 		}
 	}
 
+	// After hot-add, rebuild any hysteria2 inbounds (they don't support per-user add).
+	a.rebuildHysteriaInbounds(ctx)
+
 	a.log.Info("xray adapter: user added", "email", user.Email)
 	return nil
 }
@@ -190,6 +194,9 @@ func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig
 		}
 	}
 
+	// After hot-add, rebuild any hysteria2 inbounds (they don't support per-user add).
+	a.rebuildHysteriaInbounds(ctx)
+
 	a.log.Info("xray adapter: bulk user add completed", "requested", len(users), "hot_added", len(allPayloads))
 	return nil
 }
@@ -242,6 +249,9 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 				"email", email, "err", err)
 		}
 	}
+
+	// After hot-remove, rebuild any hysteria2 inbounds (they don't support per-user remove).
+	a.rebuildHysteriaInbounds(ctx)
 
 	a.log.Info("xray adapter: user removed", "email", email)
 	return nil
@@ -316,6 +326,9 @@ func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
 				"email", email, "err", err)
 		}
 	}
+
+	// After hot-remove, rebuild any hysteria2 inbounds (they don't support per-user remove).
+	a.rebuildHysteriaInbounds(ctx)
 
 	a.log.Info("xray adapter: bulk user remove completed", "count", len(tagsByEmail))
 	return nil
@@ -594,6 +607,9 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		}
 	}
 
+	// 6. Rebuild all hysteria2 inbounds to apply the full user list.
+	a.rebuildHysteriaInbounds(ctx)
+
 	a.log.Info("xray adapter: sync completed",
 		"db_users", len(dbUsers),
 		"live_users", len(liveUsers),
@@ -601,6 +617,95 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		"removed", result.Removed,
 	)
 	return result, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RebuildInbound — hot-rebuild a hysteria2 inbound via remove + add
+// ─────────────────────────────────────────────────────────────────────────────
+
+// RebuildInbound hot-rebuilds a single inbound by its tag.
+// It reads the current config.json, finds the inbound, serializes it to JSON,
+// and calls the gRPC client to remove then re-add it.
+// Best-effort: failures are logged but not fatal — the config on disk is correct.
+func (a *Adapter) RebuildInbound(ctx context.Context, tag string) error {
+	cfg, err := Read(a.configPath)
+	if err != nil {
+		return fmt.Errorf("xray adapter RebuildInbound: read config: %w", err)
+	}
+
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return fmt.Errorf("xray adapter RebuildInbound: get inbounds: %w", err)
+	}
+
+	var target RawInbound
+	found := false
+	for _, ib := range inbounds {
+		if ib.Tag() == tag {
+			target = ib
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("xray adapter RebuildInbound: inbound %q not found in config", tag)
+	}
+
+	// Marshal the inbound to JSON as a single object.
+	inboundJSON, err := json.Marshal(target)
+	if err != nil {
+		return fmt.Errorf("xray adapter RebuildInbound: marshal inbound: %w", err)
+	}
+
+	a.log.Info("xray adapter: hot-rebuilding inbound", "tag", tag, "protocol", target.Protocol())
+
+	if err := a.grpc.RebuildInbound(ctx, tag, inboundJSON); err != nil {
+		a.log.Warn("xray adapter: RebuildInbound via gRPC failed (config already on disk)",
+			"tag", tag, "err", err)
+		// Non-fatal: config on disk is correct.
+	}
+
+	return nil
+}
+
+// rebuildHysteriaInbounds reads the current config and hot-rebuilds every
+// hysteria/hysteria2/hy2 inbound. Called after AddUser/RemoveUser operations
+// because these protocols don't support per-user hot-add/hot-remove.
+func (a *Adapter) rebuildHysteriaInbounds(ctx context.Context) {
+	cfg, err := Read(a.configPath)
+	if err != nil {
+		a.log.Warn("xray adapter: rebuildHysteriaInbounds: read config failed", "err", err)
+		return
+	}
+
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		a.log.Warn("xray adapter: rebuildHysteriaInbounds: get inbounds failed", "err", err)
+		return
+	}
+
+	for _, ib := range inbounds {
+		if !ib.IsHysteria() {
+			continue
+		}
+		tag := ib.Tag()
+		if tag == "" {
+			continue
+		}
+
+		inboundJSON, err := json.Marshal(ib)
+		if err != nil {
+			a.log.Warn("xray adapter: rebuildHysteriaInbounds: marshal inbound failed",
+				"tag", tag, "err", err)
+			continue
+		}
+
+		a.log.Info("xray adapter: hot-rebuilding hysteria inbound", "tag", tag)
+		if err := a.grpc.RebuildInbound(ctx, tag, inboundJSON); err != nil {
+			a.log.Warn("xray adapter: rebuildHysteriaInbounds: gRPC failed",
+				"tag", tag, "err", err)
+		}
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

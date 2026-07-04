@@ -68,10 +68,10 @@ func NewGRPCClient(addr string, log *slog.Logger) *GRPCClient {
 }
 
 var (
-	globalConns       = make(map[string]*grpc.ClientConn)
-	globalDialErr     = make(map[string]error)
-	globalDialTime    = make(map[string]time.Time)
-	globalConnsMu     sync.Mutex
+	globalConns    = make(map[string]*grpc.ClientConn)
+	globalDialErr  = make(map[string]error)
+	globalDialTime = make(map[string]time.Time)
+	globalConnsMu  sync.Mutex
 )
 
 // ---------------------------------------------------------------------------
@@ -213,9 +213,10 @@ func (g *GRPCClient) QueryStats(ctx context.Context) ([]UserStat, error) {
 //     (e.g. {"id":"...","email":"...","flow":"xtls-rprx-vision"})
 //
 // JSON → Protobuf strategy:
-//   We wrap clientJSON in a minimal settings object and feed it to the appropriate
-//   infra/conf parser (the same one the xray CLI uses internally via inbound_user_add.go).
-//   This avoids hand-crafting Protobuf structures for each protocol.
+//
+//	We wrap clientJSON in a minimal settings object and feed it to the appropriate
+//	infra/conf parser (the same one the xray CLI uses internally via inbound_user_add.go).
+//	This avoids hand-crafting Protobuf structures for each protocol.
 //
 // Dry-run scenarios verified:
 //   - Invalid UUID in clientJSON → parseUserForProtocol returns error before any gRPC call.
@@ -517,11 +518,72 @@ func firstUserFrom(built interface{}) (*protocol.User, error) {
 // RestartLogger — LoggerService.RestartLogger
 // ---------------------------------------------------------------------------
 
+// RebuildInbound hot-rebuilds a single inbound by removing it from the running
+// Xray process and re-adding it with the provided inbound JSON.
+// Used for protocols like hysteria2 that don't support per-user hot-add/hot-remove.
+//
+// The inboundJSON must be the raw JSON representation of the inbound as it
+// appears in config.json (a single JSON object with "tag", "protocol",
+// "settings", etc.).
+func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON []byte) error {
+	// Step 1: remove the inbound from the running process.
+	rmCtx, rmCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer rmCancel()
+
+	rmCmd := exec.CommandContext(rmCtx, "xray", "api", "rmi", "-s", g.addr, fmt.Sprintf("-tag=%s", tag))
+	rmOut, rmErr := rmCmd.CombinedOutput()
+	if rmErr != nil {
+		rmStr := strings.TrimSpace(string(rmOut))
+		// "not found" is acceptable — the inbound might already be absent.
+		if !strings.Contains(rmStr, "not found") {
+			g.log.Warn("xrayapi: remove inbound failed", "tag", tag, "err", rmErr, "out", rmStr)
+			return fmt.Errorf("rmi %s: %v (output: %s)", tag, rmErr, rmStr)
+		}
+		g.log.Info("xrayapi: inbound not found (already removed), proceeding with add", "tag", tag)
+	} else {
+		g.log.Info("xrayapi: inbound removed", "tag", tag)
+	}
+
+	// Step 2: write the inbound JSON to a temp file.
+	f, err := os.CreateTemp("", "xray-adi-inbound-*.json")
+	if err != nil {
+		return fmt.Errorf("creating temp file for adi: %w", err)
+	}
+	defer os.Remove(f.Name())
+
+	if _, err := f.Write(inboundJSON); err != nil {
+		f.Close()
+		return fmt.Errorf("writing temp file for adi: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing temp file for adi: %w", err)
+	}
+
+	// Step 3: add the inbound back.
+	adCtx, adCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer adCancel()
+
+	adCmd := exec.CommandContext(adCtx, "xray", "api", "adi", "-s", g.addr, f.Name())
+	adOut, adErr := adCmd.CombinedOutput()
+	if adErr != nil {
+		adStr := strings.TrimSpace(string(adOut))
+		g.log.Error("xrayapi: add inbound failed", "tag", tag, "err", adErr, "out", adStr)
+		return fmt.Errorf("adi %s: %v (output: %s)", tag, adErr, adStr)
+	}
+
+	g.log.Info("xrayapi: inbound rebuilt", "tag", tag)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// RestartLogger — LoggerService.RestartLogger
+// ---------------------------------------------------------------------------
+
 // RestartLogger signals Xray core to close and reopen its log file handles.
 // This is the safe, zero-downtime mechanism for log rotation:
-//   1. The caller renames access.log → access.log.old  (Xray keeps writing to .old via the open fd)
-//   2. RestartLogger is called  →  Xray closes the old fd and opens a fresh access.log
-//   3. The caller drains access.log.old and removes it, freeing RAM (tmpfs)
+//  1. The caller renames access.log → access.log.old  (Xray keeps writing to .old via the open fd)
+//  2. RestartLogger is called  →  Xray closes the old fd and opens a fresh access.log
+//  3. The caller drains access.log.old and removes it, freeing RAM (tmpfs)
 //
 // No user connections are interrupted; Xray core is NOT restarted.
 //
