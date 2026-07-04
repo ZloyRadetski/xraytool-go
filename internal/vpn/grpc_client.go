@@ -534,12 +534,12 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	rmOut, rmErr := rmCmd.CombinedOutput()
 	if rmErr != nil {
 		rmStr := strings.TrimSpace(string(rmOut))
-		// "not found" is acceptable — the inbound might already be absent.
-		if !strings.Contains(rmStr, "not found") {
+		// "not found" or "not enough information for making a decision" (ErrNoClue) is acceptable — the inbound might already be absent.
+		if !strings.Contains(rmStr, "not found") && !strings.Contains(rmStr, "not enough information for making a decision") {
 			g.log.Warn("xrayapi: remove inbound failed", "tag", tag, "err", rmErr, "out", rmStr)
 			return fmt.Errorf("rmi %s: %v (output: %s)", tag, rmErr, rmStr)
 		}
-		g.log.Info("xrayapi: inbound not found (already removed), proceeding with add", "tag", tag)
+		g.log.Info("xrayapi: inbound not found (already removed/not started yet), proceeding with add", "tag", tag)
 	} else {
 		g.log.Info("xrayapi: inbound removed", "tag", tag)
 	}
