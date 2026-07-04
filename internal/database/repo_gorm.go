@@ -918,7 +918,6 @@ type gormDeviceRepo struct {
 
 func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, deviceModel, deviceOs, userAgent string, deviceLimit int) (bool, error) {
 	deviceLimitReached := false
-	now := time.Now()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var device Device
 		res := tx.Where("subscription_id = ? AND hw_id = ?", subID, hwid).Limit(1).Find(&device)

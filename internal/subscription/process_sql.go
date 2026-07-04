@@ -221,7 +221,6 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 					"device_limit": deviceLimit,
 					"device_model": deviceModel,
 					"device_os":    deviceOs,
-					"ver_os":       verOs,
 					"user_agent":   req.UserAgent,
 				}
 
