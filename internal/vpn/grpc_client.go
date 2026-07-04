@@ -421,7 +421,7 @@ func (g *GRPCClient) RemoveUser(ctx context.Context, email string, tags []string
 // Supported protocols: vless, vmess, trojan, shadowsocks, shadowsocks-2022.
 func parseUserForProtocol(proto string, clientJSON []byte) (*protocol.User, error) {
 	switch strings.ToLower(proto) {
-	case "vless":
+	case "vless", "xhttp", "splithttp":
 		// VLESS inbound settings require "decryption":"none" — validated by Build().
 		settingsJSON := fmt.Sprintf(`{"decryption":"none","clients":[%s]}`, string(clientJSON))
 		rawSettings := json.RawMessage(settingsJSON)

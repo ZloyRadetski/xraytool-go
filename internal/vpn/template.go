@@ -163,7 +163,8 @@ func injectRealityKeys(cfg RawConfig, keys *RealityKeys) error {
 
 	modified := false
 	for i, ib := range inbounds {
-		if ib.Protocol() != "vless" {
+		proto := ib.Protocol()
+		if proto != "vless" && proto != "xhttp" && proto != "splithttp" {
 			continue
 		}
 

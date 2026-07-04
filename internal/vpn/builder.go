@@ -65,9 +65,9 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 	protocol := ib.Protocol()
 
 	switch protocol {
-	case "vless":
+	case "vless", "xhttp", "splithttp":
 		if params.UUID == "" {
-			return nil, fmt.Errorf("vless requires UUID")
+			return nil, fmt.Errorf("%s requires UUID", protocol)
 		}
 		result.Set("id", params.UUID)
 
