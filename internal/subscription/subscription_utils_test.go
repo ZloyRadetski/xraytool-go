@@ -86,20 +86,13 @@ func TestExtractHy2Pass(t *testing.T) {
 }
 
 func TestBuildDeterministicHy2Pass(t *testing.T) {
-	// From UUID hint
 	pass1 := buildDeterministicHy2Pass("1234-5678", "user@test.com")
-	if len(pass1) != 32 {
-		t.Errorf("Expected length 32, got %d", len(pass1))
+	if len(pass1) != 64 {
+		t.Errorf("Expected length 64, got %d", len(pass1))
 	}
-	if pass1 != "12345678123456781234567812345678" {
-		t.Errorf("Unexpected pass %s", pass1)
-	}
-
-	// From Email hint (UUID is empty)
-	pass2 := buildDeterministicHy2Pass("", "ab@c.12")
-	expectedSeed := "abc12"
-	if pass2[:5] != expectedSeed {
-		t.Errorf("Expected prefix %s, got %s", expectedSeed, pass2[:5])
+	pass2 := buildDeterministicHy2Pass("1234-5678", "user@test.com")
+	if pass1 != pass2 {
+		t.Errorf("Expected deterministic output, got different values: %s vs %s", pass1, pass2)
 	}
 }
 

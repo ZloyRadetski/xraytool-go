@@ -3,7 +3,9 @@ package subscription
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -517,27 +519,9 @@ func extractHy2Pass(rawAuth string) string {
 }
 
 func buildDeterministicHy2Pass(uuidHint, email string) string {
-	seed := strings.ReplaceAll(uuidHint, "-", "")
-	if seed != "" && strings.ToLower(seed) != "null" {
-		pass := strings.Repeat(seed, 32)
-		return pass[:32]
-	}
-	// Build seed from email
-	var sb strings.Builder
-	for _, r := range email {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			sb.WriteRune(r)
-		}
-	}
-	seed = sb.String()
-	if seed == "" {
-		seed = "hy2fallback"
-	}
-	pass := strings.Repeat(seed, 4)
-	if len(pass) < 32 {
-		pass = pass + strings.Repeat("0", 32-len(pass))
-	}
-	return pass[:32]
+	h := sha256.New()
+	h.Write([]byte(uuidHint + ":" + email + ":hy2"))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func getOrCreateHy2ObfsPassword(yamlPath string, cfg vpn.RawConfig) string {
