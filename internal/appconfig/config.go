@@ -325,6 +325,14 @@ platega_secret: "your_secret_here"
 # Secret used to sign outgoing webhooks sent to clients-tg-go
 webhook_secret: "your_webhook_secret_here"
 
+# Reality key and Short ID rotation settings
+reality:
+  # Automatically generate and rotate Reality keys and Short IDs on the Master node.
+  # Set to false on Slave nodes.
+  rotation_enabled: false
+  # Path to store the generated JSON keys file.
+  keys_filepath: "/etc/xraytool/configs/reality.keys"
+
 
 server:
   # Public IP of this server (informational, used in some outputs)
