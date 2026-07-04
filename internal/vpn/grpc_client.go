@@ -530,7 +530,7 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	rmCtx, rmCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer rmCancel()
 
-	rmCmd := exec.CommandContext(rmCtx, "xray", "api", "rmi", "-s", g.addr, fmt.Sprintf("-tag=%s", tag))
+	rmCmd := exec.CommandContext(rmCtx, "xray", "api", "rmi", "--server", g.addr, tag)
 	rmOut, rmErr := rmCmd.CombinedOutput()
 	if rmErr != nil {
 		rmStr := strings.TrimSpace(string(rmOut))
@@ -563,7 +563,7 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	adCtx, adCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer adCancel()
 
-	adCmd := exec.CommandContext(adCtx, "xray", "api", "adi", "-s", g.addr, f.Name())
+	adCmd := exec.CommandContext(adCtx, "xray", "api", "adi", "--server", g.addr, f.Name())
 	adOut, adErr := adCmd.CombinedOutput()
 	if adErr != nil {
 		adStr := strings.TrimSpace(string(adOut))
