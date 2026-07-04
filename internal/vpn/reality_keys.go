@@ -84,3 +84,19 @@ func LoadOrCreateRealityKeys(keysPath string) (*RealityKeys, error) {
 
 	return keys, nil
 }
+
+// LoadRealityKeys reads keys from keysPath without generating them.
+func LoadRealityKeys(keysPath string) (*RealityKeys, error) {
+	data, err := os.ReadFile(keysPath)
+	if err != nil {
+		return nil, err
+	}
+	var keys RealityKeys
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("unmarshal reality keys: %w", err)
+	}
+	if keys.PrivateKey == "" || keys.PublicKey == "" || len(keys.ShortIDs) == 0 {
+		return nil, fmt.Errorf("invalid or incomplete reality keys file")
+	}
+	return &keys, nil
+}

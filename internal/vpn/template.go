@@ -121,13 +121,24 @@ func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserC
 		return fmt.Errorf("regenerate: read template %q: %w", templatePath, err)
 	}
 
-	if realityRotation && realityKeysPath != "" {
-		keys, err := LoadOrCreateRealityKeys(realityKeysPath)
-		if err != nil {
-			return fmt.Errorf("regenerate: load or create reality keys: %w", err)
+	if realityKeysPath != "" {
+		var keys *RealityKeys
+		var err error
+		if realityRotation {
+			keys, err = LoadOrCreateRealityKeys(realityKeysPath)
+		} else {
+			keys, err = LoadRealityKeys(realityKeysPath)
 		}
-		if err := injectRealityKeys(template, keys); err != nil {
-			return fmt.Errorf("regenerate: inject reality keys: %w", err)
+		if err == nil {
+			if err := injectRealityKeys(template, keys); err != nil {
+				return fmt.Errorf("regenerate: inject reality keys: %w", err)
+			}
+		} else {
+			if realityRotation {
+				return fmt.Errorf("regenerate: load or create reality keys: %w", err)
+			} else {
+				slog.Default().Warn("template: reality keys file not found or invalid on slave node, skipping injection", "path", realityKeysPath, "err", err)
+			}
 		}
 	}
 
