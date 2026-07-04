@@ -68,13 +68,7 @@ type Device struct {
 	HWID        string `gorm:"type:text;not null;index"`
 	DeviceModel string `gorm:"type:text"`
 	DeviceOS    string `gorm:"type:text"`
-	// VerOS is the OS version string.
-	VerOS     string `gorm:"type:text"`
-	UserAgent string `gorm:"type:text"`
-	// RequestCount is incremented each time this device fetches a subscription.
-	RequestCount int `gorm:"default:1;not null"`
-	FirstSeen    time.Time
-	LastSeen     time.Time
+	UserAgent   string `gorm:"type:text"`
 }
 
 // Payment records a financial transaction for a user.

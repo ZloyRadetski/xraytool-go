@@ -127,7 +127,7 @@ type PromoRepository interface {
 
 // DeviceRepository is the driven port for device persistence.
 type DeviceRepository interface {
-	TrackDevice(ctx context.Context, subID string, hwid, deviceModel, deviceOs, verOs, userAgent string, deviceLimit int) (deviceLimitReached bool, err error)
+	TrackDevice(ctx context.Context, subID string, hwid, deviceModel, deviceOs, userAgent string, deviceLimit int) (deviceLimitReached bool, err error)
 	CountBySubscriptions(ctx context.Context, subIDs []string) (map[string]int64, error)
 	FindOldestBySubscription(ctx context.Context, subID string, limit int) ([]Device, error)
 	DeleteByIDs(ctx context.Context, ids []int64) error

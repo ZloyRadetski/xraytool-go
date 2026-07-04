@@ -198,7 +198,6 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		))
 		deviceModel := pickRequestValue(req, []string{"device_model", "model", "deviceModel"}, []string{"Device-Model", "X-Device-Model"})
 		deviceOs := pickRequestValue(req, []string{"device_os", "os", "platform"}, []string{"Device-Os", "X-Device-Os", "X-Platform"})
-		verOs := pickRequestValue(req, []string{"ver_os", "os_version", "osVersion"}, []string{"Ver-Os", "X-Os-Version", "Os-Version"})
 
 		if hwid == "" {
 			unsupportedClient = true
@@ -206,7 +205,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 
 		if !unsupportedClient && hwid != "" {
 			// SQL-based Device tracking
-			deviceLimitReached, err = reg.Devices().TrackDevice(ctx, sub.ID, hwid, deviceModel, deviceOs, verOs, req.UserAgent, deviceLimit)
+			deviceLimitReached, err = reg.Devices().TrackDevice(ctx, sub.ID, hwid, deviceModel, deviceOs, req.UserAgent, deviceLimit)
 
 			if err != nil {
 				logger.Errorf("[ProcessSQL] SQL error in device check for subscription %s: %v", sub.ID, err)

@@ -22,8 +22,8 @@ func NewScrubberWorker(paymentSvc *payment.Service, log *slog.Logger) *ScrubberW
 	return &ScrubberWorker{
 		paymentSvc: paymentSvc,
 		log:        log.With("component", "scrubber_worker"),
-		interval:   24 * time.Hour,       // Check once a day
-		retention:  7 * 24 * time.Hour,   // Keep external_ids for 7 days
+		interval:   time.Hour,            // Check every hour
+		retention:  24 * time.Hour,       // Keep external_ids for 24 hours
 	}
 }
 

@@ -41,11 +41,7 @@ type Device struct {
 	HWID           string
 	DeviceModel    string
 	DeviceOS       string
-	VerOS          string
 	UserAgent      string
-	RequestCount   int
-	FirstSeen      time.Time
-	LastSeen       time.Time
 }
 
 // Payment records a financial transaction for a user.

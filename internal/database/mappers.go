@@ -71,11 +71,7 @@ func (d Device) ToDomain() domain.Device {
 		HWID:           d.HWID,
 		DeviceModel:    d.DeviceModel,
 		DeviceOS:       d.DeviceOS,
-		VerOS:          d.VerOS,
 		UserAgent:      d.UserAgent,
-		RequestCount:   d.RequestCount,
-		FirstSeen:      d.FirstSeen,
-		LastSeen:       d.LastSeen,
 	}
 }
 
@@ -86,11 +82,7 @@ func FromDomainDevice(d domain.Device) Device {
 		HWID:           d.HWID,
 		DeviceModel:    d.DeviceModel,
 		DeviceOS:       d.DeviceOS,
-		VerOS:          d.VerOS,
 		UserAgent:      d.UserAgent,
-		RequestCount:   d.RequestCount,
-		FirstSeen:      d.FirstSeen,
-		LastSeen:       d.LastSeen,
 	}
 }
 

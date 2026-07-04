@@ -207,7 +207,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 					// Start the Data Scrubber for Privacy
 					scrubber := worker.NewScrubberWorker(deps.PaymentSvc, slog.Default())
 					go scrubber.Run(context.Background())
-					logger.Infof("[WORKER] Background Privacy Scrubber started (7-day payment footprint retention)")
+					logger.Infof("[WORKER] Background Privacy Scrubber started (24-hour payment footprint retention)")
 				} else {
 					logger.Infof("[WORKER] Background Expiry Worker is DISABLED in config")
 				}

@@ -916,7 +916,7 @@ type gormDeviceRepo struct {
 	db *gorm.DB
 }
 
-func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, deviceModel, deviceOs, verOs, userAgent string, deviceLimit int) (bool, error) {
+func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, deviceModel, deviceOs, userAgent string, deviceLimit int) (bool, error) {
 	deviceLimitReached := false
 	now := time.Now()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -943,20 +943,13 @@ func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, de
 				HWID:           hwid,
 				DeviceModel:    deviceModel,
 				DeviceOS:       deviceOs,
-				VerOS:          verOs,
 				UserAgent:      userAgent,
-				RequestCount:   1,
-				FirstSeen:      now,
-				LastSeen:       now,
 			}
 			return tx.Create(&newDevice).Error
 		} else {
 			return tx.Model(&device).Updates(map[string]interface{}{
-				"last_seen":     now,
-				"request_count": gorm.Expr("request_count + 1"),
 				"device_model":  deviceModel,
 				"device_os":     deviceOs,
-				"ver_os":        verOs,
 				"user_agent":    userAgent,
 			}).Error
 		}
