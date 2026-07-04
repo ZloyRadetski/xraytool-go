@@ -49,6 +49,7 @@ type EngineConf struct {
 type WorkerConf struct {
 	Enabled            bool     `yaml:"enabled"`             // defaults to true
 	ExpiryInterval     string   `yaml:"expiry_interval"`     // e.g., "5m"
+	SyncStatesInterval string   `yaml:"sync_states_interval"` // e.g., "3m"
 	ExpirationWarnings []string `yaml:"expiration_warnings"` // e.g., ["72h", "24h", "3h", "1h"]
 }
 
@@ -254,6 +255,7 @@ func defaults() *Config {
 		Worker: WorkerConf{
 			Enabled:            true,
 			ExpiryInterval:     "5m",
+			SyncStatesInterval: "3m",
 			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
 		},
 		Reality: RealityConf{
@@ -622,6 +624,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Worker.ExpiryInterval == "" {
 		cfg.Worker.ExpiryInterval = defs.Worker.ExpiryInterval
+	}
+	if cfg.Worker.SyncStatesInterval == "" {
+		cfg.Worker.SyncStatesInterval = defs.Worker.SyncStatesInterval
 	}
 	if len(cfg.Worker.ExpirationWarnings) == 0 {
 		cfg.Worker.ExpirationWarnings = defs.Worker.ExpirationWarnings

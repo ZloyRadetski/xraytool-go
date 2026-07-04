@@ -7,10 +7,8 @@ import (
 	"sort"
 	"time"
 
-		"xraytool/internal/domain"
-	)
-
-
+	"xraytool/internal/domain"
+)
 
 // Service provides application logic for collecting and merging statistics.
 type Service struct {
@@ -40,16 +38,16 @@ func (s *Service) GenerateLocalStats() ([]MergedUser, error) {
 		return nil, fmt.Errorf("loading stats state: %w", err)
 	}
 	localUsers := Cumulative(state)
-	
+
 	// Convert CumulativeUser to MergedUser (slave = 0)
 	merged := make([]MergedUser, len(localUsers))
 	for i, u := range localUsers {
 		ct := u.Total.Combined
 		merged[i] = MergedUser{
-			Email: u.Email,
-			Xray: u.Xray,
-			Total: u.Total,
-			Slave: 0,
+			Email:        u.Email,
+			Xray:         u.Xray,
+			Total:        u.Total,
+			Slave:        0,
 			ClusterTotal: &ct,
 		}
 	}
@@ -140,7 +138,6 @@ func (s *Service) GenerateClusterStats(inferredMode bool, statePath string) ([]M
 	return merged, slaveReport, nil
 }
 
-
 func (s *Service) mergeWithSlaves(local []CumulativeUser, slaveTotals []domain.SlaveUserTotal) []MergedUser {
 	slaveMap := make(map[string]int64, len(slaveTotals))
 	for _, s := range slaveTotals {
@@ -166,14 +163,18 @@ func (s *Service) mergeWithSlaves(local []CumulativeUser, slaveTotals []domain.S
 		s := slaveMap[email]
 		ct := u.Total.Combined + s
 		result = append(result, MergedUser{
-			Email:        email,
-			Xray:         u.Xray,
-			Total:        u.Total,
+			Email: email,
+			Xray:  u.Xray,
+			Total: TotalCounters{
+				Up:       u.Total.Up,
+				Down:     u.Total.Down,
+				Combined: ct,
+			},
 			Slave:        s,
 			ClusterTotal: &ct,
 		})
 	}
-	
+
 	// Sort by total bandwidth descending
 	sort.Slice(result, func(i, j int) bool {
 		return *result[i].ClusterTotal > *result[j].ClusterTotal

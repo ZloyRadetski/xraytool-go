@@ -19,6 +19,7 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/logger"
 	"xraytool/internal/server"
+	"xraytool/internal/statesync"
 	"xraytool/internal/slave"
 	"xraytool/internal/subscription"
 	"xraytool/internal/vpn"
@@ -225,6 +226,18 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 					wkr := worker.NewExpiryWorker(deps.Registry, deps.Cfg, deps.Dispatcher, vpnEngine, slog.Default())
 					go wkr.Run(context.Background())
 					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", deps.Cfg.Worker.ExpiryInterval)
+
+					if deps.Cfg.IsMaster() && len(deps.Cfg.SlaveServers) > 0 {
+						syncInterval, err := time.ParseDuration(deps.Cfg.Worker.SyncStatesInterval)
+						if err != nil || syncInterval <= 0 {
+							logger.Warnf("[WORKER] Invalid worker.sync_states_interval '%s', falling back to 3m", deps.Cfg.Worker.SyncStatesInterval)
+							syncInterval = 3 * time.Minute
+						}
+						syncSvc := statesync.NewService(deps.Registry, vpnEngine, deps.SlaveProvider)
+						syncWkr := worker.NewSyncStatesWorker(syncSvc, syncInterval, slog.Default())
+						go syncWkr.Run(context.Background())
+						logger.Infof("[WORKER] Background SyncStates Worker started with interval %s", syncInterval)
+					}
 
 					// Start the Data Scrubber for Privacy
 					scrubber := worker.NewScrubberWorker(deps.PaymentSvc, slog.Default())
