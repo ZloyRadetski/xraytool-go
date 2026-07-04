@@ -112,11 +112,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			// Graceful shutdown: close DB connection when server exits.
-			defer func() {
-				for _, cleanup := range deps.Cleanup {
-					cleanup()
-				}
-			}()
+			defer deps.RunCleanup()
 
 			// ── Step 5.1.5: Build the VPN Engine (Composition Root) ───────────────
 			// This is the ONLY place in the entire codebase that decides which

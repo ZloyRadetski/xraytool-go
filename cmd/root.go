@@ -33,6 +33,14 @@ type AppDeps struct {
 	Cleanup         []func()
 }
 
+// RunCleanup executes all registered cleanup functions and clears the slice to prevent double execution.
+func (deps *AppDeps) RunCleanup() {
+	for _, cleanup := range deps.Cleanup {
+		cleanup()
+	}
+	deps.Cleanup = nil
+}
+
 // Global flag variables
 var (
 	cfgFile string
@@ -49,6 +57,9 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return loadDependencies(deps, cfgFile)
+		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			deps.RunCleanup()
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
