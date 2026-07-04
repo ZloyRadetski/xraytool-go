@@ -12,6 +12,7 @@ import (
 type NoopEngine struct{}
 
 func (n *NoopEngine) AddUser(ctx context.Context, user domain.VPNUserConfig) error     { return nil }
+func (n *NoopEngine) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig) error { return nil }
 func (n *NoopEngine) RemoveUser(ctx context.Context, email string) error               { return nil }
 func (n *NoopEngine) RemoveUsersBulk(ctx context.Context, emails []string) error       { return nil }
 func (n *NoopEngine) SetExpire(ctx context.Context, email string, expire string) error { return nil }

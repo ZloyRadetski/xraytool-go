@@ -3,9 +3,8 @@ package subscription
 import (
 	"context"
 	"fmt"
-	"sync"
 
-		"xraytool/internal/domain"
+	"xraytool/internal/domain"
 )
 
 type BatchApplyResult struct {
@@ -18,46 +17,33 @@ type BatchApplyResult struct {
 
 // ApplyBatchOperations executes a batch of Add/Remove user operations on the local node.
 func ApplyBatchOperations(engine domain.Engine, payload domain.BatchPayload) BatchApplyResult {
-	var wg sync.WaitGroup
 	var errs []string
-	var mu sync.Mutex
 
 	addErr := func(err error) {
 		if err != nil {
-			mu.Lock()
 			errs = append(errs, err.Error())
-			mu.Unlock()
 		}
 	}
 
-	// 1. Hot-Remove explicitly removed users
-	for _, email := range payload.Remove {
-		wg.Add(1)
-		go func(e string) {
-			defer wg.Done()
-			addErr(engine.BanUser(context.Background(), e))
-		}(email)
+	// 1. Hot-Remove explicitly removed users in bulk (exactly 1 config file write)
+	if len(payload.Remove) > 0 {
+		addErr(engine.RemoveUsersBulk(context.Background(), payload.Remove))
 	}
 
-	// Wait for all removals to finish before adding
-	wg.Wait()
+	// 2. Hot-Add/Update:
+	// To prevent "already exists" errors on updates, we first remove the users we are about to add/update,
+	// and then add them in bulk.
+	if len(payload.Add) > 0 {
+		addEmails := make([]string, len(payload.Add))
+		for i, u := range payload.Add {
+			addEmails[i] = u.Email
+		}
+		// 2a. Bulk remove the users we are going to add (ensures clean update)
+		_ = engine.RemoveUsersBulk(context.Background(), addEmails)
 
-	// 2. Hot-Add/Update
-	for _, u := range payload.Add {
-		wg.Add(1)
-		go func(userCfg domain.VPNUserConfig) {
-			defer wg.Done()
-
-			// Remove first to prevent "already exists" errors on update, ignore errors.
-			_ = engine.BanUser(context.Background(), userCfg.Email)
-
-			
-			
-			addErr(engine.AddUser(context.Background(), userCfg))
-		}(u)
+		// 2b. Bulk add the new/updated users (exactly 1 config file write)
+		addErr(engine.AddUsersBulk(context.Background(), payload.Add))
 	}
-
-	wg.Wait()
 
 	if len(errs) > 0 {
 		return BatchApplyResult{Ok: false, Error: fmt.Sprintf("engine errors: %v", errs)}

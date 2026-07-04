@@ -32,6 +32,7 @@ type EngineSyncResult struct {
 // UserMutator handles the lifecycle of users in the VPN engine.
 type UserMutator interface {
 	AddUser(ctx context.Context, user VPNUserConfig) error
+	AddUsersBulk(ctx context.Context, users []VPNUserConfig) error
 	RemoveUser(ctx context.Context, email string) error
 	RemoveUsersBulk(ctx context.Context, emails []string) error
 	SetExpire(ctx context.Context, email string, expire string) error

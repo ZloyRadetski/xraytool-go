@@ -32,6 +32,24 @@ func (_m *Engine) AddUser(ctx context.Context, user domain.VPNUserConfig) error 
 	return r0
 }
 
+// AddUsersBulk provides a mock function with given fields: ctx, users
+func (_m *Engine) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig) error {
+	ret := _m.Called(ctx, users)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AddUsersBulk")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, []domain.VPNUserConfig) error); ok {
+		r0 = rf(ctx, users)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
 // BanUser provides a mock function with given fields: ctx, email
 func (_m *Engine) BanUser(ctx context.Context, email string) error {
 	ret := _m.Called(ctx, email)
