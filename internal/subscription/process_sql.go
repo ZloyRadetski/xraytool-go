@@ -2,11 +2,11 @@ package subscription
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -243,12 +243,10 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	if keys != nil {
 		pbk = keys.PublicKey
 		if len(keys.ShortIDs) > 0 {
-			n, err := rand.Int(rand.Reader, big.NewInt(int64(len(keys.ShortIDs))))
-			if err == nil {
-				sid = keys.ShortIDs[n.Int64()]
-			} else {
-				sid = keys.ShortIDs[0]
-			}
+			h := sha256.Sum256([]byte(sub.ID))
+			val := binary.BigEndian.Uint64(h[:8])
+			idx := val % uint64(len(keys.ShortIDs))
+			sid = keys.ShortIDs[idx]
 		}
 	}
 
