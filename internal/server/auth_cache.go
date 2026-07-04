@@ -101,21 +101,26 @@ func (c *otpLRUCache) delete(identifier string) {
 // sweepExpired removes all entries whose OTP has expired.
 func (c *otpLRUCache) sweepExpired() {
 	now := time.Now()
+	
+	// We need a full lock because we are deleting elements
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	for id, el := range c.items {
+	
+	for el := c.order.Back(); el != nil; {
+		prev := el.Prev()
 		entry := el.Value.(*otpEntry)
-		// Use TryLock to avoid deadlock when entry is being modified concurrently;
-		// skip if locked — it will be swept on the next pass.
-		if entry.mu.TryLock() {
-			expired := now.After(entry.expiresAt)
-			entry.mu.Unlock()
-			if expired {
-				c.order.Remove(el)
-				delete(c.items, id)
-			}
+		
+		// The individual entry lock isn't strictly necessary here since we hold the cache-level lock 
+		// and we're just reading expiresAt, but it's safe to take it
+		entry.mu.Lock()
+		expired := now.After(entry.expiresAt)
+		entry.mu.Unlock()
+		
+		if expired {
+			c.order.Remove(el)
+			delete(c.items, entry.identifier)
 		}
+		el = prev
 	}
 }
 
@@ -126,10 +131,15 @@ var otpCache = newOTPLRUCache(10_000)
 
 // generateOTPCode generates a cryptographically random 6-digit code.
 func generateOTPCode() string {
-	b := make([]byte, 3)
-	rand.Read(b) //nolint:errcheck // Read on crypto/rand never fails
-	val := (int(b[0])<<16 | int(b[1])<<8 | int(b[2])) % 1_000_000
-	return fmt.Sprintf("%06d", val)
+	for {
+		b := make([]byte, 4)
+		rand.Read(b)
+		val := int(b[0])<<24 | int(b[1])<<16 | int(b[2])<<8 | int(b[3])
+		// Remove modulo bias by only using values below a multiple of 1_000_000
+		if val < (0x100000000 - (0x100000000 % 1000000)) {
+			return fmt.Sprintf("%06d", val%1000000)
+		}
+	}
 }
 
 // requestOTP generates (or regenerates) an OTP for the given identifier.

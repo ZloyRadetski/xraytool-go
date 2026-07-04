@@ -12,12 +12,9 @@ import (
 )
 
 func isPathAllowed(cfg *appconfig.Config, path string) bool {
-	realPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		realPath, err = filepath.Abs(path)
-		if err != nil {
-			return false
-		}
+	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanPath) {
+		return false
 	}
 
 	for _, dir := range cfg.Server.AllowedDirs {
@@ -29,8 +26,9 @@ func isPathAllowed(cfg *appconfig.Config, path string) bool {
 			}
 		}
 
-		rel, err := filepath.Rel(realDir, realPath)
-		if err == nil && !strings.HasPrefix(rel, "..") {
+		// Ensure we don't allow traversal
+		rel, err := filepath.Rel(realDir, cleanPath)
+		if err == nil && !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, string(filepath.Separator)) {
 			return true
 		}
 	}

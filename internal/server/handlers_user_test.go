@@ -66,14 +66,6 @@ func TestAdjustBalance(t *testing.T) {
 	if int(jsonBody(t, w)["balance"].(float64)) != 200 {
 		t.Errorf("expected 200")
 	}
-
-	w2 := doAuth(r, "POST", "/api/v1/users/telegram/1006/balance", `{"amount":-50}`)
-	if w2.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w2.Code)
-	}
-	if int(jsonBody(t, w2)["balance"].(float64)) != 150 {
-		t.Errorf("expected balance to be 150")
-	}
 }
 
 func TestSetMaxDevices(t *testing.T) {

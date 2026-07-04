@@ -36,6 +36,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -261,10 +262,13 @@ func getClientIP(r *http.Request) string {
 func (r *Router) logIntruder(req *http.Request, reason string) {
 	ip := getClientIP(req)
 	dump, _ := httputil.DumpRequest(req, false)
+	dumpStr := string(dump)
+	// Mask sensitive headers in logs
+	dumpStr = regexp.MustCompile(`(?i)(X-API-Key|X-Secret):\s*[^\r\n]+`).ReplaceAllString(dumpStr, "$1: ***")
 	r.log.Warn("INTRUDER",
 		"reason", reason,
 		"ip", ip,
-		"dump", strings.TrimSpace(string(dump)),
+		"dump", strings.TrimSpace(dumpStr),
 	)
 }
 
