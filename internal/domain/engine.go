@@ -23,6 +23,12 @@ type TrafficStat struct {
 	Down  int64
 }
 
+// EngineSyncResult reports what SyncUsers did.
+type EngineSyncResult struct {
+	Added   int // users hot-added via gRPC
+	Removed int // users hot-removed via gRPC
+}
+
 // UserMutator handles the lifecycle of users in the VPN engine.
 type UserMutator interface {
 	AddUser(ctx context.Context, user VPNUserConfig) error
@@ -53,6 +59,17 @@ type StateSyncer interface {
 	ListUsers(ctx context.Context) ([]VPNUserConfig, error)
 }
 
+// ConfigRegenerator regenerates the xray config from a template and DB users,
+// then syncs the running xray process via hot-add/hot-remove.
+type ConfigRegenerator interface {
+	// SyncUsers regenerates config.json from template + dbUsers, then diffs
+	// against the running xray process:
+	//   - Users in dbUsers but not in xray → hot-added via gRPC.
+	//   - Users in xray but not in dbUsers → hot-removed (if removeOrphans).
+	// The config file is completely regenerated before the diff.
+	SyncUsers(ctx context.Context, dbUsers []VPNUserConfig, removeOrphans bool) (*EngineSyncResult, error)
+}
+
 // Engine combines all the granular interfaces.
 type Engine interface {
 	UserMutator
@@ -60,8 +77,8 @@ type Engine interface {
 	SoftBanner
 	LoggerController
 	StateSyncer
+	ConfigRegenerator
 }
-
 
 // BatchPayload represents a domain instruction to add/remove users.
 type BatchPayload struct {

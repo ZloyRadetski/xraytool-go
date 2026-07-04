@@ -26,9 +26,10 @@ import (
 // It is safe for concurrent use: the underlying Modify already
 // holds an exclusive process-level mutex + advisory flock on writes.
 type Adapter struct {
-	grpc       *GRPCClient
-	configPath string
-	log        *slog.Logger
+	grpc         *GRPCClient
+	configPath   string
+	templatePath string
+	log          *slog.Logger
 }
 
 // compile-time interface check — the compiler will error here if Adapter ever
@@ -41,11 +42,12 @@ var _ domain.Engine = (*Adapter)(nil)
 //   - configPath — absolute path to the live xray config JSON file
 //   - log        — structured logger; the adapter will tag its messages with
 //     component="xray-adapter"
-func NewAdapter(grpcAddr, configPath string, log *slog.Logger) *Adapter {
+func NewAdapter(grpcAddr, configPath, templatePath string, log *slog.Logger) *Adapter {
 	return &Adapter{
-		grpc:       NewGRPCClient(grpcAddr, log),
-		configPath: configPath,
-		log:        log.With("component", "xray-adapter"),
+		grpc:         NewGRPCClient(grpcAddr, log),
+		configPath:   configPath,
+		templatePath: templatePath,
+		log:          log.With("component", "xray-adapter"),
 	}
 }
 
@@ -513,6 +515,91 @@ func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SyncUsers — regenerate config + hot-sync with running xray
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SyncUsers regenerates config.json from template + dbUsers, then diffs
+// against the running xray process and hot-adds / hot-removes as needed.
+// The config on disk is fully regenerated before the diff.
+//
+//   - removeOrphans=false is the safe default: missing users are added but
+//     extra users in xray are never removed.
+//   - removeOrphans=true cleans up users from xray that are not in dbUsers.
+func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+	result := &domain.EngineSyncResult{}
+
+	// 1. Regenerate config.json from template + DB users.
+	if a.templatePath != "" {
+		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers); err != nil {
+			return result, fmt.Errorf("xray adapter SyncUsers: regenerate config: %w", err)
+		}
+		a.log.Info("xray adapter: config regenerated from template", "users", len(dbUsers))
+	}
+
+	// 2. Read current users from the live xray process.
+	liveUsers, err := a.ListUsers(ctx)
+	if err != nil {
+		// If we can't read the live config, we can still hot-add everyone.
+		a.log.Warn("xray adapter: SyncUsers: failed to list live users, will hot-add all", "err", err)
+		liveUsers = nil
+	}
+
+	// 3. Build lookup sets.
+	dbSet := make(map[string]domain.VPNUserConfig, len(dbUsers))
+	for _, u := range dbUsers {
+		if u.Email != "" {
+			dbSet[u.Email] = u
+		}
+	}
+	liveSet := make(map[string]struct{}, len(liveUsers))
+	for _, u := range liveUsers {
+		if u.Email != "" {
+			liveSet[u.Email] = struct{}{}
+		}
+	}
+
+	// 4. Hot-add users that are in DB but missing from xray.
+	var toAdd []domain.VPNUserConfig
+	for email, u := range dbSet {
+		if _, ok := liveSet[email]; !ok {
+			toAdd = append(toAdd, u)
+		}
+	}
+	if len(toAdd) > 0 {
+		if err := a.AddUsersBulk(ctx, toAdd); err != nil {
+			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(toAdd), "err", err)
+		} else {
+			result.Added = len(toAdd)
+		}
+	}
+
+	// 5. Hot-remove orphans (only when explicitly requested).
+	if removeOrphans {
+		var toRemove []string
+		for _, u := range liveUsers {
+			if _, ok := dbSet[u.Email]; !ok {
+				toRemove = append(toRemove, u.Email)
+			}
+		}
+		if len(toRemove) > 0 {
+			if err := a.RemoveUsersBulk(ctx, toRemove); err != nil {
+				a.log.Warn("xray adapter: SyncUsers: bulk hot-remove failed", "count", len(toRemove), "err", err)
+			} else {
+				result.Removed = len(toRemove)
+			}
+		}
+	}
+
+	a.log.Info("xray adapter: sync completed",
+		"db_users", len(dbUsers),
+		"live_users", len(liveUsers),
+		"added", result.Added,
+		"removed", result.Removed,
+	)
+	return result, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -530,6 +617,7 @@ func configToParams(u domain.VPNUserConfig) ClientParams {
 		Auth:    u.Auth,
 		Subfile: u.Subfile,
 		Expire:  u.Expire,
+		Flow:    u.Flow,
 		Limit:   limit,
 	}
 }

@@ -129,8 +129,34 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 			//     vpnEngine = singbox.New(deps.Cfg.Singbox.APIAddr, deps.Cfg.Paths.SingboxConfig, slog.Default())
 			default:
 				// Default: Xray-core adapter
-				vpnEngine = vpn.NewAdapter(deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayConfig, slog.Default())
-				logger.Infof("[ENGINE] Using Xray-core adapter (grpc_addr=%s)", deps.Cfg.Xray.APIAddr)
+				vpnEngine = vpn.NewAdapter(deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayConfig, deps.Cfg.Paths.XrayTemplate, slog.Default())
+				logger.Infof("[ENGINE] Using Xray-core adapter (grpc_addr=%s, template=%s)", deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayTemplate)
+			}
+
+			// Sync users from DB to the running xray process (no restart).
+			if deps.Registry != nil && deps.Cfg.Paths.XrayTemplate != "" {
+				subs, err := deps.Registry.Subscriptions().FindAll(cmd.Context())
+				if err != nil {
+					logger.Warnf("[ENGINE] Failed to load subscriptions for initial sync: %v", err)
+				} else {
+					dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
+					for _, sub := range subs {
+						if sub.Status != "active" || sub.Email == "" || sub.XrayUUID == "" {
+							continue
+						}
+						dbUsers = append(dbUsers, domain.VPNUserConfig{
+							Email:      sub.Email,
+							UUID:       sub.XrayUUID,
+							MaxDevices: sub.MaxDevices,
+						})
+					}
+					result, syncErr := vpnEngine.SyncUsers(cmd.Context(), dbUsers, false)
+					if syncErr != nil {
+						logger.Warnf("[ENGINE] Initial user sync failed: %v", syncErr)
+					} else {
+						logger.Infof("[ENGINE] Initial sync: config regenerated, %d users hot-added (xray NOT restarted)", result.Added)
+					}
+				}
 			}
 
 			mux := http.NewServeMux()

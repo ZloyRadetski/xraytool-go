@@ -131,7 +131,7 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 	})
 
 	// Engine
-	deps.Engine = vpn.NewAdapter(cfg.Xray.APIAddr, cfg.Paths.XrayConfig, slog.Default())
+	deps.Engine = vpn.NewAdapter(cfg.Xray.APIAddr, cfg.Paths.XrayConfig, cfg.Paths.XrayTemplate, slog.Default())
 
 	// User service
 	var propagator domain.EventPropagator

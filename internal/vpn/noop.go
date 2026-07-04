@@ -11,7 +11,7 @@ import (
 // or for testing.
 type NoopEngine struct{}
 
-func (n *NoopEngine) AddUser(ctx context.Context, user domain.VPNUserConfig) error               { return nil }
+func (n *NoopEngine) AddUser(ctx context.Context, user domain.VPNUserConfig) error     { return nil }
 func (n *NoopEngine) RemoveUser(ctx context.Context, email string) error               { return nil }
 func (n *NoopEngine) RemoveUsersBulk(ctx context.Context, emails []string) error       { return nil }
 func (n *NoopEngine) SetExpire(ctx context.Context, email string, expire string) error { return nil }
@@ -28,4 +28,8 @@ func (n *NoopEngine) RestartLogger(ctx context.Context) error { return nil }
 
 func (n *NoopEngine) ListUsers(ctx context.Context) ([]domain.VPNUserConfig, error) {
 	return nil, nil
+}
+
+func (n *NoopEngine) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+	return &domain.EngineSyncResult{}, nil
 }

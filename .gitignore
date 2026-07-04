@@ -33,6 +33,8 @@ go.work.sum
 xray_api_config.json
 test_xray_config2.json
 non_existent_config.yaml
+config*.json
+config*.template.json
 
 # Файлы логов
 *.log

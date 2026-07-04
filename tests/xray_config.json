@@ -366,28 +366,28 @@
             "email": "bot_client_10003",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "f6e8b4b9-3d98-4021-b406-3787d5ab998f",
+            "id": "ab7c5cc5-8701-4784-9dab-71ed7ab2b74b",
             "limit": 3
           },
           {
             "email": "bot_client_10004",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "7446bfdb-2dab-4410-aa6b-a297e83e4cba",
+            "id": "02346da8-16da-4452-b1c8-f14908ccbb9e",
             "limit": 3
           },
           {
             "email": "bot_client_10006",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "5bed7d6e-469d-48c1-8b96-be43687d64ee",
+            "id": "59570dbc-6b95-4f0e-8980-494fa20782a2",
             "limit": 3
           },
           {
             "email": "bot_client_50004",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "fe8393cf-ee1c-4516-bd80-a98ac44562e9",
+            "id": "0d2b09fe-f841-4bd0-b9f7-e987d958e836",
             "limit": 3
           }
         ],

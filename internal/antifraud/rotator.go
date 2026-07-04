@@ -55,6 +55,13 @@ func (r *rotator) run(ctx context.Context) {
 	r.log.Info("antifraud rotator: starting", "path", r.logPath, "limit_mb", r.maxBytes/1024/1024, "max_age", r.maxAge)
 	defer r.log.Info("antifraud rotator: stopped")
 
+	// Clean up stale left-over .old files at startup to unblock rotation.
+	oldPath := r.logPath + ".old"
+	if _, err := os.Stat(oldPath); err == nil {
+		r.log.Info("antifraud rotator: found leftover .old file at startup, removing it", "path", oldPath)
+		_ = os.Remove(oldPath)
+	}
+
 	ticker := time.NewTicker(r.tickInterval)
 	defer ticker.Stop()
 
@@ -93,9 +100,16 @@ func (r *rotator) tryRotate() {
 	oldPath := r.logPath + ".old"
 
 	// Skip if a previous .old rotation hasn't been fully consumed yet.
-	if _, err := os.Stat(oldPath); err == nil {
-		r.log.Warn("antifraud rotator: .old file still exists, skipping rotation", "old_path", oldPath)
-		return
+	if infoOld, err := os.Stat(oldPath); err == nil {
+		// If the .old file is older than 30 seconds, it is stale (e.g. leftovers from previous crash).
+		// Force delete it to prevent blocking future log rotations.
+		if time.Since(infoOld.ModTime()) > 30*time.Second {
+			r.log.Warn("antifraud rotator: found stale .old file, force removing it", "old_path", oldPath, "age", time.Since(infoOld.ModTime()))
+			_ = os.Remove(oldPath)
+		} else {
+			r.log.Warn("antifraud rotator: .old file still exists, skipping rotation", "old_path", oldPath)
+			return
+		}
 	}
 
 	if runtime.GOOS == "windows" {

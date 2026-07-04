@@ -139,6 +139,7 @@ type PortsConf struct {
 // PathsConf holds all filesystem paths used by xraytool.
 type PathsConf struct {
 	XrayConfig    string `yaml:"xray_config"`
+	XrayTemplate  string `yaml:"xray_template"`
 	StatsState    string `yaml:"stats_state"`
 	InferredStats string `yaml:"inferred_stats"`
 	// JSONSubscriptionTemplate is the path to the main (all-protocols) subscription txt file.
@@ -207,6 +208,7 @@ func defaults() *Config {
 		},
 		Paths: PathsConf{
 			XrayConfig:               "/usr/local/etc/xray/config.json",
+			XrayTemplate:             "/etc/xraytool/xray_template.json",
 			StatsState:               "/etc/xraytool/traffic_stats_state.json",
 			InferredStats:            "/etc/xraytool/inferred_traffic.json",
 			JSONSubscriptionTemplate: "/etc/xraytool/configs.txt",
@@ -331,6 +333,11 @@ server:
 paths:
   # Xray-core main config
   xray_config: "/usr/local/etc/xray/config.json"
+
+  # Xray config template (structural skeleton with static clients)
+  # xraytool regenerates xray_config from this template + DB users on startup.
+  # Leave empty to disable template-based generation (uses xray_config directly).
+  xray_template: "/etc/xraytool/xray_template.json"
 
   # JSON file storing cumulative traffic stats state
   stats_state: "/etc/xraytool/traffic_stats_state.json"
@@ -514,6 +521,9 @@ func Load(path string) (*Config, error) {
 	defs := defaults()
 	if cfg.Paths.XrayConfig == "" {
 		cfg.Paths.XrayConfig = defs.Paths.XrayConfig
+	}
+	if cfg.Paths.XrayTemplate == "" {
+		cfg.Paths.XrayTemplate = defs.Paths.XrayTemplate
 	}
 	if cfg.Paths.StatsState == "" {
 		cfg.Paths.StatsState = defs.Paths.StatsState

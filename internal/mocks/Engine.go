@@ -200,6 +200,36 @@ func (_m *Engine) SetLimit(ctx context.Context, email string, limit float64) err
 	return r0
 }
 
+// SyncUsers provides a mock function with given fields: ctx, dbUsers, removeOrphans
+func (_m *Engine) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+	ret := _m.Called(ctx, dbUsers, removeOrphans)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SyncUsers")
+	}
+
+	var r0 *domain.EngineSyncResult
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, []domain.VPNUserConfig, bool) (*domain.EngineSyncResult, error)); ok {
+		return rf(ctx, dbUsers, removeOrphans)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, []domain.VPNUserConfig, bool) *domain.EngineSyncResult); ok {
+		r0 = rf(ctx, dbUsers, removeOrphans)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.EngineSyncResult)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, []domain.VPNUserConfig, bool) error); ok {
+		r1 = rf(ctx, dbUsers, removeOrphans)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
 // UnbanUser provides a mock function with given fields: ctx, email
 func (_m *Engine) UnbanUser(ctx context.Context, email string) error {
 	ret := _m.Called(ctx, email)
