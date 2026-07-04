@@ -66,7 +66,6 @@ func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, statu
 			if mappedStatus == "completed" {
 				if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
 					s.log.Error("failed to apply referral reward on platega callback", "err", err)
-					return err
 				}
 
 				s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
@@ -282,7 +281,6 @@ func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, stat
 		if err == nil {
 			if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
 				s.log.Error("failed to apply referral reward", "err", err)
-				return true, err
 			}
 			s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
 				"payment_id":   payment.ID,
