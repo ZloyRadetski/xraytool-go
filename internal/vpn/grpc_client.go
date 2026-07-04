@@ -68,8 +68,10 @@ func NewGRPCClient(addr string, log *slog.Logger) *GRPCClient {
 }
 
 var (
-	globalConns   = make(map[string]*grpc.ClientConn)
-	globalConnsMu sync.Mutex
+	globalConns       = make(map[string]*grpc.ClientConn)
+	globalDialErr     = make(map[string]error)
+	globalDialTime    = make(map[string]time.Time)
+	globalConnsMu     sync.Mutex
 )
 
 // ---------------------------------------------------------------------------
@@ -86,6 +88,16 @@ var (
 func (g *GRPCClient) dial() (*grpc.ClientConn, error) {
 	globalConnsMu.Lock()
 	defer globalConnsMu.Unlock()
+
+	// Check if we recently failed to dial this address (within 10 seconds) to prevent dial storms
+	if lastErr, ok := globalDialErr[g.addr]; ok {
+		if time.Since(globalDialTime[g.addr]) < 10*time.Second {
+			return nil, lastErr
+		}
+		// Cooldown expired, retry dialing
+		delete(globalDialErr, g.addr)
+		delete(globalDialTime, g.addr)
+	}
 
 	conn := globalConns[g.addr]
 	if conn != nil {
@@ -109,6 +121,9 @@ func (g *GRPCClient) dial() (*grpc.ClientConn, error) {
 		grpc.WithBlock(),
 	)
 	if err != nil {
+		// Cache the dial failure with timestamp
+		globalDialErr[g.addr] = err
+		globalDialTime[g.addr] = time.Now()
 		return nil, fmt.Errorf("xrayapi: dial %s: %w", g.addr, err)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"testing"
+	"time"
 
 	handlerService "github.com/xtls/xray-core/app/proxyman/command"
 	statsService "github.com/xtls/xray-core/app/stats/command"
@@ -191,6 +192,37 @@ func TestGRPCClient_QueryStats_Unreachable(t *testing.T) {
 	_, err := c.QueryStats(context.Background())
 	if err == nil {
 		t.Fatal("expected error when server is unreachable, got nil")
+	}
+}
+
+func TestGRPCClient_DialCooldown(t *testing.T) {
+	globalConnsMu.Lock()
+	globalConns = make(map[string]*grpc.ClientConn)
+	globalDialErr = make(map[string]error)
+	globalDialTime = make(map[string]time.Time)
+	globalConnsMu.Unlock()
+
+	c := newTestGRPCClient("127.0.0.1:9")
+	defer c.Close()
+
+	t1 := time.Now()
+	_, err1 := c.QueryStats(context.Background())
+	d1 := time.Since(t1)
+	if err1 == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if d1 < connectTimeout {
+		t.Errorf("expected first dial to block for at least %v, took %v", connectTimeout, d1)
+	}
+
+	t2 := time.Now()
+	_, err2 := c.QueryStats(context.Background())
+	d2 := time.Since(t2)
+	if err2 == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if d2 >= 500*time.Millisecond {
+		t.Errorf("expected second dial to fail instantly, took %v", d2)
 	}
 }
 
