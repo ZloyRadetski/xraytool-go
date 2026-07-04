@@ -82,6 +82,7 @@ func NewRootCmd() *cobra.Command {
 		syncXrayCmd(deps),
 		applyBatchCmd(deps),
 		rotateKeysCmd(deps),
+		rebuildConfigCmd(deps),
 	)
 
 	return rootCmd
