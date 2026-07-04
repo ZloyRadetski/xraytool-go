@@ -551,7 +551,8 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	}
 	defer os.Remove(f.Name())
 
-	if _, err := f.Write(inboundJSON); err != nil {
+	wrappedJSON := fmt.Sprintf(`{"inbounds":[%s]}`, string(inboundJSON))
+	if _, err := f.Write([]byte(wrappedJSON)); err != nil {
 		f.Close()
 		return fmt.Errorf("writing temp file for adi: %w", err)
 	}
