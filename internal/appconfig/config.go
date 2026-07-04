@@ -34,6 +34,7 @@ type Config struct {
 	SlaveServers  map[string]slave.Entry `yaml:"slave_servers"`
 	AntiFraud     AntiFraudConf          `yaml:"anti_fraud"`
 	Mailer        MailerConf             `yaml:"mailer"`
+	Reality       RealityConf            `yaml:"reality"`
 }
 
 // EngineConf selects the VPN proxy engine implementation.
@@ -166,6 +167,12 @@ type XrayConf struct {
 	APIAddr string `yaml:"api_addr"`
 }
 
+// RealityConf holds Reality key rotation settings.
+type RealityConf struct {
+	RotationEnabled bool   `yaml:"rotation_enabled"`
+	KeysFilepath    string `yaml:"keys_filepath"`
+}
+
 // MasterAPIConf defines how a slave node authenticates and connects to the master.
 type MasterAPIConf struct {
 	URL      string `yaml:"url"`
@@ -248,6 +255,10 @@ func defaults() *Config {
 			Enabled:            true,
 			ExpiryInterval:     "5m",
 			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
+		},
+		Reality: RealityConf{
+			RotationEnabled: false,
+			KeysFilepath:    "/etc/xraytool/configs/reality.keys",
 		},
 		Database: DatabaseConf{
 			Driver:     "sqlite",
@@ -556,6 +567,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Paths.GeositeDat == "" {
 		cfg.Paths.GeositeDat = defs.Paths.GeositeDat
+	}
+	if cfg.Reality.KeysFilepath == "" {
+		cfg.Reality.KeysFilepath = defs.Reality.KeysFilepath
 	}
 	if cfg.Xray.APIAddr == "" {
 		cfg.Xray.APIAddr = defs.Xray.APIAddr

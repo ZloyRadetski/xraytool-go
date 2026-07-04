@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -114,10 +115,20 @@ func buildDynamicClients(ib RawInbound, dbUsers []domain.VPNUserConfig) ([]RawCl
 
 // RegenerateConfig reads the template, merges DB users, and writes the result
 // to configPath atomically. This is the single entry point for config generation.
-func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserConfig) error {
+func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserConfig, realityRotation bool, realityKeysPath string) error {
 	template, err := Read(templatePath)
 	if err != nil {
 		return fmt.Errorf("regenerate: read template %q: %w", templatePath, err)
+	}
+
+	if realityRotation && realityKeysPath != "" {
+		keys, err := LoadOrCreateRealityKeys(realityKeysPath)
+		if err != nil {
+			return fmt.Errorf("regenerate: load or create reality keys: %w", err)
+		}
+		if err := injectRealityKeys(template, keys); err != nil {
+			return fmt.Errorf("regenerate: inject reality keys: %w", err)
+		}
 	}
 
 	merged, err := MergeUsers(template, dbUsers)
@@ -129,5 +140,83 @@ func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserC
 		return fmt.Errorf("regenerate: write config %q: %w", configPath, err)
 	}
 
+	return nil
+}
+
+// injectRealityKeys replaces privateKey and shortIds settings in the template config.
+func injectRealityKeys(cfg RawConfig, keys *RealityKeys) error {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return err
+	}
+
+	modified := false
+	for i, ib := range inbounds {
+		if ib.Protocol() != "vless" {
+			continue
+		}
+
+		rawStream, ok := ib["streamSettings"]
+		if !ok {
+			continue
+		}
+
+		var stream map[string]json.RawMessage
+		if err := json.Unmarshal(rawStream, &stream); err != nil {
+			continue
+		}
+
+		rawSec, ok := stream["security"]
+		if !ok {
+			continue
+		}
+		var sec string
+		if err := json.Unmarshal(rawSec, &sec); err != nil || sec != "reality" {
+			continue
+		}
+
+		rawReality, ok := stream["realitySettings"]
+		if !ok {
+			continue
+		}
+
+		var reality map[string]json.RawMessage
+		if err := json.Unmarshal(rawReality, &reality); err != nil {
+			continue
+		}
+
+		// Inject privateKey
+		privData, err := json.Marshal(keys.PrivateKey)
+		if err != nil {
+			return err
+		}
+		reality["privateKey"] = privData
+
+		// Inject shortIds
+		sidsData, err := json.Marshal(keys.ShortIDs)
+		if err != nil {
+			return err
+		}
+		reality["shortIds"] = sidsData
+
+		// Marshal realitySettings back
+		newReality, err := json.Marshal(reality)
+		if err != nil {
+			return err
+		}
+		stream["realitySettings"] = newReality
+
+		// Marshal streamSettings back
+		newStream, err := json.Marshal(stream)
+		if err != nil {
+			return err
+		}
+		inbounds[i]["streamSettings"] = newStream
+		modified = true
+	}
+
+	if modified {
+		return cfg.SetInbounds(inbounds)
+	}
 	return nil
 }

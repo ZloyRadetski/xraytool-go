@@ -26,10 +26,12 @@ import (
 // It is safe for concurrent use: the underlying Modify already
 // holds an exclusive process-level mutex + advisory flock on writes.
 type Adapter struct {
-	grpc         *GRPCClient
-	configPath   string
-	templatePath string
-	log          *slog.Logger
+	grpc            *GRPCClient
+	configPath      string
+	templatePath    string
+	realityRotation bool
+	realityKeysPath string
+	log             *slog.Logger
 }
 
 // compile-time interface check — the compiler will error here if Adapter ever
@@ -42,12 +44,14 @@ var _ domain.Engine = (*Adapter)(nil)
 //   - configPath — absolute path to the live xray config JSON file
 //   - log        — structured logger; the adapter will tag its messages with
 //     component="xray-adapter"
-func NewAdapter(grpcAddr, configPath, templatePath string, log *slog.Logger) *Adapter {
+func NewAdapter(grpcAddr, configPath, templatePath string, realityRotation bool, realityKeysPath string, log *slog.Logger) *Adapter {
 	return &Adapter{
-		grpc:         NewGRPCClient(grpcAddr, log),
-		configPath:   configPath,
-		templatePath: templatePath,
-		log:          log.With("component", "xray-adapter"),
+		grpc:            NewGRPCClient(grpcAddr, log),
+		configPath:      configPath,
+		templatePath:    templatePath,
+		realityRotation: realityRotation,
+		realityKeysPath: realityKeysPath,
+		log:             log.With("component", "xray-adapter"),
 	}
 }
 
@@ -530,7 +534,7 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 
 	// 1. Regenerate config.json from template + DB users.
 	if a.templatePath != "" {
-		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers); err != nil {
+		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers, a.realityRotation, a.realityKeysPath); err != nil {
 			return result, fmt.Errorf("xray adapter SyncUsers: regenerate config: %w", err)
 		}
 		a.log.Info("xray adapter: config regenerated from template", "users", len(dbUsers))

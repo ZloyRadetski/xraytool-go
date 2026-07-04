@@ -325,7 +325,7 @@ func TestRegenerateConfig_WritesMergedConfig(t *testing.T) {
 		{Email: "client1@example.com", UUID: "uuid-1"},
 	}
 
-	err := RegenerateConfig(tmplPath, outPath, dbUsers)
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, false, "")
 	if err != nil {
 		t.Fatalf("RegenerateConfig: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestRegenerateConfig_WritesMergedConfig(t *testing.T) {
 }
 
 func TestRegenerateConfig_TemplateNotFound(t *testing.T) {
-	err := RegenerateConfig("/nonexistent/template.json", "/tmp/out.json", nil)
+	err := RegenerateConfig("/nonexistent/template.json", "/tmp/out.json", nil, false, "")
 	if err == nil {
 		t.Fatal("expected error for missing template")
 	}
@@ -353,9 +353,88 @@ func TestRegenerateConfig_BadTemplateJSON(t *testing.T) {
 	badPath := filepath.Join(dir, "bad.json")
 	os.WriteFile(badPath, []byte(`{bad json`), 0644)
 
-	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil)
+	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil, false, "")
 	if err == nil {
 		t.Fatal("expected error for bad template JSON")
+	}
+}
+
+func TestRegenerateConfig_RealityRotation(t *testing.T) {
+	tmplRaw := `{
+		"inbounds": [
+			{
+				"tag": "vless-reality",
+				"protocol": "vless",
+				"settings": {
+					"clients": []
+				},
+				"streamSettings": {
+					"network": "tcp",
+					"security": "reality",
+					"realitySettings": {
+						"privateKey": "original-private-key",
+						"shortIds": ["original-sid"]
+					}
+				}
+			}
+		]
+	}`
+	tmplPath := writeTempFile(t, tmplRaw)
+
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "config.json")
+	keysPath := filepath.Join(dir, "reality.keys")
+
+	dbUsers := []domain.VPNUserConfig{
+		{Email: "user@example.com", UUID: "user-uuid"},
+	}
+
+	// 1. First run: should generate new keys and inject them
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, true, keysPath)
+	if err != nil {
+		t.Fatalf("RegenerateConfig: %v", err)
+	}
+
+	// Verify keys file was created
+	keys, err := LoadOrCreateRealityKeys(keysPath)
+	if err != nil {
+		t.Fatalf("LoadOrCreateRealityKeys: %v", err)
+	}
+	if keys.PrivateKey == "" || keys.PublicKey == "" || len(keys.ShortIDs) != 15 {
+		t.Errorf("generated keys file invalid: %+v", keys)
+	}
+
+	// Read generated config and verify keys/sids are injected
+	cfg := readRawConfig(t, outPath)
+	inbounds, _ := cfg.GetInbounds()
+	if len(inbounds) != 1 {
+		t.Fatalf("expected 1 inbound, got %d", len(inbounds))
+	}
+	ib := inbounds[0]
+
+	// Check client merged
+	clients, _ := ib.GetClients()
+	if len(clients) != 1 || clients[0].Email() != "user@example.com" {
+		t.Errorf("dynamic client not merged properly")
+	}
+
+	// Check streamSettings realitySettings updated
+	rawStream := ib["streamSettings"]
+	var stream map[string]json.RawMessage
+	json.Unmarshal(rawStream, &stream)
+	var reality map[string]json.RawMessage
+	json.Unmarshal(stream["realitySettings"], &reality)
+
+	var pkey string
+	json.Unmarshal(reality["privateKey"], &pkey)
+	var sids []string
+	json.Unmarshal(reality["shortIds"], &sids)
+
+	if pkey != keys.PrivateKey {
+		t.Errorf("expected privateKey %q, got %q", keys.PrivateKey, pkey)
+	}
+	if len(sids) != 15 || sids[0] != keys.ShortIDs[0] {
+		t.Errorf("expected shortIds %+v, got %+v", keys.ShortIDs, sids)
 	}
 }
 
