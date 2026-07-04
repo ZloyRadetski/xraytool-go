@@ -28,6 +28,7 @@ type CacheManager struct {
 	subTemplate string
 	routeGlobal string
 	routeRU     string
+	realityKeys *vpn.RealityKeys
 
 	// ModTimes to detect file changes on disk
 	xrayConfigModTime  time.Time
@@ -35,6 +36,7 @@ type CacheManager struct {
 	subTemplateModTime time.Time
 	routeGlobalModTime time.Time
 	routeRUModTime     time.Time
+	realityKeysModTime time.Time
 
 	// done is closed by Stop() to signal the flush worker to exit.
 	done chan struct{}
@@ -77,6 +79,7 @@ func (c *CacheManager) Refresh() {
 func (c *CacheManager) refreshAll() {
 	c.refreshXrayConfig()
 	c.refreshTemplates()
+	c.refreshRealityKeys()
 }
 
 func (c *CacheManager) refreshXrayConfig() {
@@ -297,4 +300,31 @@ func (c *CacheManager) GetRawConfig() vpn.RawConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.xrayConfig
+}
+
+func (c *CacheManager) refreshRealityKeys() {
+	if !c.cfg.Reality.RotationEnabled || c.cfg.Reality.KeysFilepath == "" {
+		return
+	}
+	c.mu.RLock()
+	keysModTime := c.realityKeysModTime
+	c.mu.RUnlock()
+
+	if info, err := os.Stat(c.cfg.Reality.KeysFilepath); err == nil && !info.ModTime().Equal(keysModTime) {
+		keys, err := vpn.LoadOrCreateRealityKeys(c.cfg.Reality.KeysFilepath)
+		if err == nil {
+			c.mu.Lock()
+			c.realityKeys = keys
+			c.realityKeysModTime = info.ModTime()
+			c.mu.Unlock()
+			logger.Infof("[Cache] Файл Reality ключей обновлен.")
+		}
+	}
+}
+
+// GetRealityKeys returns the cached Reality keys, if loaded.
+func (c *CacheManager) GetRealityKeys() *vpn.RealityKeys {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.realityKeys
 }

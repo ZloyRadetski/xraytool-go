@@ -2,9 +2,11 @@ package subscription
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -234,11 +236,31 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	}
 
 	// 5. Build Template Parameters
-	pbk := derivePublicKey(firstRealityPrivateKey(xrayCfg))
-	if pbk == "" {
-		pbk = firstRealityPublicKey(xrayCfg)
+	var pbk string
+	var sid string
+
+	keys := cm.GetRealityKeys()
+	if keys != nil {
+		pbk = keys.PublicKey
+		if len(keys.ShortIDs) > 0 {
+			n, err := rand.Int(rand.Reader, big.NewInt(int64(len(keys.ShortIDs))))
+			if err == nil {
+				sid = keys.ShortIDs[n.Int64()]
+			} else {
+				sid = keys.ShortIDs[0]
+			}
+		}
 	}
-	sid := randomRealityShortID(xrayCfg)
+
+	if pbk == "" {
+		pbk = derivePublicKey(firstRealityPrivateKey(xrayCfg))
+		if pbk == "" {
+			pbk = firstRealityPublicKey(xrayCfg)
+		}
+	}
+	if sid == "" {
+		sid = randomRealityShortID(xrayCfg)
+	}
 	sni := firstRealitySNI(xrayCfg)
 	serverIp := cfg.Server.IP
 

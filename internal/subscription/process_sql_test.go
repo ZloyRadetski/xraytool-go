@@ -144,3 +144,67 @@ func TestProcessSQL_Normal(t *testing.T) {
 	// or it will hit cache logic. Since we just want to ensure it doesn't return antifraud reject:
 	assert.NotEqual(t, "antifraud_ban", res.Headers["X-Reject-Reason"])
 }
+
+func TestProcessSQL_RealityRotationPlaceholders(t *testing.T) {
+	db := setupTestDB(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+		os.Remove("test_xray_config_rr.json")
+		os.Remove("test_configs.txt")
+	}()
+
+	os.WriteFile("test_xray_config_rr.json", []byte(`{}`), 0644)
+	os.WriteFile("test_configs.txt", []byte("# Header\n{\"pbk\": \"{PBK}\", \"sid\": \"{SID}\"}"), 0644)
+
+	db.Create(&database.User{ID: "u3", Username: "u3", IsBlocked: false})
+	sub := database.Subscription{
+		ID:         "sub3",
+		UserID:     "u3",
+		Email:      "rr@example.com",
+		Status:     "active",
+		XrayUUID:   "11111111-2222-3333-4444-555555555555",
+		MaxDevices: 5,
+	}
+	db.Create(&sub)
+
+	cfg := &appconfig.Config{
+		Paths: appconfig.PathsConf{
+			XrayConfig: "test_xray_config_rr.json",
+			JSONSubscriptionTemplate: "test_configs.txt",
+		},
+		Subscription: appconfig.SubscriptionConf{
+			UserAgentWhitelist: []string{"testclient"},
+			UserAgentNoChecks:  []string{"testclient"},
+		},
+		Reality: appconfig.RealityConf{
+			RotationEnabled: true,
+			KeysFilepath:    "reality.keys",
+		},
+	}
+
+	req := &Request{
+		Query:      map[string]string{"id": "sub3", "hwid": "my-hwid"},
+		UserAgent:  "TestClient/1.0",
+		RemoteAddr: "192.168.1.3",
+		Headers:    make(map[string]string),
+	}
+
+	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	// Mock preloaded Reality keys in CacheManager
+	cm.realityKeys = &vpn.RealityKeys{
+		PrivateKey: "mock-priv",
+		PublicKey:  "mock-pub",
+		ShortIDs:   []string{"mock-sid"},
+	}
+	cm.subTemplate = "# Header\n{\"pbk\": \"{PBK}\", \"sid\": \"{SID}\"}"
+
+	isBanned := func(email string) bool { return false }
+	dispatcher := events.NewDispatcher(&events.Config{Webhooks: []string{}})
+
+	res := ProcessSQL(context.Background(), database.NewRegistry(db), cm, dispatcher, req, isBanned)
+
+	assert.Equal(t, 200, res.StatusCode)
+	assert.Contains(t, res.Body, `"pbk": "mock-pub"`)
+	assert.Contains(t, res.Body, `"sid": "mock-sid"`)
+}
