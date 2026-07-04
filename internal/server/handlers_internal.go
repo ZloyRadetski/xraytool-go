@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"xraytool/internal/domain"
 	"xraytool/internal/stats"
@@ -58,6 +60,25 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		}
 		r.ingestEvents(getClientIP(req), payloadReq.Events)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(payloadReq.Events)})
+		return
+
+	case "sync-keys":
+		if body.Payload == "" {
+			writeError(w, http.StatusBadRequest, "payload is required for sync-keys")
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(r.cfg.Reality.KeysFilepath), 0755); err != nil {
+			r.log.Error("internal sync: failed to create keys directory", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to create keys directory")
+			return
+		}
+		if err := os.WriteFile(r.cfg.Reality.KeysFilepath, []byte(body.Payload), 0600); err != nil {
+			r.log.Error("internal sync: failed to save keys", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to save keys")
+			return
+		}
+		r.log.Info("internal sync: Reality keys successfully synced from master")
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 		return
 
 	case "usersnapshot":

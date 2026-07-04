@@ -4,26 +4,40 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 
 	"xraytool/internal/domain"
 )
 
 type stateSyncProvider struct {
-	registry *Registry
-	engine   domain.Engine
-	domainReg domain.Registry
+	registry        *Registry
+	engine          domain.Engine
+	domainReg       domain.Registry
+	realityRotation bool
+	realityKeysPath string
 }
 
-func NewStateSyncProvider(registry *Registry, engine domain.Engine, domainReg domain.Registry) domain.StateSyncSlaveProvider {
+func NewStateSyncProvider(registry *Registry, engine domain.Engine, domainReg domain.Registry, realityRotation bool, realityKeysPath string) domain.StateSyncSlaveProvider {
 	return &stateSyncProvider{
-		registry:  registry,
-		engine:    engine,
-		domainReg: domainReg,
+		registry:        registry,
+		engine:          engine,
+		domainReg:       domainReg,
+		realityRotation: realityRotation,
+		realityKeysPath: realityKeysPath,
 	}
 }
 
 func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.SyncResult, error) {
+	// Propagate Reality keys first if rotation is enabled
+	if p.realityRotation && p.realityKeysPath != "" && !dryRun {
+		if keysBytes, err := os.ReadFile(p.realityKeysPath); err == nil {
+			p.registry.PropagateAll("sync-keys", map[string]string{
+				"payload": string(keysBytes),
+			})
+		}
+	}
+
 	masterSnap := BuildMasterSnapshot(ctx, p.domainReg, p.engine)
 
 	servers, err := p.registry.Servers()

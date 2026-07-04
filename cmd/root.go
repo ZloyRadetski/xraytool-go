@@ -155,7 +155,7 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
 		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
 		deps.ClusterProvider = slave.NewClusterStatsProvider(slaveReg)
-		deps.SlaveProvider = slave.NewStateSyncProvider(slaveReg, deps.Engine, deps.Registry)
+		deps.SlaveProvider = slave.NewStateSyncProvider(slaveReg, deps.Engine, deps.Registry, cfg.Reality.RotationEnabled, cfg.Reality.KeysFilepath)
 	}
 
 	return nil
