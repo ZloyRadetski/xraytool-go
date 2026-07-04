@@ -333,7 +333,6 @@ reality:
   # Path to store the generated JSON keys file.
   keys_filepath: "/etc/xraytool/configs/reality.keys"
 
-
 server:
   # Public IP of this server (informational, used in some outputs)
   ip: "1.2.3.4"
