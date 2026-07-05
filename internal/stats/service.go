@@ -20,6 +20,7 @@ type Service struct {
 type Config struct {
 	IsMaster                 bool
 	StatsStatePath           string
+	InferredStatsPath        string
 	DetailedRetentionSeconds int64
 }
 
@@ -135,6 +136,22 @@ func (s *Service) GenerateClusterStats(inferredMode bool, statePath string) ([]M
 	}
 
 	merged := s.mergeWithSlaves(localUsers, slaveTotals)
+
+	if !inferredMode && s.cfg.IsMaster && s.cfg.InferredStatsPath != "" {
+		inferredState := &State{
+			Version:      2,
+			LastSampleTS: time.Now().Unix(),
+			Users:        make(map[string]*UserState),
+		}
+		for _, mu := range merged {
+			inferredState.Users[mu.Email] = &UserState{
+				CumulativeUp:   mu.Total.Up,
+				CumulativeDown: mu.Total.Down + mu.Slave, // Add slave traffic to download
+			}
+		}
+		_ = Save(s.cfg.InferredStatsPath, inferredState)
+	}
+
 	return merged, slaveReport, nil
 }
 

@@ -41,7 +41,12 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 				statePath = deps.Cfg.Paths.InferredStats
 			}
 
-			svc := stats.NewService(stats.Config{IsMaster: deps.Cfg.IsMaster(), StatsStatePath: deps.Cfg.Paths.StatsState, DetailedRetentionSeconds: deps.Cfg.DetailedRetentionSeconds()}, deps.Engine, deps.ClusterProvider)
+			svc := stats.NewService(stats.Config{
+				IsMaster:                 deps.Cfg.IsMaster(),
+				StatsStatePath:           deps.Cfg.Paths.StatsState,
+				InferredStatsPath:        deps.Cfg.Paths.InferredStats,
+				DetailedRetentionSeconds: deps.Cfg.DetailedRetentionSeconds(),
+			}, deps.Engine, deps.ClusterProvider)
 			merged, slaveReport, err := svc.GenerateClusterStats(inferredMode, statePath)
 			if err != nil {
 				if apiMode {

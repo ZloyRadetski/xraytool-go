@@ -1,8 +1,12 @@
 package stats
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"xraytool/internal/domain"
 )
 
 func TestHumanBytes(t *testing.T) {
@@ -151,5 +155,93 @@ func TestUpdate_UserMissing(t *testing.T) {
 
 	if s.Users["user2"].CumulativeUp != 110 { // 100 + 10
 		t.Errorf("Expected user2 cumulative up 110, got %d", s.Users["user2"].CumulativeUp)
+	}
+}
+
+type mockEngine struct {
+	domain.Engine
+}
+
+func (m *mockEngine) QueryStats(ctx context.Context) ([]domain.TrafficStat, error) {
+	return nil, nil
+}
+func (m *mockEngine) ListUsers(ctx context.Context) ([]domain.VPNUserConfig, error) {
+	return nil, nil
+}
+
+type mockClusterProvider struct {
+	totals []domain.SlaveUserTotal
+}
+
+func (m *mockClusterProvider) CollectSlaveTotals() ([]domain.SlaveUserTotal, domain.SlaveReport) {
+	return m.totals, domain.SlaveReport{Enabled: true, TotalServers: 1, OKServers: 1}
+}
+
+func TestService_GenerateClusterStats_SavesInferred(t *testing.T) {
+	tmpDir := t.TempDir()
+	statsStateFile := filepath.Join(tmpDir, "stats_state.json")
+	inferredStatsFile := filepath.Join(tmpDir, "inferred_traffic.json")
+
+	// Pre-create StatsState with master traffic
+	state := defaultState()
+	state.Users["user1@example.com"] = &UserState{
+		CumulativeUp:   100,
+		CumulativeDown: 200,
+	}
+	if err := Save(statsStateFile, state); err != nil {
+		t.Fatalf("Failed to save initial state: %v", err)
+	}
+
+	engine := &mockEngine{}
+	clusterProvider := &mockClusterProvider{
+		totals: []domain.SlaveUserTotal{
+			{Email: "user1@example.com", Slave: 500},
+		},
+	}
+
+	svc := NewService(Config{
+		IsMaster:                 true,
+		StatsStatePath:           statsStateFile,
+		InferredStatsPath:        inferredStatsFile,
+		DetailedRetentionSeconds: 3600,
+	}, engine, clusterProvider)
+
+	// Call GenerateClusterStats (inferredMode = false)
+	merged, _, err := svc.GenerateClusterStats(false, statsStateFile)
+	if err != nil {
+		t.Fatalf("GenerateClusterStats error: %v", err)
+	}
+
+	// Verify merged stats returned
+	if len(merged) != 1 {
+		t.Fatalf("Expected 1 merged user, got %d", len(merged))
+	}
+	mu := merged[0]
+	if mu.Email != "user1@example.com" {
+		t.Errorf("Expected user1@example.com, got %s", mu.Email)
+	}
+	if mu.Total.Up != 100 || *mu.ClusterTotal != 800 {
+		t.Errorf("Expected Total Up=100, Combined=800, got Up=%d, Combined=%d", mu.Total.Up, *mu.ClusterTotal)
+	}
+
+	// Verify InferredStats file was written
+	if _, err := os.Stat(inferredStatsFile); os.IsNotExist(err) {
+		t.Fatalf("Inferred stats file was not created: %s", inferredStatsFile)
+	}
+
+	inferredState, err := Load(inferredStatsFile, 3600)
+	if err != nil {
+		t.Fatalf("Failed to load inferred stats file: %v", err)
+	}
+
+	uState, exists := inferredState.Users["user1@example.com"]
+	if !exists {
+		t.Fatal("Expected user1@example.com in inferred stats file")
+	}
+
+	// CumulativeUp should be 100 (master up)
+	// CumulativeDown should be 200 + 500 = 700 (master down + slave combined)
+	if uState.CumulativeUp != 100 || uState.CumulativeDown != 700 {
+		t.Errorf("Expected CumulativeUp=100 and CumulativeDown=700 in inferred file, got %d and %d", uState.CumulativeUp, uState.CumulativeDown)
 	}
 }
