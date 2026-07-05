@@ -568,6 +568,25 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	adOut, adErr := adCmd.CombinedOutput()
 	if adErr != nil {
 		adStr := strings.TrimSpace(string(adOut))
+		if strings.Contains(adStr, "existing tag found") {
+			g.log.Warn("xrayapi: add inbound failed due to existing tag, retrying in 500ms...", "tag", tag)
+			time.Sleep(500 * time.Millisecond)
+
+			// Retry rmi
+			rmRetryCmd := exec.CommandContext(rmCtx, "xray", "api", "rmi", "--server", g.addr, tag)
+			_ = rmRetryCmd.Run()
+
+			// Retry adi
+			adCmdRetry := exec.CommandContext(adCtx, "xray", "api", "adi", "--server", g.addr, f.Name())
+			adOutRetry, adErrRetry := adCmdRetry.CombinedOutput()
+			if adErrRetry == nil {
+				g.log.Info("xrayapi: inbound rebuilt on retry", "tag", tag)
+				return nil
+			}
+			adStr = strings.TrimSpace(string(adOutRetry))
+			adErr = adErrRetry
+		}
+
 		g.log.Error("xrayapi: add inbound failed", "tag", tag, "err", adErr, "out", adStr)
 		return fmt.Errorf("adi %s: %v (output: %s)", tag, adErr, adStr)
 	}

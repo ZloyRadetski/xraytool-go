@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"xraytool/internal/domain"
 )
@@ -33,6 +34,7 @@ type Adapter struct {
 	realityRotation bool
 	realityKeysPath string
 	log             *slog.Logger
+	rebuildMu       sync.Mutex // Serializes dynamic inbound rebuild operations
 }
 
 // compile-time interface check — the compiler will error here if Adapter ever
@@ -628,6 +630,9 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 // and calls the gRPC client to remove then re-add it.
 // Best-effort: failures are logged but not fatal — the config on disk is correct.
 func (a *Adapter) RebuildInbound(ctx context.Context, tag string) error {
+	a.rebuildMu.Lock()
+	defer a.rebuildMu.Unlock()
+
 	cfg, err := Read(a.configPath)
 	if err != nil {
 		return fmt.Errorf("xray adapter RebuildInbound: read config: %w", err)
@@ -672,6 +677,9 @@ func (a *Adapter) RebuildInbound(ctx context.Context, tag string) error {
 // hysteria/hysteria2/hy2 inbound. Called after AddUser/RemoveUser operations
 // because these protocols don't support per-user hot-add/hot-remove.
 func (a *Adapter) rebuildHysteriaInbounds(ctx context.Context) {
+	a.rebuildMu.Lock()
+	defer a.rebuildMu.Unlock()
+
 	cfg, err := Read(a.configPath)
 	if err != nil {
 		a.log.Warn("xray adapter: rebuildHysteriaInbounds: read config failed", "err", err)
