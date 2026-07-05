@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	modernsqlite "github.com/glebarez/go-sqlite"
-	libsqlite "modernc.org/sqlite/lib"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	libsqlite "modernc.org/sqlite/lib"
 
 	"xraytool/internal/domain"
 )
@@ -314,7 +314,7 @@ func (r *gormSubscriptionRepo) FindByID(ctx context.Context, id string) (*domain
 
 func (r *gormSubscriptionRepo) FindByEmail(ctx context.Context, email string) (*domain.Subscription, error) {
 	var sub Subscription
-	err := r.db.WithContext(ctx).Where("email = ?", email).First(&sub).Error
+	err := r.db.WithContext(ctx).Where("email = ?", email).Order("created_at desc").First(&sub).Error
 	if err != nil {
 		return nil, wrapError(err)
 	}
@@ -646,7 +646,7 @@ func (r *gormPaymentRepo) UpdateStatus(ctx context.Context, paymentID int64, new
 }
 
 func (r *gormPaymentRepo) UpdateStatusIfNotCompleted(ctx context.Context, paymentID int64, newStatus string) (bool, error) {
-	res := r.db.WithContext(ctx).Model(&Payment{}).Where("id = ? AND status != ? AND status != 'completed'", paymentID, newStatus).Update("status", newStatus)
+	res := r.db.WithContext(ctx).Model(&Payment{}).Where("id = ? AND status != ?", paymentID, "completed").Update("status", newStatus)
 	return res.RowsAffected > 0, wrapError(res.Error)
 }
 
@@ -947,9 +947,9 @@ func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, de
 			return tx.Create(&newDevice).Error
 		} else {
 			return tx.Model(&device).Updates(map[string]interface{}{
-				"device_model":  deviceModel,
-				"device_os":     deviceOs,
-				"user_agent":    userAgent,
+				"device_model": deviceModel,
+				"device_os":    deviceOs,
+				"user_agent":   userAgent,
 			}).Error
 		}
 	})

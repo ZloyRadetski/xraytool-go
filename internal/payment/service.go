@@ -44,42 +44,53 @@ type CreatePaymentRequest struct {
 }
 
 // ProcessExternalPaymentStatus maps an external status and updates the payment, dispatching events if needed.
+// Uses a transaction with pessimistic row locking to prevent duplicate subscription extension
+// when two concurrent webhooks arrive for the same payment.
 func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, status string) error {
 	mappedStatus := status
 	if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" {
 		mappedStatus = "completed"
 	}
 
-	payment, err := s.registry.Payments().FindByExternalID(ctx, extID)
-	if err != nil {
-		return err // not found or error
-	}
+	// Use WithTx to get a transactional registry; the payment lookup + update
+	// happen atomically inside the same transaction to avoid TOCTOU.
+	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		payment, err := tx.Payments().FindByExternalID(ctx, extID)
+		if err != nil {
+			return err // not found or error
+		}
 
-	if payment.Status != mappedStatus && payment.Status != "completed" {
-		updated, resErr := s.registry.Payments().UpdateStatusIfNotCompleted(ctx, payment.ID, mappedStatus)
+		// Skip if already in the target status or already completed.
+		if payment.Status == mappedStatus || payment.Status == "completed" {
+			return nil
+		}
+
+		updated, resErr := tx.Payments().UpdateStatusIfNotCompleted(ctx, payment.ID, mappedStatus)
 		if resErr != nil {
 			return resErr
 		}
-		if updated {
-			s.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
-
-			if mappedStatus == "completed" {
-				s.extendSubscriptionForPayment(ctx, payment)
-				if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
-					s.log.Error("failed to apply referral reward on platega callback", "err", err)
-				}
-
-				s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
-					"payment_id":   payment.ID,
-					"amount":       payment.Amount,
-					"payment_type": payment.PaymentType,
-					"method":       payment.Method,
-					"user_id":      payment.UserID,
-				}, nil)
-			}
+		if !updated {
+			return nil // concurrent update already processed it
 		}
-	}
-	return nil
+
+		s.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
+
+		if mappedStatus == "completed" {
+			s.extendSubscriptionForPayment(ctx, payment)
+			if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
+				s.log.Error("failed to apply referral reward on platega callback", "err", err)
+			}
+
+			s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
+				"payment_id":   payment.ID,
+				"amount":       payment.Amount,
+				"payment_type": payment.PaymentType,
+				"method":       payment.Method,
+				"user_id":      payment.UserID,
+			}, nil)
+		}
+		return nil
+	})
 }
 
 func (s *Service) FindAll(ctx context.Context) ([]domain.Payment, error) {
@@ -95,8 +106,6 @@ func (s *Service) ScrubOldPayments(ctx context.Context, olderThan time.Duration)
 	}
 	return count, err
 }
-
-
 
 // FindPaymentsByFilters is a specific method matching handlers.
 func (s *Service) FindPaymentsByFilters(ctx context.Context, status, method, pt, tgIDStr string) ([]domain.Payment, error) {
@@ -136,7 +145,7 @@ func (s *Service) CountPaymentsByPromoAndUser(ctx context.Context, promoID int64
 	return int(c), err
 }
 
-func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, error) {
+func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (*domain.Payment, error) {
 	if req.TelegramID == 0 {
 		return nil, fmt.Errorf("telegram_id is required")
 	}
@@ -148,7 +157,7 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 	}
 
 	tgIDStr := strconv.FormatInt(req.TelegramID, 10)
-	user, err := s.registry.Users().FindByPlatformID(context.Background(), "telegram", tgIDStr)
+	user, err := s.registry.Users().FindByPlatformID(ctx, "telegram", tgIDStr)
 	if err != nil {
 		return nil, ErrUserNotFound
 	}
@@ -162,7 +171,7 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 	var promoCodeID *int64
 
 	if req.PlanID != nil {
-		plan, err := s.registry.Plans().FindByID(context.Background(), fmt.Sprintf("%d", *req.PlanID))
+		plan, err := s.registry.Plans().FindByID(ctx, fmt.Sprintf("%d", *req.PlanID))
 		if err != nil {
 			return nil, ErrInvalidPlanID
 		}
@@ -175,7 +184,7 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 		promoPrice := plan.BasePrice
 		if req.PromoCode != "" {
 			code := strings.ToUpper(strings.TrimSpace(req.PromoCode))
-			promo, err := s.registry.Promos().FindByCode(context.Background(), code)
+			promo, err := s.registry.Promos().FindByCode(ctx, code)
 			if err == nil {
 				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
 					platform := strings.ToLower(strings.TrimSpace(req.Platform))
@@ -195,7 +204,7 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 		}
 	} else if req.PromoCode != "" {
 		code := strings.ToUpper(strings.TrimSpace(req.PromoCode))
-		promo, err := s.registry.Promos().FindByCode(context.Background(), code)
+		promo, err := s.registry.Promos().FindByCode(ctx, code)
 		if err == nil {
 			if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
 				platform := strings.ToLower(strings.TrimSpace(req.Platform))
@@ -220,14 +229,22 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 		},
 	}
 
-	txErr := s.registry.WithTx(context.Background(), func(tx domain.Registry) error {
+	txErr := s.registry.WithTx(ctx, func(tx domain.Registry) error {
 		if promoCodeID != nil {
-			promo, err := tx.Promos().FindByID(context.Background(), *promoCodeID)
+			// Re-fetch and re-validate promo code inside the transaction to avoid TOCTOU.
+			promo, err := tx.Promos().FindByID(ctx, *promoCodeID)
 			if err != nil {
-				return err
+				return fmt.Errorf("promo not found: %w", err)
 			}
+			if !promo.IsActive {
+				return fmt.Errorf("promo inactive")
+			}
+			if promo.ExpiresAt != nil && !time.Now().Before(*promo.ExpiresAt) {
+				return fmt.Errorf("promo expired")
+			}
+
 			if promo.MaxUses > 0 {
-				ok, err := tx.Promos().IncrementUses(context.Background(), *promoCodeID, int(promo.MaxUses))
+				ok, err := tx.Promos().IncrementUses(ctx, *promoCodeID, int(promo.MaxUses))
 				if err != nil {
 					return err
 				}
@@ -235,10 +252,10 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 					return fmt.Errorf("promo limit")
 				}
 			} else {
-				tx.Promos().IncrementUses(context.Background(), *promoCodeID, 0)
+				tx.Promos().IncrementUses(ctx, *promoCodeID, 0)
 			}
 
-			count, err := tx.Payments().CountByUserAndPromo(context.Background(), user.ID, *promoCodeID)
+			count, err := tx.Payments().CountByUserAndPromo(ctx, user.ID, *promoCodeID)
 			if err != nil {
 				return err
 			}
@@ -246,15 +263,19 @@ func (s *Service) CreatePayment(req CreatePaymentRequest) (*domain.Payment, erro
 				return fmt.Errorf("promo used by user")
 			}
 		}
-		return tx.Payments().Create(context.Background(), &payment)
+		return tx.Payments().Create(ctx, &payment)
 	})
 
 	if txErr != nil {
-		if txErr.Error() == "promo limit" {
+		errMsg := txErr.Error()
+		if errMsg == "promo limit" {
 			return nil, ErrPromoLimitReached
 		}
-		if txErr.Error() == "promo used by user" {
+		if errMsg == "promo used by user" {
 			return nil, ErrPromoAlreadyUsed
+		}
+		if strings.Contains(errMsg, "promo inactive") || strings.Contains(errMsg, "promo expired") || strings.Contains(errMsg, "promo not found") {
+			return nil, fmt.Errorf("promo code is no longer valid")
 		}
 		return nil, fmt.Errorf("failed to create payment: %w", txErr)
 	}

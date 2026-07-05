@@ -68,7 +68,6 @@ func (s *Service) BuildMasterSnapshot(ctx context.Context) slave.Snapshot {
 	return slave.BuildMasterSnapshot(ctx, s.registry, s.engine)
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // CreateUser
 // ─────────────────────────────────────────────────────────────────────────────
@@ -689,8 +688,6 @@ func (s *Service) ListUsers(ctx context.Context, page, limit int, search string)
 	return s.registry.Users().ListUsers(ctx, page, limit, search)
 }
 
-
-
 func (s *Service) UpdateSubscriptionFields(ctx context.Context, subID string, updates map[string]interface{}) error {
 	return s.registry.Subscriptions().UpdateFields(ctx, subID, updates)
 }
@@ -734,7 +731,7 @@ func (s *Service) FindOrCreateWebUser(ctx context.Context, email string) (*domai
 	var newUser *domain.User
 	txErr := s.registry.WithTx(ctx, func(tx domain.Registry) error {
 		userID, _ := generate.UUID()
-		
+
 		var refCode string
 		for {
 			refCode = "ref_" + generate.Secret(8)
@@ -794,7 +791,7 @@ type RegisterTelegramUserRequest struct {
 }
 
 func (s *Service) RegisterTelegramUser(ctx context.Context, req RegisterTelegramUserRequest) (*domain.User, error) {
-    tgIDStr := fmt.Sprintf("%d", req.TelegramID)
+	tgIDStr := fmt.Sprintf("%d", req.TelegramID)
 	existing, err := s.registry.Users().FindByPlatformID(ctx, "telegram", tgIDStr)
 	if err == nil && existing != nil {
 		return existing, nil
@@ -813,41 +810,52 @@ func (s *Service) RegisterTelegramUser(ctx context.Context, req RegisterTelegram
 		}
 	}
 
-	user := domain.User{
-		ID:         userID,
-		Username:   req.Username,
-		Balance:    0,
-		IsAdmin:    false,
-		RefCode:    refCode,
-		ReferredBy: referredByID,
-		Metadata: domain.Metadata{
-			"telegram_id":       req.TelegramID,
-			"telegram_username": req.TelegramUsername,
-			"source":            "telegram_bot",
-		},
+	var newUser *domain.User
+
+	// Create user AND subscription inside a single transaction to avoid orphaned users.
+	err = s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		u := domain.User{
+			ID:         userID,
+			Username:   req.Username,
+			Balance:    0,
+			IsAdmin:    false,
+			RefCode:    refCode,
+			ReferredBy: referredByID,
+			Metadata: domain.Metadata{
+				"telegram_id":       req.TelegramID,
+				"telegram_username": req.TelegramUsername,
+				"source":            "telegram_bot",
+			},
+		}
+
+		if err := tx.Users().Create(ctx, &u); err != nil {
+			return fmt.Errorf("db create user: %w", err)
+		}
+
+		subID, _ := generate.UUID()
+		xrayUUID, _ := generate.UUID()
+		email := fmt.Sprintf("bot_client_%d", req.TelegramID)
+
+		sub := domain.Subscription{
+			ID:         subID,
+			UserID:     userID,
+			Email:      email,
+			XrayUUID:   xrayUUID,
+			Status:     "inactive",
+			MaxDevices: 3,
+			AutoRenew:  false,
+		}
+
+		if err := tx.Subscriptions().Create(ctx, &sub); err != nil {
+			return fmt.Errorf("db create subscription: %w", err)
+		}
+
+		newUser = &u
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	if err := s.registry.Users().Create(ctx, &user); err != nil {
-		return nil, fmt.Errorf("db create user: %w", err)
-	}
-
-	subID, _ := generate.UUID()
-	xrayUUID, _ := generate.UUID()
-	email := fmt.Sprintf("bot_client_%d", req.TelegramID)
-
-	sub := domain.Subscription{
-		ID:         subID,
-		UserID:     userID,
-		Email:      email,
-		XrayUUID:   xrayUUID,
-		Status:     "inactive",
-		MaxDevices: 3,
-		AutoRenew:  false,
-	}
-
-	if err := s.registry.Subscriptions().Create(ctx, &sub); err != nil {
-		s.log.Error("register user: db create subscription", "err", err)
-	}
-
-	return &user, nil
+	return newUser, nil
 }

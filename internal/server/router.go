@@ -63,9 +63,9 @@ type Router struct {
 	userSvc    *usersvc.Service
 	paymentSvc *payment.Service
 	// antifraud hooks — nil when the module is disabled.
-	isBanned       func(email string) bool
-	forceUnban     func(email string)
-	getSnapshot    func() antifraud.SnapshotData
+	isBanned    func(email string) bool
+	forceUnban  func(email string)
+	getSnapshot func() antifraud.SnapshotData
 	// ingestEvents is called when master receives IP events from a slave node.
 	// nil when the module is disabled or when running in slave mode.
 	ingestEvents func(slaveID string, events []domain.FraudEvent)
@@ -219,7 +219,9 @@ func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 
 		if !isValid {
 			r.logIntruder(req, "invalid or missing X-API-Key")
-			http.NotFound(w, req)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized"}`))
 			return
 		}
 		next(w, req)

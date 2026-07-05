@@ -77,7 +77,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		Platform:    body.Platform,
 	}
 
-	pay, err := r.paymentSvc.CreatePayment(reqPayload)
+	pay, err := r.paymentSvc.CreatePayment(req.Context(), reqPayload)
 	if err != nil {
 		if errors.Is(err, payment.ErrUserNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -221,14 +221,7 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 
 	secretHeader := req.Header.Get("X-Secret")
 	if secretHeader == "" {
-		// Try extracting from body if missing from headers
-		if s, ok := body["X-Secret"].(string); ok {
-			secretHeader = s
-		}
-	}
-
-	if secretHeader == "" {
-		r.log.Warn("platega callback missing X-Secret header and body field")
+		r.log.Warn("platega callback missing X-Secret header")
 		writeError(w, http.StatusUnauthorized, "missing secret")
 		return
 	}
@@ -262,11 +255,13 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 
 	if extID != "" && status != "" {
 		if err := r.paymentSvc.ProcessExternalPaymentStatus(req.Context(), extID, status); err != nil {
-			r.log.Error("failed to process external payment status", "err", err)
-			// Don't fail the webhook, just log it.
-		} else if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" || status == "completed" {
+			r.log.Error("failed to process external payment status", "err", err, "extID", extID)
+			// Don't fail the webhook — Platega expects 200 OK regardless.
+		}
+		// Only unban if the payment was actually completed successfully.
+		if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" || status == "completed" {
 			payment, err := r.paymentSvc.FindPaymentByExternalID(req.Context(), extID)
-			if err == nil && payment != nil {
+			if err == nil && payment != nil && payment.Status == "completed" {
 				updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
 				if err == nil && updatedSub != nil {
 					r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID)

@@ -187,7 +187,6 @@ func (r *Router) buildUsersResponseBulk(users []domain.User) []map[string]interf
 	return out
 }
 
-
 // readBody reads and JSON-decodes the request body into dst. Returns false and
 // writes a 400 if parsing fails.
 func readBody(w http.ResponseWriter, req *http.Request, dst interface{}) bool {
@@ -530,8 +529,8 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 	if !readBody(w, req, &body) {
 		return
 	}
-	if body.Amount < 0 || body.Amount > 100000000 {
-		writeError(w, http.StatusBadRequest, "amount must be positive")
+	if body.Amount <= 0 || body.Amount > 100000000 {
+		writeError(w, http.StatusBadRequest, "amount must be positive and less than 100000000")
 		return
 	}
 
@@ -571,8 +570,8 @@ func (r *Router) handleSetMaxDevices(w http.ResponseWriter, req *http.Request) {
 	if !readBody(w, req, &body) {
 		return
 	}
-	if body.MaxDevices <= 0 {
-		writeError(w, http.StatusBadRequest, "max_devices must be positive")
+	if body.MaxDevices <= 0 || body.MaxDevices > 100 {
+		writeError(w, http.StatusBadRequest, "max_devices must be between 1 and 100")
 		return
 	}
 
@@ -661,8 +660,12 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "plan_total_price must be positive if plan_id is missing")
 		return
 	}
-	if body.MaxDevices == 0 {
+	if body.MaxDevices <= 0 {
 		body.MaxDevices = 3
+	}
+	if body.MaxDevices > 100 {
+		writeError(w, http.StatusBadRequest, "max_devices must be between 1 and 100")
+		return
 	}
 
 	user, err := r.userSvc.FindUserByPlatformID(context.Background(), platform, idStr)
