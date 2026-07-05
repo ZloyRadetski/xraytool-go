@@ -208,3 +208,108 @@ func TestProcessSQL_RealityRotationPlaceholders(t *testing.T) {
 	assert.Contains(t, res.Body, `"pbk": "mock-pub"`)
 	assert.Contains(t, res.Body, `"sid": "mock-sid"`)
 }
+
+func TestProcessSQL_InferredTrafficStats(t *testing.T) {
+	db := setupTestDB(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+	}()
+
+	tempDir := t.TempDir()
+	statsStateFile := tempDir + "/stats_state.json"
+	inferredStatsFile := tempDir + "/inferred_stats.json"
+
+	// 1. Write stats state JSON (local master traffic)
+	statsStateJSON := `{
+		"users": {
+			"traffic_user@example.com": {
+				"cumulative_up": 100,
+				"cumulative_down": 200
+			},
+			"local_only@example.com": {
+				"cumulative_up": 50,
+				"cumulative_down": 60
+			}
+		}
+	}`
+	require.NoError(t, os.WriteFile(statsStateFile, []byte(statsStateJSON), 0644))
+
+	// 2. Write inferred stats JSON (combined master+slave traffic)
+	inferredStatsJSON := `{
+		"users": {
+			"traffic_user@example.com": {
+				"cumulative_up": 1000,
+				"cumulative_down": 2000
+			}
+		}
+	}`
+	require.NoError(t, os.WriteFile(inferredStatsFile, []byte(inferredStatsJSON), 0644))
+
+	os.WriteFile(tempDir+"/xray_config.json", []byte(`{}`), 0644)
+	os.WriteFile(tempDir+"/configs.txt", []byte("# Header\n{\"email\": \"{EMAIL}\", \"up\": {UP}, \"down\": {DOWN}}"), 0644)
+
+	db.Create(&database.User{ID: "u_traffic", Username: "u_traffic", RefCode: "ref_traffic", IsBlocked: false})
+	db.Create(&database.Subscription{
+		ID:         "sub_traffic",
+		UserID:     "u_traffic",
+		Email:      "traffic_user@example.com",
+		Status:     "active",
+		XrayUUID:   "00000000-0000-0000-0000-000000000001",
+		MaxDevices: 3,
+	})
+
+	db.Create(&database.User{ID: "u_local", Username: "u_local", RefCode: "ref_local", IsBlocked: false})
+	db.Create(&database.Subscription{
+		ID:         "sub_local",
+		UserID:     "u_local",
+		Email:      "local_only@example.com",
+		Status:     "active",
+		XrayUUID:   "00000000-0000-0000-0000-000000000002",
+		MaxDevices: 3,
+	})
+
+	cfg := &appconfig.Config{
+		Paths: appconfig.PathsConf{
+			XrayConfig:               tempDir + "/xray_config.json",
+			JSONSubscriptionTemplate: tempDir + "/configs.txt",
+			StatsState:               statsStateFile,
+			InferredStats:            inferredStatsFile,
+		},
+		Subscription: appconfig.SubscriptionConf{
+			UserAgentWhitelist: []string{"testclient"},
+			UserAgentNoChecks:  []string{"testclient"},
+		},
+	}
+
+	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm.subTemplate = "# Header\n{\"email\": \"{EMAIL}\", \"up\": {UP}, \"down\": {DOWN}}"
+	isBanned := func(email string) bool { return false }
+	dispatcher := events.NewDispatcher(&events.Config{Webhooks: []string{}})
+
+	// Scenario A: User exists in InferredStats -> should return inferred stats (1000/2000)
+	reqA := &Request{
+		Query:      map[string]string{"id": "sub_traffic", "hwid": "my-hwid"},
+		UserAgent:  "TestClient/1.0",
+		RemoteAddr: "192.168.1.3",
+		Headers:    make(map[string]string),
+	}
+	resA := ProcessSQL(context.Background(), database.NewRegistry(db), cm, dispatcher, reqA, isBanned)
+	assert.Equal(t, 200, resA.StatusCode)
+	assert.Contains(t, resA.Body, `"email": "traffic_user@example.com"`)
+	assert.Contains(t, resA.Body, `"up": 1000`)
+	assert.Contains(t, resA.Body, `"down": 2000`)
+
+	// Scenario B: User only exists in StatsState -> should fallback to local master stats (50/60)
+	reqB := &Request{
+		Query:      map[string]string{"id": "sub_local", "hwid": "my-hwid"},
+		UserAgent:  "TestClient/1.0",
+		RemoteAddr: "192.168.1.3",
+		Headers:    make(map[string]string),
+	}
+	resB := ProcessSQL(context.Background(), database.NewRegistry(db), cm, dispatcher, reqB, isBanned)
+	assert.Equal(t, 200, resB.StatusCode)
+	assert.Contains(t, resB.Body, `"email": "local_only@example.com"`)
+	assert.Contains(t, resB.Body, `"up": 50`)
+	assert.Contains(t, resB.Body, `"down": 60`)
+}

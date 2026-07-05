@@ -601,13 +601,13 @@ func getHy2ObfsPasswordFromYAML(yamlPath string) string {
 	return ""
 }
 
-func getTrafficBytes(statsPath string, email string) (up int64, down int64) {
+func getTrafficBytes(statsPath string, email string) (up int64, down int64, found bool) {
 	if statsPath == "" {
-		return 0, 0
+		return 0, 0, false
 	}
 	data, err := os.ReadFile(statsPath)
 	if err != nil {
-		return 0, 0
+		return 0, 0, false
 	}
 
 	var parsed struct {
@@ -618,15 +618,15 @@ func getTrafficBytes(statsPath string, email string) (up int64, down int64) {
 	}
 
 	if json.Unmarshal(data, &parsed) != nil || parsed.Users == nil {
-		return 0, 0
+		return 0, 0, false
 	}
 
 	userObj, ok := parsed.Users[email]
 	if !ok {
-		return 0, 0
+		return 0, 0, false
 	}
 
-	return int64(userObj.CumulativeUp), int64(userObj.CumulativeDown)
+	return int64(userObj.CumulativeUp), int64(userObj.CumulativeDown), true
 }
 
 func defaultExpireDate() string {

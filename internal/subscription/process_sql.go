@@ -280,8 +280,16 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	hysteria2Auth := hy2Pass
 	hy2Obfs := getOrCreateHy2ObfsPassword(cfg.Paths.Hy2ConfigYAML, xrayCfg)
 
-	// Fetch traffic bytes
-	uploadBytes, downloadBytes := getTrafficBytes(cfg.Paths.StatsState, email)
+	// Fetch traffic bytes: try inferred (combined master+slave) stats first,
+	// falling back to local master stats if the user isn't found there.
+	var uploadBytes, downloadBytes int64
+	var found bool
+	if cfg.Paths.InferredStats != "" {
+		uploadBytes, downloadBytes, found = getTrafficBytes(cfg.Paths.InferredStats, email)
+	}
+	if !found {
+		uploadBytes, downloadBytes, _ = getTrafficBytes(cfg.Paths.StatsState, email)
+	}
 
 	isVlessFormat := req.Query["format"] == "vless"
 

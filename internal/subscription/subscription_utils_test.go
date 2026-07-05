@@ -54,19 +54,19 @@ func TestGetTrafficBytes(t *testing.T) {
 	}`
 	os.WriteFile(statsPath, []byte(statsJSON), 0644)
 
-	up, down := getTrafficBytes(statsPath, "testuser")
-	if up != 1024 || down != 2048 {
-		t.Errorf("Expected 1024 and 2048, got %d and %d", up, down)
+	up, down, found := getTrafficBytes(statsPath, "testuser")
+	if !found || up != 1024 || down != 2048 {
+		t.Errorf("Expected found=true, 1024 and 2048, got found=%t, %d and %d", found, up, down)
 	}
 
-	up, down = getTrafficBytes(statsPath, "nonexistent")
-	if up != 0 || down != 0 {
-		t.Errorf("Expected 0, 0, got %d, %d", up, down)
+	up, down, found = getTrafficBytes(statsPath, "nonexistent")
+	if found || up != 0 || down != 0 {
+		t.Errorf("Expected found=false, 0, 0, got found=%t, %d, %d", found, up, down)
 	}
 
-	up, down = getTrafficBytes("missing_file.json", "testuser")
-	if up != 0 || down != 0 {
-		t.Errorf("Expected 0, 0, got %d, %d", up, down)
+	up, down, found = getTrafficBytes("missing_file.json", "testuser")
+	if found || up != 0 || down != 0 {
+		t.Errorf("Expected found=false, 0, 0, got found=%t, %d, %d", found, up, down)
 	}
 }
 
