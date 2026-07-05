@@ -186,6 +186,17 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
+	if body.Status == "completed" {
+		payment, err := r.paymentSvc.FindPaymentByID(req.Context(), fmt.Sprintf("%d", paymentID))
+		if err == nil && payment != nil {
+			updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
+			if err == nil && updatedSub != nil {
+				r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID)
+				r.unbanUserInXrayAsync(*updatedSub)
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -253,6 +264,15 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 		if err := r.paymentSvc.ProcessExternalPaymentStatus(req.Context(), extID, status); err != nil {
 			r.log.Error("failed to process external payment status", "err", err)
 			// Don't fail the webhook, just log it.
+		} else if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" || status == "completed" {
+			payment, err := r.paymentSvc.FindPaymentByExternalID(req.Context(), extID)
+			if err == nil && payment != nil {
+				updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
+				if err == nil && updatedSub != nil {
+					r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID)
+					r.unbanUserInXrayAsync(*updatedSub)
+				}
+			}
 		}
 	}
 

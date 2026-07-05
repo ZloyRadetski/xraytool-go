@@ -363,31 +363,49 @@
             "limit": 3
           },
           {
+            "email": "bot_client_123456789",
+            "flow": "xtls-rprx-vision",
+            "id": "435b3bd4-e109-4f1e-84d3-275567088654",
+            "limit": 3
+          },
+          {
             "email": "bot_client_10003",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "cee487d2-99d4-4c33-8832-dc72697f982c",
+            "id": "76cd7be2-2383-41c7-ac27-4cc0732403f9",
             "limit": 3
           },
           {
             "email": "bot_client_10004",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "bba949c0-c651-4e11-b895-484cfa8936c8",
+            "id": "f457f643-e607-483c-9839-534642eb27d0",
             "limit": 3
           },
           {
             "email": "bot_client_10006",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "b6daa3fb-2505-4f18-9622-9272edaf770e",
+            "id": "4ff59c0f-89d6-4895-b69e-2754b0de4c8f",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_20002",
+            "flow": "xtls-rprx-vision",
+            "id": "bcd314bb-13ef-43db-9be5-93a581feba9d",
+            "limit": 3
+          },
+          {
+            "email": "bot_client_50003",
+            "flow": "xtls-rprx-vision",
+            "id": "1aa40374-7621-47d3-b83b-5b6955f29931",
             "limit": 3
           },
           {
             "email": "bot_client_50004",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "1544b5dd-f7e9-4b3e-8883-57b624735c05",
+            "id": "0809aabe-aae4-453d-aaa6-439fa7ea57a9",
             "limit": 3
           }
         ],

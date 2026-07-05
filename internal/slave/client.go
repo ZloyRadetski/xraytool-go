@@ -119,13 +119,14 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 	}
 	url := endpoint
 
-	// Inject cmd as action
-	if params == nil {
-		params = make(map[string]string)
+	// Copy params to prevent concurrent map mutation when called in parallel goroutines
+	localParams := make(map[string]string, len(params)+1)
+	for k, v := range params {
+		localParams[k] = v
 	}
-	params["action"] = cmd
+	localParams["action"] = cmd
 
-	payload, err := json.Marshal(params)
+	payload, err := json.Marshal(localParams)
 	if err != nil {
 		return "", fmt.Errorf("marshaling params: %w", err)
 	}
@@ -173,13 +174,14 @@ func (c *Client) CallDecode(entry Entry, cmd string, params map[string]string, t
 	}
 	url := endpoint
 
-	// Inject cmd as action
-	if params == nil {
-		params = make(map[string]string)
+	// Copy params to prevent concurrent map mutation when called in parallel goroutines
+	localParams := make(map[string]string, len(params)+1)
+	for k, v := range params {
+		localParams[k] = v
 	}
-	params["action"] = cmd
+	localParams["action"] = cmd
 
-	payload, err := json.Marshal(params)
+	payload, err := json.Marshal(localParams)
 	if err != nil {
 		return fmt.Errorf("marshaling params: %w", err)
 	}

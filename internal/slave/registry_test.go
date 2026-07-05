@@ -86,3 +86,33 @@ func TestRegistryPropagateAndCallOne(t *testing.T) {
 		t.Errorf("CallOne on empty map should return error")
 	}
 }
+
+func TestRegistryPropagateAll_ConcurrencySafe(t *testing.T) {
+	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"status":"success","output":"ok"}`))
+	}))
+	defer ts1.Close()
+
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"status":"success","output":"ok"}`))
+	}))
+	defer ts2.Close()
+
+	cfgData := map[string]Entry{
+		"s1": {URL: ts1.URL},
+		"s2": {URL: ts2.URL},
+	}
+
+	client := NewClient(1*time.Second, 1*time.Second, "remote")
+	reg := NewRegistry(cfgData, client)
+
+	sharedParams := map[string]string{
+		"some_key": "some_val",
+	}
+
+	// Should not panic from concurrent map writes
+	results := reg.PropagateAll("cmd", sharedParams)
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+}

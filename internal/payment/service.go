@@ -64,6 +64,7 @@ func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, statu
 			s.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
 
 			if mappedStatus == "completed" {
+				s.extendSubscriptionForPayment(ctx, payment)
 				if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
 					s.log.Error("failed to apply referral reward on platega callback", "err", err)
 				}
@@ -266,6 +267,11 @@ func (s *Service) FindPaymentByID(ctx context.Context, idStr string) (*domain.Pa
 	return s.registry.Payments().FindByID(ctx, idStr)
 }
 
+// FindPaymentByExternalID returns a single payment by its external ID.
+func (s *Service) FindPaymentByExternalID(ctx context.Context, extID string) (*domain.Payment, error) {
+	return s.registry.Payments().FindByExternalID(ctx, extID)
+}
+
 // UpdatePaymentStatus updates the status of a payment.
 func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, status string, expectedStatuses []string) (bool, error) {
 	updated, err := s.registry.Payments().UpdateStatus(ctx, paymentID, status, expectedStatuses)
@@ -279,6 +285,7 @@ func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, stat
 	if status == "completed" {
 		payment, err := s.registry.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
 		if err == nil {
+			s.extendSubscriptionForPayment(ctx, payment)
 			if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
 				s.log.Error("failed to apply referral reward", "err", err)
 			}
@@ -292,6 +299,19 @@ func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, stat
 		}
 	}
 	return true, nil
+}
+
+func (s *Service) extendSubscriptionForPayment(ctx context.Context, payment *domain.Payment) {
+	if payment.PlanID == nil {
+		return
+	}
+	maxDevices := 3
+	if currentSub, subErr := s.registry.Subscriptions().FindLatestByUserID(ctx, payment.UserID); subErr == nil && currentSub != nil {
+		maxDevices = currentSub.MaxDevices
+	}
+	if err := s.registry.Subscriptions().AutoRenewSubscription(ctx, payment.UserID, payment.PlanID, 0, nil, maxDevices); err != nil {
+		s.log.Error("failed to extend subscription after payment completed", "payment_id", payment.ID, "err", err)
+	}
 }
 
 // applyReferralRewardForPayment credits the referrer of the payer with 25% of

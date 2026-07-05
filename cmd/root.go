@@ -156,7 +156,7 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 	// Dispatcher
 	deps.Dispatcher = events.NewDispatcher(&events.Config{
 		Webhooks:      cfg.Webhooks,
-		WebhookSecret: cfg.PlategaSecret,
+		WebhookSecret: cfg.WebhookSecret,
 	})
 
 	deps.Propagator = propagator

@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"xraytool/internal/database"
 )
 
 func TestCreatePayment_Success(t *testing.T) {
@@ -78,5 +81,62 @@ func TestPlategaWebhook_Success(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d. body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdatePaymentStatus_ExtendsSubscription(t *testing.T) {
+	r := newTestRouter(t)
+
+	// Clean tables
+	testDB.Exec("DELETE FROM plans")
+	testDB.Exec("DELETE FROM users")
+	testDB.Exec("DELETE FROM payments")
+	testDB.Exec("DELETE FROM subscriptions")
+
+	// 1. Create a user and an active plan (e.g. 3 months)
+	plan := database.Plan{Months: 3, BasePrice: 300, IsActive: true}
+	testDB.Create(&plan)
+
+	// 2. Register user via API (initial subscription ends in 1 month by default)
+	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":5001,"username":"payment_extender_user"}`)
+
+	// Get subscription to check its initial expiry (which is nil)
+	sub, err := testReg.Subscriptions().FindByEmail(nil, "bot_client_5001")
+	if err != nil {
+		t.Fatalf("failed to find subscription: %v", err)
+	}
+	if sub.EndsAt != nil {
+		t.Fatalf("expected initial EndsAt to be nil, got %v", sub.EndsAt)
+	}
+
+	// 3. Create a pending payment for that plan
+	body := fmt.Sprintf(`{"telegram_id":5001,"amount":300,"payment_type":"subscription","method":"platega","plan_id":%d}`, plan.ID)
+	wCreate := doAuth(r, "POST", "/api/v1/payments/create", body)
+	if wCreate.Code != http.StatusCreated {
+		t.Fatalf("failed to create payment: %s", wCreate.Body.String())
+	}
+	pid := int(jsonBody(t, wCreate)["payment_id"].(float64))
+
+	// 4. Mark payment as completed
+	wUpdate := doAuth(r, "POST", fmt.Sprintf("/api/v1/payments/%d/status", pid), `{"status":"completed","expected_statuses":["pending_card"]}`)
+	if wUpdate.Code != http.StatusOK {
+		t.Fatalf("failed to complete payment: %s", wUpdate.Body.String())
+	}
+
+	// 5. Verify the subscription is extended by 3 months (endsAt should be roughly time.Now() + 3 months)
+	updatedSub, err := testReg.Subscriptions().FindByEmail(nil, "bot_client_5001")
+	if err != nil {
+		t.Fatalf("failed to load updated subscription: %v", err)
+	}
+
+	if updatedSub.EndsAt == nil {
+		t.Fatal("expected updated subscription EndsAt to be non-nil")
+	}
+
+	// Check if EndsAt is roughly in 3 months
+	expectedYear, expectedMonth, _ := time.Now().AddDate(0, 3, 0).Date()
+	actualYear, actualMonth, _ := updatedSub.EndsAt.Date()
+	if expectedYear != actualYear || expectedMonth != actualMonth {
+		t.Errorf("expected subscription extended to %d-%d, got %d-%d", expectedYear, expectedMonth, actualYear, actualMonth)
 	}
 }
