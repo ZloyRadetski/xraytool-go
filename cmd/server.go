@@ -126,7 +126,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 			//     vpnEngine = singbox.New(deps.Cfg.Singbox.APIAddr, deps.Cfg.Paths.SingboxConfig, slog.Default())
 			default:
 				// Default: Xray-core adapter
-				vpnEngine = vpn.NewAdapter(deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayConfig, deps.Cfg.Paths.XrayTemplate, deps.Cfg.Reality.RotationEnabled, deps.Cfg.Reality.KeysFilepath, slog.Default())
+				vpnEngine = vpn.NewAdapter(deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayConfig, deps.Cfg.Paths.XrayTemplate, deps.Cfg.Reality.RotationEnabled, deps.Cfg.Reality.KeysFilepath, deps.Cfg.BlacklistedAdmins, slog.Default())
 				logger.Infof("[ENGINE] Using Xray-core adapter (grpc_addr=%s, template=%s)", deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayTemplate)
 			}
 

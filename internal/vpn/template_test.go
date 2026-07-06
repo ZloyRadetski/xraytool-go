@@ -70,7 +70,7 @@ func TestMergeUsers_StaticClientsPreserved(t *testing.T) {
 	tmpl := readRawConfig(t, tmplPath)
 
 	// Empty DB users — nothing should change except empty-email cleanup.
-	merged, err := MergeUsers(tmpl, nil)
+	merged, err := MergeUsers(tmpl, nil, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestMergeUsers_AddsDBUsers(t *testing.T) {
 		{Email: "client2@example.com", UUID: "db-uuid-client2"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers)
+	merged, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestMergeUsers_DBWinsOnCollision(t *testing.T) {
 		{Email: "reverse-proxy-us", UUID: "db-override-uuid", Flow: "xtls-rprx-vision"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers)
+	merged, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestMergeUsers_EmptyEmailStaticPreserved(t *testing.T) {
 		{Email: "real@example.com", UUID: "real-uuid"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers)
+	merged, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestMergeUsers_NoClientInboundsUntouched(t *testing.T) {
 		{Email: "someone@example.com", UUID: "uuid"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers)
+	merged, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestMergeUsers_SkipsEmptyEmailDBUsers(t *testing.T) {
 		{Email: "good@example.com", UUID: "good-uuid"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers)
+	merged, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestMergeUsers_DeduplicatesDBUsers(t *testing.T) {
 		{Email: "dup@example.com", UUID: "uuid-second"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers)
+	merged, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestMergeUsers_DoesNotMutateTemplate(t *testing.T) {
 		{Email: "new@example.com", UUID: "some-uuid"},
 	}
 
-	_, err := MergeUsers(tmpl, dbUsers)
+	_, err := MergeUsers(tmpl, dbUsers, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestRegenerateConfig_WritesMergedConfig(t *testing.T) {
 		{Email: "client1@example.com", UUID: "uuid-1"},
 	}
 
-	err := RegenerateConfig(tmplPath, outPath, dbUsers, false, "")
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, false, "", nil)
 	if err != nil {
 		t.Fatalf("RegenerateConfig: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestRegenerateConfig_WritesMergedConfig(t *testing.T) {
 }
 
 func TestRegenerateConfig_TemplateNotFound(t *testing.T) {
-	err := RegenerateConfig("/nonexistent/template.json", "/tmp/out.json", nil, false, "")
+	err := RegenerateConfig("/nonexistent/template.json", "/tmp/out.json", nil, false, "", nil)
 	if err == nil {
 		t.Fatal("expected error for missing template")
 	}
@@ -353,7 +353,7 @@ func TestRegenerateConfig_BadTemplateJSON(t *testing.T) {
 	badPath := filepath.Join(dir, "bad.json")
 	os.WriteFile(badPath, []byte(`{bad json`), 0644)
 
-	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil, false, "")
+	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil, false, "", nil)
 	if err == nil {
 		t.Fatal("expected error for bad template JSON")
 	}
@@ -390,7 +390,7 @@ func TestRegenerateConfig_RealityRotation(t *testing.T) {
 	}
 
 	// 1. First run: should generate new keys and inject them
-	err := RegenerateConfig(tmplPath, outPath, dbUsers, true, keysPath)
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, true, keysPath, nil)
 	if err != nil {
 		t.Fatalf("RegenerateConfig: %v", err)
 	}
@@ -435,6 +435,30 @@ func TestRegenerateConfig_RealityRotation(t *testing.T) {
 	}
 	if len(sids) != 15 || sids[0] != keys.ShortIDs[0] {
 		t.Errorf("expected shortIds %+v, got %+v", keys.ShortIDs, sids)
+	}
+}
+
+func TestMergeUsers_BlacklistedAdmins(t *testing.T) {
+	tmplPath := writeTempFile(t, minXrayTemplate)
+	tmpl := readRawConfig(t, tmplPath)
+
+	// "admin-debug" is static in minXrayTemplate. We blacklist it.
+	blacklisted := []string{"admin-debug"}
+
+	merged, err := MergeUsers(tmpl, nil, blacklisted)
+	if err != nil {
+		t.Fatalf("MergeUsers: %v", err)
+	}
+
+	inbounds, _ := merged.GetInbounds()
+	clients, _ := inbounds[0].GetClients()
+
+	// Should only have "reverse-proxy-us" left, "admin-debug" must be filtered out.
+	if len(clients) != 1 {
+		t.Fatalf("expected 1 client, got %d", len(clients))
+	}
+	if clients[0].Email() != "reverse-proxy-us" {
+		t.Errorf("expected reverse-proxy-us, got %q", clients[0].Email())
 	}
 }
 

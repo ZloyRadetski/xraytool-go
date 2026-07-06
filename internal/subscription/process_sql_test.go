@@ -313,3 +313,65 @@ func TestProcessSQL_InferredTrafficStats(t *testing.T) {
 	assert.Contains(t, resB.Body, `"up": 50`)
 	assert.Contains(t, resB.Body, `"down": 60`)
 }
+
+func TestProcessSQL_BlacklistedAdmin(t *testing.T) {
+	db := setupTestDB(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+		os.Remove("test_xray_config_bla.json")
+		os.Remove("test_xray_template_bla.json")
+	}()
+
+	// Config does NOT contain the admin (because they are blacklisted and filtered out)
+	os.WriteFile("test_xray_config_bla.json", []byte(`{"inbounds":[]}`), 0644)
+
+	// Template contains the hardcoded admin
+	tmplJSON := `{
+		"inbounds": [
+			{
+				"tag": "vless",
+				"protocol": "vless",
+				"settings": {
+					"clients": [
+						{
+							"email": "admin-blacklisted@example.com",
+							"id": "admin-blacklisted-id",
+							"subfile": "admin-blacklisted-id"
+						}
+					]
+				}
+			}
+		]
+	}`
+	os.WriteFile("test_xray_template_bla.json", []byte(tmplJSON), 0644)
+
+	cfg := &appconfig.Config{
+		Paths: appconfig.PathsConf{
+			XrayConfig:   "test_xray_config_bla.json",
+			XrayTemplate: "test_xray_template_bla.json",
+		},
+		Subscription: appconfig.SubscriptionConf{
+			UserAgentWhitelist: []string{"testclient"},
+			DummyConfigs: appconfig.DummyConfigsConf{
+				Expired: []string{"ADMIN_EXPIRED_DUMMY"},
+			},
+		},
+	}
+
+	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	isBanned := func(email string) bool { return false }
+	dispatcher := events.NewDispatcher(&events.Config{Webhooks: []string{}})
+
+	req := &Request{
+		Query:      map[string]string{"id": "admin-blacklisted-id"},
+		UserAgent:  "TestClient/1.0",
+		RemoteAddr: "192.168.1.1",
+		Headers:    make(map[string]string),
+	}
+
+	res := ProcessSQL(context.Background(), database.NewRegistry(db), cm, dispatcher, req, isBanned)
+
+	assert.Equal(t, 200, res.StatusCode, "Should return 200 OK")
+	assert.Contains(t, res.Body, "ADMIN_EXPIRED_DUMMY", "Should return the expired dummy warning config")
+}

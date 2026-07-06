@@ -19,7 +19,7 @@ import (
 //  3. Final clients = static + dynamic (DB always wins on collision).
 //
 // The returned RawConfig is a fully populated xray config ready to write to disk.
-func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig) (RawConfig, error) {
+func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig, blacklistedAdmins []string) (RawConfig, error) {
 	// Clone the template map to prevent side-effects on the caller's template object.
 	cloned := make(RawConfig, len(template))
 	for k, v := range template {
@@ -33,6 +33,14 @@ func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig) (RawConfig, 
 			continue
 		}
 		dbEmails[u.Email] = u
+	}
+
+	// Build blacklist lookup map.
+	blacklist := make(map[string]bool, len(blacklistedAdmins))
+	for _, email := range blacklistedAdmins {
+		if email != "" {
+			blacklist[email] = true
+		}
 	}
 
 	inbounds, err := cloned.GetInbounds()
@@ -50,13 +58,16 @@ func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig) (RawConfig, 
 			return nil, fmt.Errorf("merge: inbound %q: read clients: %w", ib.Tag(), err)
 		}
 
-		// 1. Keep clients whose email is NOT in DB — they're static.
+		// 1. Keep clients whose email is NOT in DB and NOT in blacklist — they're static.
 		var static []RawClient
 		for _, c := range existing {
 			email := c.Email()
 			if email == "" {
 				// Empty-email clients are always kept (malformed/edge-case).
 				static = append(static, c)
+				continue
+			}
+			if blacklist[email] {
 				continue
 			}
 			if _, isDB := dbEmails[email]; !isDB {
@@ -115,7 +126,7 @@ func buildDynamicClients(ib RawInbound, dbUsers []domain.VPNUserConfig) ([]RawCl
 
 // RegenerateConfig reads the template, merges DB users, and writes the result
 // to configPath atomically. This is the single entry point for config generation.
-func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserConfig, realityRotation bool, realityKeysPath string) error {
+func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserConfig, realityRotation bool, realityKeysPath string, blacklistedAdmins []string) error {
 	template, err := Read(templatePath)
 	if err != nil {
 		return fmt.Errorf("regenerate: read template %q: %w", templatePath, err)
@@ -142,7 +153,7 @@ func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserC
 		}
 	}
 
-	merged, err := MergeUsers(template, dbUsers)
+	merged, err := MergeUsers(template, dbUsers, blacklistedAdmins)
 	if err != nil {
 		return fmt.Errorf("regenerate: merge users: %w", err)
 	}

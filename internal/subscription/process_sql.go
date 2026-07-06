@@ -15,6 +15,7 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
+	"xraytool/internal/vpn"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -77,6 +78,8 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		// Fallback: Check if user exists in xray_config.json directly (e.g. admin)
 		var foundEmail string
 		var foundUUID string
+		var isBlacklistedAdmin bool
+
 		inbounds, err := xrayCfg.GetInbounds()
 		if err == nil {
 			for _, ib := range inbounds {
@@ -96,14 +99,41 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 			}
 		}
 
+		// If not found in active config, check template config to see if they are a blacklisted admin
+		if foundEmail == "" && cm.cfg.Paths.XrayTemplate != "" {
+			if tmplCfg, err := vpn.Read(cm.cfg.Paths.XrayTemplate); err == nil {
+				if tmplInbounds, err := tmplCfg.GetInbounds(); err == nil {
+					for _, ib := range tmplInbounds {
+						if ib.HasClientList() {
+							clients, _ := ib.GetClients()
+							for _, c := range clients {
+								if c.GetString("id") == clientId || c.GetString("password") == clientId || c.GetString("subfile") == clientId || c.GetString("subfile") == clientId+".txt" {
+									foundEmail = c.Email()
+									foundUUID = c.GetString("id")
+									isBlacklistedAdmin = true
+									break
+								}
+							}
+						}
+						if foundEmail != "" {
+							break
+						}
+					}
+				}
+			}
+		}
+
 		if foundEmail != "" {
-			// User exists only in config! Mock the sub and user objects
+			// User exists only in config/template! Mock the sub and user objects
 			sub = domain.Subscription{
 				ID:         clientId,
 				XrayUUID:   foundUUID,
 				Email:      foundEmail,
 				Status:     "active",
 				MaxDevices: 999, // admins have no device limit usually
+			}
+			if isBlacklistedAdmin {
+				sub.Status = "expired" // Forces dummy warning config output
 			}
 			// Skip device accounting and limits for admin fallback
 			skipChecksAgent = "admin-fallback"

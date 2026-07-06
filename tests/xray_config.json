@@ -365,47 +365,47 @@
           {
             "email": "bot_client_123456789",
             "flow": "xtls-rprx-vision",
-            "id": "a1e98ae5-9168-4ac4-bf2a-cc01ac29ec65",
+            "id": "88a84dc4-30cb-471d-b17b-0ac5ce8e1b80",
             "limit": 3
           },
           {
             "email": "bot_client_10003",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "5977fa22-f7ac-4678-afb4-61c114231f60",
+            "id": "e415c924-ff38-453f-b14a-76b82444e7d5",
             "limit": 3
           },
           {
             "email": "bot_client_10004",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "c967ed3f-01a9-4d2b-aa50-c3a62c3f3ed2",
+            "id": "23883eba-ce35-46d7-b3d3-c8a755c1f010",
             "limit": 3
           },
           {
             "email": "bot_client_10006",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "af14c716-6888-4d65-b525-02c01dcaf3e7",
+            "id": "9fb82577-aa53-45b4-aa55-d73e130d0d35",
             "limit": 3
           },
           {
             "email": "bot_client_20002",
             "flow": "xtls-rprx-vision",
-            "id": "be225529-e085-436a-9a5d-dc89fe4fff79",
+            "id": "95d7076c-acf8-474c-bc78-ba546f0d55c2",
             "limit": 3
           },
           {
             "email": "bot_client_50003",
             "flow": "xtls-rprx-vision",
-            "id": "439d2169-a291-499e-9aeb-42e942caf467",
+            "id": "41a64876-fa9b-4bef-89a7-1e2da95d8f52",
             "limit": 3
           },
           {
             "email": "bot_client_50004",
             "expire": "03.07.2026",
             "flow": "xtls-rprx-vision",
-            "id": "43774945-efad-408c-96ec-9bbc80906e00",
+            "id": "3d8a78ba-6fb4-4e46-91a2-4ed8c34c072d",
             "limit": 3
           }
         ],

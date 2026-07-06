@@ -35,6 +35,7 @@ type Config struct {
 	AntiFraud     AntiFraudConf          `yaml:"anti_fraud"`
 	Mailer        MailerConf             `yaml:"mailer"`
 	Reality       RealityConf            `yaml:"reality"`
+	BlacklistedAdmins []string           `yaml:"blacklisted_admins"`
 }
 
 // EngineConf selects the VPN proxy engine implementation.
@@ -339,6 +340,11 @@ reality:
   rotation_enabled: false
   # Path to store the generated JSON keys file.
   keys_filepath: "/etc/xraytool/configs/reality.keys"
+
+# Hardcoded admins from template to exclude/disable from being sync'd/added to config.json
+blacklisted_admins:
+  # - "bazhon"
+  # - "admin2"
 
 server:
   # Public IP of this server (informational, used in some outputs)
