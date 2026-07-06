@@ -72,6 +72,7 @@ func (d Device) ToDomain() domain.Device {
 		DeviceModel:    d.DeviceModel,
 		DeviceOS:       d.DeviceOS,
 		UserAgent:      d.UserAgent,
+		LastSeen:       d.LastSeen,
 	}
 }
 
@@ -83,6 +84,7 @@ func FromDomainDevice(d domain.Device) Device {
 		DeviceModel:    d.DeviceModel,
 		DeviceOS:       d.DeviceOS,
 		UserAgent:      d.UserAgent,
+		LastSeen:       d.LastSeen,
 	}
 }
 

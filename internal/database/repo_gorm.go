@@ -943,6 +943,7 @@ func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, de
 				DeviceModel:    deviceModel,
 				DeviceOS:       deviceOs,
 				UserAgent:      userAgent,
+				LastSeen:       time.Now(),
 			}
 			return tx.Create(&newDevice).Error
 		} else {
@@ -950,6 +951,7 @@ func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, de
 				"device_model": deviceModel,
 				"device_os":    deviceOs,
 				"user_agent":   userAgent,
+				"last_seen":    time.Now(),
 			}).Error
 		}
 	})
