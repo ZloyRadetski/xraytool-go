@@ -237,6 +237,19 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 						syncWkr := worker.NewSyncStatesWorker(syncSvc, syncInterval, slog.Default())
 						go syncWkr.Run(context.Background())
 						logger.Infof("[WORKER] Background SyncStates Worker started with interval %s", syncInterval)
+
+						if adapter, ok := vpnEngine.(*vpn.Adapter); ok {
+							adapter.OnConfigModified = func() {
+								logger.Infof("[ENGINE] Config modified on master, triggering immediate slave synchronization...")
+								go func() {
+									if _, err := syncSvc.SyncAllSlaves(context.Background(), false); err != nil {
+										logger.Errorf("[ENGINE] Triggered synchronization failed: %v", err)
+									} else {
+										logger.Infof("[ENGINE] Triggered synchronization completed successfully")
+									}
+								}()
+							}
+						}
 					}
 
 					// Start the Data Scrubber for Privacy

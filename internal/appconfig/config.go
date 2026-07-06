@@ -321,6 +321,11 @@ const defaultConfigYAML = `# ===================================================
 # Mode: "master" (manages slaves) or "slave" (executes commands from master)
 mode: master
 
+# VPN proxy engine configuration
+engine:
+  # VPN proxy engine type: "xray" (default)
+  type: "xray"
+
 # Secret used to verify Platega webhooks and API calls between backend and bot
 platega_secret: "your_secret_here"
 
@@ -471,6 +476,8 @@ worker:
   enabled: true
   # How often the worker checks the database for expired users and warnings
   expiry_interval: "5m"
+  # How often the master synchronizes states to all slaves
+  sync_states_interval: "3m"
   # Thresholds for expiration warnings sent to the client app
   expiration_warnings:
     - "72h"
@@ -493,9 +500,13 @@ anti_fraud:
   ban_duration: "10m"
   # Max size of the log file before it is automatically rotated (in MB)
   log_rotation_size_mb: 20
+  # Max age of log file before it is automatically rotated (e.g. "5m")
+  log_rotation_max_age: "5m"
   # (slave only) If true, forward observed IP events to master every 5s for global fraud detection.
   # Master must have anti_fraud.enabled: true.
   report_to_master: false
+  # Salt secret used to hash IPs before reporting to master (ensures privacy)
+  salt_secret: "some_shared_salt_here"
 
 mailer:
   # Enable transactional email delivery (OTP codes via Resend.com).

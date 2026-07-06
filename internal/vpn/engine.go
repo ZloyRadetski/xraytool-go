@@ -28,13 +28,14 @@ import (
 // It is safe for concurrent use: the underlying Modify already
 // holds an exclusive process-level mutex + advisory flock on writes.
 type Adapter struct {
-	grpc            *GRPCClient
-	configPath      string
-	templatePath    string
-	realityRotation bool
-	realityKeysPath string
-	log             *slog.Logger
-	rebuildMu       sync.Mutex // Serializes dynamic inbound rebuild operations
+	grpc             *GRPCClient
+	configPath       string
+	templatePath     string
+	realityRotation  bool
+	realityKeysPath  string
+	log              *slog.Logger
+	rebuildMu        sync.Mutex // Serializes dynamic inbound rebuild operations
+	OnConfigModified func()
 }
 
 // compile-time interface check — the compiler will error here if Adapter ever
@@ -55,6 +56,12 @@ func NewAdapter(grpcAddr, configPath, templatePath string, realityRotation bool,
 		realityRotation: realityRotation,
 		realityKeysPath: realityKeysPath,
 		log:             log.With("component", "xray-adapter"),
+	}
+}
+
+func (a *Adapter) notifyConfigModified() {
+	if a.OnConfigModified != nil {
+		a.OnConfigModified()
 	}
 }
 
@@ -135,6 +142,7 @@ func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error 
 	a.rebuildHysteriaInbounds(ctx)
 
 	a.log.Info("xray adapter: user added", "email", user.Email)
+	a.notifyConfigModified()
 	return nil
 }
 
@@ -200,6 +208,7 @@ func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig
 	a.rebuildHysteriaInbounds(ctx)
 
 	a.log.Info("xray adapter: bulk user add completed", "requested", len(users), "hot_added", len(allPayloads))
+	a.notifyConfigModified()
 	return nil
 }
 
@@ -256,6 +265,7 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 	a.rebuildHysteriaInbounds(ctx)
 
 	a.log.Info("xray adapter: user removed", "email", email)
+	a.notifyConfigModified()
 	return nil
 }
 
@@ -333,6 +343,7 @@ func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
 	a.rebuildHysteriaInbounds(ctx)
 
 	a.log.Info("xray adapter: bulk user remove completed", "count", len(tagsByEmail))
+	a.notifyConfigModified()
 	return nil
 }
 
@@ -439,6 +450,7 @@ func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
 		return fmt.Errorf("xray adapter SetExpire: user %q not found in config", email)
 	}
 	a.log.Info("xray adapter: expire updated", "email", email, "expire", expire)
+	a.notifyConfigModified()
 	return nil
 }
 
@@ -459,6 +471,7 @@ func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) err
 		return fmt.Errorf("xray adapter SetLimit: user %q not found in config", email)
 	}
 	a.log.Info("xray adapter: limit updated", "email", email, "limit", limit)
+	a.notifyConfigModified()
 	return nil
 }
 
@@ -618,6 +631,7 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		"added", result.Added,
 		"removed", result.Removed,
 	)
+	a.notifyConfigModified()
 	return result, nil
 }
 
