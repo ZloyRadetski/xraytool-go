@@ -78,7 +78,7 @@ func BuildMasterSnapshot(ctx context.Context, reg domain.Registry, engine domain
 
 			expireVal := getMetadataString(sub.Metadata, "expire")
 			if expireVal == "" && sub.EndsAt != nil {
-				expireVal = sub.EndsAt.Format("02-01-2006")
+				expireVal = sub.EndsAt.Format("02.01.2006")
 			}
 
 			limitF := float64(sub.MaxDevices)
