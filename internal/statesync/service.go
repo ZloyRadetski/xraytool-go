@@ -3,14 +3,16 @@ package statesync
 import (
 	"context"
 	"fmt"
+	"sync"
 
-		"xraytool/internal/domain"
-	)
+	"xraytool/internal/domain"
+)
 
 type Service struct {
 	registry      domain.Registry
 	engine        domain.Engine
 	slaveProvider domain.StateSyncSlaveProvider
+	syncMu        sync.Mutex
 }
 
 func NewService(registry domain.Registry, engine domain.Engine, slaveProvider domain.StateSyncSlaveProvider) *Service {
@@ -21,6 +23,11 @@ func (s *Service) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.Sync
 	if s.slaveProvider == nil {
 		return nil, fmt.Errorf("syncstates can only run on master node")
 	}
+	if !s.syncMu.TryLock() {
+		return nil, nil // Skip if another synchronization is already in progress
+	}
+	defer s.syncMu.Unlock()
+
 	return s.slaveProvider.SyncAllSlaves(ctx, dryRun)
 }
 

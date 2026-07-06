@@ -60,6 +60,10 @@ func (w *SyncStatesWorker) sync(ctx context.Context) {
 		w.log.Error("Failed to sync states to slaves", "err", err)
 		return
 	}
+	if results == nil {
+		w.log.Info("Periodic state sync skipped: another sync is already running")
+		return
+	}
 
 	for _, res := range results {
 		if res.Success {

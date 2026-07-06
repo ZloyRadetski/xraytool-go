@@ -96,6 +96,7 @@ func wrapError(err error) error {
 //   - User already in config → noop (idempotent).
 //   - Xray not running during hot-add → warn + return nil.
 func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error {
+	ctx = context.WithoutCancel(ctx)
 	if user.Email == "" {
 		return fmt.Errorf("xray adapter AddUser: email must not be empty")
 	}
@@ -160,6 +161,7 @@ func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error 
 //   - Empty slice → returns nil immediately (no-op).
 //   - All users already in config → no disk I/O, no gRPC call.
 func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig) error {
+	ctx = context.WithoutCancel(ctx)
 	if len(users) == 0 {
 		return nil
 	}
@@ -229,6 +231,7 @@ func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig
 //   - Xray not running → gRPC warns, method still returns nil.
 //   - Empty email → early error.
 func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
+	ctx = context.WithoutCancel(ctx)
 	if email == "" {
 		return fmt.Errorf("xray adapter RemoveUser: email must not be empty")
 	}
@@ -282,6 +285,7 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 //   - Empty slice → returns nil immediately (no-op).
 //   - Mix of present and absent users → only present ones are removed.
 func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
+	ctx = context.WithoutCancel(ctx)
 	if len(emails) == 0 {
 		return nil
 	}
@@ -434,6 +438,7 @@ func (a *Adapter) ListUsers(_ context.Context) ([]domain.VPNUserConfig, error) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
+	ctx = context.WithoutCancel(ctx)
 	var found bool
 	err := Modify(a.configPath, func(cfg RawConfig) error {
 		exists, _ := UserExists(cfg, email)
@@ -455,6 +460,7 @@ func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
 }
 
 func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) error {
+	ctx = context.WithoutCancel(ctx)
 	var found bool
 	err := Modify(a.configPath, func(cfg RawConfig) error {
 		exists, _ := UserExists(cfg, email)
@@ -482,6 +488,7 @@ func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) err
 // BanUser performs a soft ban by hot-removing the user from Xray's memory
 // without touching the config file.
 func (a *Adapter) BanUser(ctx context.Context, email string) error {
+	ctx = context.WithoutCancel(ctx)
 	cfg, err := Read(a.configPath)
 	if err != nil {
 		return fmt.Errorf("xray adapter BanUser: %w", err)
@@ -503,6 +510,7 @@ func (a *Adapter) BanUser(ctx context.Context, email string) error {
 // UnbanUser lifts a soft ban by hot-adding the user back into Xray's memory
 // from the config file.
 func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
+	ctx = context.WithoutCancel(ctx)
 	cfg, err := Read(a.configPath)
 	if err != nil {
 		return fmt.Errorf("xray adapter UnbanUser: %w", err)
@@ -558,6 +566,7 @@ func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
 //     extra users in xray are never removed.
 //   - removeOrphans=true cleans up users from xray that are not in dbUsers.
 func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+	ctx = context.WithoutCancel(ctx)
 	result := &domain.EngineSyncResult{}
 
 	// 1. Regenerate config.json from template + DB users.
@@ -644,6 +653,7 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 // and calls the gRPC client to remove then re-add it.
 // Best-effort: failures are logged but not fatal — the config on disk is correct.
 func (a *Adapter) RebuildInbound(ctx context.Context, tag string) error {
+	ctx = context.WithoutCancel(ctx)
 	a.rebuildMu.Lock()
 	defer a.rebuildMu.Unlock()
 
