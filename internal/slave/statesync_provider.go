@@ -99,7 +99,7 @@ func (p *stateSyncProvider) syncSlave(ctx context.Context, reg *Registry, srvNam
 		su, existsActive := slaveActive[mu.Email]
 		if !existsActive {
 			batch.Add = append(batch.Add, mu)
-		} else if su.UUID != mu.UUID {
+		} else if su.UUID != mu.UUID || su.Auth != mu.Auth || su.Expire != mu.Expire || su.Subfile != mu.Subfile || !compareLimits(su.Limit, mu.Limit) {
 			batch.Add = append(batch.Add, mu)
 		}
 	}
@@ -130,4 +130,14 @@ func (p *stateSyncProvider) syncSlave(ctx context.Context, reg *Registry, srvNam
 		return fmt.Errorf("failed to apply batch: %w", err)
 	}
 	return nil
+}
+
+func compareLimits(a, b *float64) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a != nil && *a != *b {
+		return false
+	}
+	return true
 }
