@@ -85,6 +85,18 @@ func TestExtractHy2Pass(t *testing.T) {
 	}
 }
 
+func TestIsUUID(t *testing.T) {
+	if !isUUID("12345678-1234-1234-1234-1234567890ab") {
+		t.Errorf("Expected true for valid UUID")
+	}
+	if isUUID("not-a-uuid") {
+		t.Errorf("Expected false for invalid UUID")
+	}
+	if isUUID("123") {
+		t.Errorf("Expected false for invalid UUID")
+	}
+}
+
 func TestBuildDeterministicHy2Pass(t *testing.T) {
 	pass1 := buildDeterministicHy2Pass("1234-5678", "user@test.com")
 	if len(pass1) != 64 {

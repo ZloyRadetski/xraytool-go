@@ -273,7 +273,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	}
 
 	hy2Pass := extractHy2Pass(rawHy2Auth)
-	if hy2Pass == "" {
+	if hy2Pass == "" || isUUID(hy2Pass) {
 		hy2Pass = buildDeterministicHy2Pass(uuid, email)
 	}
 	hy2Auth := hy2Pass

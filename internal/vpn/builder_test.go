@@ -56,6 +56,14 @@ func TestBuildClient(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name:      "hysteria2 legacy uuid auth replacement",
+			protocol:  "hysteria2",
+			streamSec: "",
+			params:    ClientParams{Email: "test@test", UUID: "123", Auth: "12345678-1234-1234-1234-1234567890ab"},
+			want:      map[string]string{"email": "test@test", "auth": "aecfb6182c8734da6f1218ca7ff28607d2f721be2340ba120133a109a88b871f"}, // should be replaced with SHA256 of 123
+			wantErr:   false,
+		},
+		{
 			name:      "unsupported protocol",
 			protocol:  "wireguard",
 			streamSec: "",

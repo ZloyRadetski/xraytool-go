@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // ClientParams holds the values to fill into a client object.
@@ -98,7 +100,7 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 
 	case "hysteria", "hysteria2", "hy2":
 		auth := params.Auth
-		if auth == "" {
+		if auth == "" || isUUID(auth) {
 			auth = buildDeterministicHy2Pass(params.UUID, params.Email)
 		}
 		// Based on the old templates, hysteria2 usually uses "auth" or "password".
@@ -163,4 +165,9 @@ func buildDeterministicHy2Pass(uuid, email string) string {
 	h := sha256.New()
 	h.Write([]byte(uuid + ":" + email + ":hy2"))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func isUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
 }

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"xraytool/internal/vpn"
 )
 
@@ -516,6 +517,11 @@ func extractHy2Pass(rawAuth string) string {
 		return ""
 	}
 	return rawAuth
+}
+
+func isUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
 }
 
 func buildDeterministicHy2Pass(uuidHint, email string) string {

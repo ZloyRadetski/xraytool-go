@@ -52,9 +52,12 @@ func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, statu
 		mappedStatus = "completed"
 	}
 
+	var dispatchCompleted bool
+	var paymentToSend *domain.Payment
+
 	// Use WithTx to get a transactional registry; the payment lookup + update
 	// happen atomically inside the same transaction to avoid TOCTOU.
-	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
+	err := s.registry.WithTx(ctx, func(tx domain.Registry) error {
 		payment, err := tx.Payments().FindByExternalID(ctx, extID)
 		if err != nil {
 			return err // not found or error
@@ -76,21 +79,30 @@ func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, statu
 		s.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
 
 		if mappedStatus == "completed" {
-			s.extendSubscriptionForPayment(ctx, payment)
-			if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
+			s.extendSubscriptionForPayment(ctx, tx, payment)
+			if err := s.applyReferralRewardForPayment(ctx, tx, payment); err != nil {
 				s.log.Error("failed to apply referral reward on platega callback", "err", err)
 			}
-
-			s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
-				"payment_id":   payment.ID,
-				"amount":       payment.Amount,
-				"payment_type": payment.PaymentType,
-				"method":       payment.Method,
-				"user_id":      payment.UserID,
-			}, nil)
+			dispatchCompleted = true
+			paymentToSend = payment
 		}
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	if dispatchCompleted && paymentToSend != nil {
+		s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
+			"payment_id":   paymentToSend.ID,
+			"amount":       paymentToSend.Amount,
+			"payment_type": paymentToSend.PaymentType,
+			"method":       paymentToSend.Method,
+			"user_id":      paymentToSend.UserID,
+		}, nil)
+	}
+	return nil
 }
 
 func (s *Service) FindAll(ctx context.Context) ([]domain.Payment, error) {
@@ -295,7 +307,34 @@ func (s *Service) FindPaymentByExternalID(ctx context.Context, extID string) (*d
 
 // UpdatePaymentStatus updates the status of a payment.
 func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, status string, expectedStatuses []string) (bool, error) {
-	updated, err := s.registry.Payments().UpdateStatus(ctx, paymentID, status, expectedStatuses)
+	var updated bool
+	var dispatchCompleted bool
+	var paymentToSend *domain.Payment
+
+	err := s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		var err error
+		updated, err = tx.Payments().UpdateStatus(ctx, paymentID, status, expectedStatuses)
+		if err != nil {
+			return err
+		}
+		if !updated {
+			return nil
+		}
+
+		if status == "completed" {
+			payment, err := tx.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
+			if err == nil {
+				s.extendSubscriptionForPayment(ctx, tx, payment)
+				if err := s.applyReferralRewardForPayment(ctx, tx, payment); err != nil {
+					s.log.Error("failed to apply referral reward", "err", err)
+				}
+				dispatchCompleted = true
+				paymentToSend = payment
+			}
+		}
+		return nil
+	})
+
 	if err != nil {
 		return false, err
 	}
@@ -303,42 +342,35 @@ func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, stat
 		return false, nil
 	}
 
-	if status == "completed" {
-		payment, err := s.registry.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
-		if err == nil {
-			s.extendSubscriptionForPayment(ctx, payment)
-			if err := s.applyReferralRewardForPayment(ctx, payment); err != nil {
-				s.log.Error("failed to apply referral reward", "err", err)
-			}
-			s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
-				"payment_id":   payment.ID,
-				"amount":       payment.Amount,
-				"payment_type": payment.PaymentType,
-				"method":       payment.Method,
-				"user_id":      payment.UserID,
-			}, nil)
-		}
+	if dispatchCompleted && paymentToSend != nil {
+		s.dispatcher.Dispatch("payment.completed", map[string]interface{}{
+			"payment_id":   paymentToSend.ID,
+			"amount":       paymentToSend.Amount,
+			"payment_type": paymentToSend.PaymentType,
+			"method":       paymentToSend.Method,
+			"user_id":      paymentToSend.UserID,
+		}, nil)
 	}
 	return true, nil
 }
 
-func (s *Service) extendSubscriptionForPayment(ctx context.Context, payment *domain.Payment) {
+func (s *Service) extendSubscriptionForPayment(ctx context.Context, registry domain.Registry, payment *domain.Payment) {
 	if payment.PlanID == nil {
 		return
 	}
 	maxDevices := 3
-	if currentSub, subErr := s.registry.Subscriptions().FindLatestByUserID(ctx, payment.UserID); subErr == nil && currentSub != nil {
+	if currentSub, subErr := registry.Subscriptions().FindLatestByUserID(ctx, payment.UserID); subErr == nil && currentSub != nil {
 		maxDevices = currentSub.MaxDevices
 	}
-	if err := s.registry.Subscriptions().AutoRenewSubscription(ctx, payment.UserID, payment.PlanID, 0, nil, maxDevices); err != nil {
+	if err := registry.Subscriptions().AutoRenewSubscription(ctx, payment.UserID, payment.PlanID, 0, nil, maxDevices); err != nil {
 		s.log.Error("failed to extend subscription after payment completed", "payment_id", payment.ID, "err", err)
 	}
 }
 
 // applyReferralRewardForPayment credits the referrer of the payer with 25% of
 // the payment amount, and records a ReferralReward row. Returns nil if successful or no-op.
-func (s *Service) applyReferralRewardForPayment(ctx context.Context, payment *domain.Payment) error {
-	user, err := s.registry.Users().FindByID(ctx, payment.UserID)
+func (s *Service) applyReferralRewardForPayment(ctx context.Context, registry domain.Registry, payment *domain.Payment) error {
+	user, err := registry.Users().FindByID(ctx, payment.UserID)
 	if err != nil {
 		return nil // No user found, nothing to do
 	}
@@ -354,14 +386,14 @@ func (s *Service) applyReferralRewardForPayment(ctx context.Context, payment *do
 
 	referrerID := *user.ReferredBy
 
-	txErr := s.registry.Users().AddReferralReward(ctx, referrerID, user.ID, payment.ID, reward)
+	txErr := registry.Users().AddReferralReward(ctx, referrerID, user.ID, payment.ID, reward)
 
 	if txErr != nil {
 		s.log.Error("referral reward transaction failed", "err", txErr)
 		return txErr
 	}
 
-	referrer, err := s.registry.Users().FindByID(ctx, referrerID)
+	referrer, err := registry.Users().FindByID(ctx, referrerID)
 	if err == nil {
 		if tgIDRaw, ok := referrer.Metadata["telegram_id"]; ok {
 			s.dispatcher.Dispatch("referral.reward", map[string]interface{}{
