@@ -82,7 +82,12 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 
 	case "usersnapshot":
-		snapshotData := r.userSvc.BuildMasterSnapshot(context.Background())
+		snapshotData, err := r.userSvc.BuildMasterSnapshot(context.Background())
+		if err != nil {
+			r.log.Error("internal sync: failed to build snapshot", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to build snapshot")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(snapshotData)
 		return

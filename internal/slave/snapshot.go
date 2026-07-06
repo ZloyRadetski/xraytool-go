@@ -3,9 +3,9 @@ package slave
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"xraytool/internal/domain"
+	"xraytool/internal/vpn"
 )
 
 type Snapshot struct {
@@ -21,38 +21,105 @@ type SnapshotUser struct {
 	Limit   *float64 `json:"limit,omitempty"`
 }
 
+// getMetadataString safely extracts a string field from domain.Metadata.
+func getMetadataString(m domain.Metadata, key string) string {
+	if m == nil {
+		return ""
+	}
+	val, ok := m[key]
+	if !ok || val == nil {
+		return ""
+	}
+	str, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return str
+}
 
-// BuildMasterSnapshot builds a Snapshot by querying blocked/banned emails from the
-// registry (driven port) and listing active users from the engine. No direct DB
-// calls — all storage access goes through domain interfaces.
-func BuildMasterSnapshot(ctx context.Context, reg domain.Registry, engine domain.StateSyncer) Snapshot {
+// BuildMasterSnapshot builds a Snapshot by querying active subscriptions from the DB
+// and merging static template users. Returns an error if querying fails, preventing
+// destructive empty snapshot syncs.
+func BuildMasterSnapshot(ctx context.Context, reg domain.Registry, engine domain.StateSyncer) (Snapshot, error) {
 	blockedMap := getBlockedEmailsFromRegistry(ctx, reg)
 
-	users, err := engine.ListUsers(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[WARN] slave: cannot list users from engine for snapshot: %v\n", err)
-		return Snapshot{}
+	var active []SnapshotUser
+	dbAllEmails := make(map[string]bool)
+
+	// 1. Load active subscriptions directly from GORM DB
+	if reg != nil {
+		subs, err := reg.Subscriptions().FindAll(ctx)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("snapshot: load subscriptions from DB failed: %w", err)
+		}
+
+		for _, sub := range subs {
+			if sub.Email == "" {
+				continue
+			}
+			dbAllEmails[sub.Email] = true
+
+			if sub.Status != "active" || blockedMap[sub.Email] {
+				continue
+			}
+
+			authVal := getMetadataString(sub.Metadata, "auth")
+			if authVal == "" {
+				authVal = getMetadataString(sub.Metadata, "password")
+			}
+			if authVal == "" || vpn.IsUUID(authVal) {
+				authVal = vpn.BuildDeterministicHy2Pass(sub.XrayUUID, sub.Email)
+			}
+
+			subfile := getMetadataString(sub.Metadata, "subfile")
+			if subfile == "" {
+				subfile = sub.ID
+			}
+
+			expireVal := getMetadataString(sub.Metadata, "expire")
+			if expireVal == "" && sub.EndsAt != nil {
+				expireVal = sub.EndsAt.Format("02-01-2006")
+			}
+
+			limitF := float64(sub.MaxDevices)
+			active = append(active, SnapshotUser{
+				Email:   sub.Email,
+				UUID:    sub.XrayUUID,
+				Auth:    authVal,
+				Subfile: subfile,
+				Expire:  expireVal,
+				Limit:   &limitF,
+			})
+		}
 	}
 
-	var active []SnapshotUser
-	for _, u := range users {
-		if blockedMap[u.Email] {
+	// 2. Load static template users from the master's config
+	engineUsers, err := engine.ListUsers(ctx)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("snapshot: list engine users failed: %w", err)
+	}
+
+	for _, u := range engineUsers {
+		if u.Email == "" || blockedMap[u.Email] {
+			continue
+		}
+		// If they exist in DB (even if inactive/expired), they are governed by GORM, not static template.
+		if dbAllEmails[u.Email] {
 			continue
 		}
 
 		limitF := float64(u.MaxDevices)
-		su := SnapshotUser{
+		active = append(active, SnapshotUser{
 			Email:   u.Email,
 			UUID:    u.UUID,
 			Auth:    u.Auth,
 			Subfile: u.Subfile,
 			Expire:  u.Expire,
 			Limit:   &limitF,
-		}
-		active = append(active, su)
+		})
 	}
 
-	return Snapshot{Active: active}
+	return Snapshot{Active: active}, nil
 }
 
 // getBlockedEmailsFromRegistry queries the registry for globally-blocked users

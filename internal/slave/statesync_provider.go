@@ -38,7 +38,10 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 		}
 	}
 
-	masterSnap := BuildMasterSnapshot(ctx, p.domainReg, p.engine)
+	masterSnap, err := BuildMasterSnapshot(ctx, p.domainReg, p.engine)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build master snapshot: %w", err)
+	}
 
 	servers, err := p.registry.Servers()
 	if err != nil || len(servers) == 0 {

@@ -100,8 +100,8 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 
 	case "hysteria", "hysteria2", "hy2":
 		auth := params.Auth
-		if auth == "" || isUUID(auth) {
-			auth = buildDeterministicHy2Pass(params.UUID, params.Email)
+		if auth == "" || IsUUID(auth) {
+			auth = BuildDeterministicHy2Pass(params.UUID, params.Email)
 		}
 		// Based on the old templates, hysteria2 usually uses "auth" or "password".
 		// We'll set "auth" and "password" to be safe, or just "auth" if that was the old default.
@@ -159,15 +159,15 @@ func hasXTLS(ib RawInbound) bool {
 	return sec == "reality" || sec == "tls"
 }
 
-func buildDeterministicHy2Pass(uuid, email string) string {
+func BuildDeterministicHy2Pass(uuidVal, email string) string {
 	// Revert to a deterministic derivation using HKDF or HMAC
 	// We'll use SHA256 over UUID + email for stable stateless passwords
 	h := sha256.New()
-	h.Write([]byte(uuid + ":" + email + ":hy2"))
+	h.Write([]byte(uuidVal + ":" + email + ":hy2"))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func isUUID(s string) bool {
+func IsUUID(s string) bool {
 	_, err := uuid.Parse(s)
 	return err == nil
 }
