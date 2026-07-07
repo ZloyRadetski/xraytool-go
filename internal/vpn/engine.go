@@ -632,7 +632,9 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 			u1.Auth == u2.Auth &&
 			u1.Expire == u2.Expire &&
 			u1.Subfile == u2.Subfile &&
-			u1.MaxDevices == u2.MaxDevices
+			u1.MaxDevices == u2.MaxDevices &&
+			u1.Flow == u2.Flow &&
+			u1.Cipher == u2.Cipher
 	}
 
 	for email, dbUser := range dbSet {
