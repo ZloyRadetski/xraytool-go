@@ -238,8 +238,8 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 		return fmt.Errorf("xray adapter RemoveUser: email must not be empty")
 	}
 
-	protected := a.getProtectedTemplateUsers()
-	if protected[email] {
+	protected := a.getProtectedTemplateUsers(nil)
+	if !shouldBypassProtection(ctx) && protected[email] {
 		a.log.Info("xray adapter: skipping RemoveUser for protected template user", "email", email)
 		return nil
 	}
@@ -298,10 +298,10 @@ func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
 		return nil
 	}
 
-	protected := a.getProtectedTemplateUsers()
+	protected := a.getProtectedTemplateUsers(nil)
 	var nonProtected []string
 	for _, e := range emails {
-		if e != "" && !protected[e] {
+		if e != "" && (shouldBypassProtection(ctx) || !protected[e]) {
 			nonProtected = append(nonProtected, e)
 		} else if e != "" {
 			a.log.Info("xray adapter: skipping RemoveUsersBulk for protected template user", "email", e)
@@ -598,8 +598,15 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		liveUsers = nil
 	}
 
+	dbEmails := make(map[string]bool, len(dbUsers))
+	for _, u := range dbUsers {
+		if u.Email != "" {
+			dbEmails[u.Email] = true
+		}
+	}
+
 	// Load static template users to protect them from being marked as orphans
-	templateSet := a.getProtectedTemplateUsers()
+	templateSet := a.getProtectedTemplateUsers(dbEmails)
 
 	// 2. Regenerate config.json from template + DB users.
 	if a.templatePath != "" {
@@ -648,7 +655,7 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 
 	// Hot-remove users we need to update first to avoid duplicates/errors
 	if len(toUpdateRemove) > 0 {
-		if err := a.RemoveUsersBulk(ctx, toUpdateRemove); err != nil {
+		if err := a.RemoveUsersBulk(WithBypassProtection(ctx, true), toUpdateRemove); err != nil {
 			a.log.Warn("xray adapter: SyncUsers: bulk hot-remove for update failed", "count", len(toUpdateRemove), "err", err)
 		}
 	}
@@ -881,7 +888,18 @@ func (a *Adapter) SyncRealityKeys(ctx context.Context, keysBytes []byte) error {
 	return nil
 }
 
-func (a *Adapter) getProtectedTemplateUsers() map[string]bool {
+type bypassKey struct{}
+
+func WithBypassProtection(ctx context.Context, bypass bool) context.Context {
+	return context.WithValue(ctx, bypassKey{}, bypass)
+}
+
+func shouldBypassProtection(ctx context.Context) bool {
+	val, ok := ctx.Value(bypassKey{}).(bool)
+	return ok && val
+}
+
+func (a *Adapter) getProtectedTemplateUsers(dbEmails map[string]bool) map[string]bool {
 	protected := make(map[string]bool)
 	if a.templatePath == "" {
 		return protected
@@ -899,7 +917,9 @@ func (a *Adapter) getProtectedTemplateUsers() map[string]bool {
 			for _, u := range templateUsers {
 				email := u.Email()
 				if email != "" && !blacklist[email] {
-					protected[email] = true
+					if dbEmails == nil || !dbEmails[email] {
+						protected[email] = true
+					}
 				}
 			}
 		}
