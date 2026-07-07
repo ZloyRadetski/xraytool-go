@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"xraytool/internal/domain"
+	"xraytool/internal/vpn"
 )
 
 type stateSyncProvider struct {
@@ -38,14 +39,32 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 		}
 	}
 
-	masterSnap, err := BuildMasterSnapshot(ctx, p.domainReg, p.engine)
+	subs, err := p.domainReg.Subscriptions().FindAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build master snapshot: %w", err)
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	blockedMap := p.getBlockedEmails(ctx)
+
+	dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
+	for _, sub := range subs {
+		if sub.Email == "" || sub.XrayUUID == "" {
+			continue
+		}
+		if sub.Status != "active" || blockedMap[sub.Email] {
+			continue
+		}
+		dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
 	}
 
 	servers, err := p.registry.Servers()
 	if err != nil || len(servers) == 0 {
 		return nil, fmt.Errorf("no slave servers configured")
+	}
+
+	payloadBytes, err := json.Marshal(dbUsers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal users: %w", err)
 	}
 
 	results := make([]domain.SyncResult, len(servers))
@@ -57,12 +76,17 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 		wg.Add(1)
 		go func(name string, index int) {
 			defer wg.Done()
-			err := p.syncSlave(ctx, p.registry, name, masterSnap, dryRun)
+			var syncErr error
+			if !dryRun {
+				_, syncErr = p.registry.CallOne(name, "sync-users", map[string]string{
+					"payload": string(payloadBytes),
+				})
+			}
 			mu.Lock()
 			results[index] = domain.SyncResult{
 				ServerName: name,
-				Success:    err == nil,
-				Error:      err,
+				Success:    syncErr == nil,
+				Error:      syncErr,
 			}
 			mu.Unlock()
 		}(srvName, i)
@@ -73,74 +97,41 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 	return results, nil
 }
 
-func (p *stateSyncProvider) syncSlave(ctx context.Context, reg *Registry, srvName string, master Snapshot, dryRun bool) error {
-	var slaveSnap Snapshot
-
-	err := reg.CallOneDecode(srvName, "usersnapshot", map[string]string{}, &slaveSnap)
-	if err != nil {
-		return fmt.Errorf("could not get snapshot: %w", err)
+func (p *stateSyncProvider) getBlockedEmails(ctx context.Context) map[string]bool {
+	blockedMap := make(map[string]bool)
+	if p.domainReg == nil {
+		return blockedMap
 	}
 
-	masterActive := make(map[string]SnapshotUser, len(master.Active))
-	for _, mu := range master.Active {
-		masterActive[mu.Email] = mu
-	}
-	slaveActive := make(map[string]SnapshotUser, len(slaveSnap.Active))
-	for _, u := range slaveSnap.Active {
-		slaveActive[u.Email] = u
-	}
+	// Blocked users (admin block)
+	users, err := p.domainReg.Users().FindAll(ctx)
+	if err == nil {
+		blockedUserIDs := make(map[string]bool)
+		for _, u := range users {
+			if u.IsBlocked {
+				blockedUserIDs[u.ID] = true
+			}
+		}
 
-		batch := struct {
-		Add    []SnapshotUser `json:"add"`
-		Remove []string       `json:"remove"`
-	}{
-		Add:    []SnapshotUser{},
-		Remove: []string{},
-	}
-
-	for _, mu := range master.Active {
-		su, existsActive := slaveActive[mu.Email]
-		if !existsActive {
-			batch.Add = append(batch.Add, mu)
-		} else if su.UUID != mu.UUID || su.Auth != mu.Auth || su.Expire != mu.Expire || su.Subfile != mu.Subfile || !compareLimits(su.Limit, mu.Limit) {
-			batch.Add = append(batch.Add, mu)
+		if len(blockedUserIDs) > 0 {
+			subs, err := p.domainReg.Subscriptions().FindAll(ctx)
+			if err == nil {
+				for _, sub := range subs {
+					if blockedUserIDs[sub.UserID] && sub.Email != "" {
+						blockedMap[sub.Email] = true
+					}
+				}
+			}
 		}
 	}
 
-	for _, su := range slaveSnap.Active {
-		if _, exists := masterActive[su.Email]; !exists {
-			batch.Remove = append(batch.Remove, su.Email)
+	// Active antifraud bans
+	bans, err := p.domainReg.AntifraudBans().FindActive(ctx)
+	if err == nil {
+		for _, b := range bans {
+			blockedMap[b.Email] = true
 		}
 	}
 
-	if len(batch.Add) == 0 && len(batch.Remove) == 0 {
-		return nil
-	}
-
-	if dryRun {
-		return nil
-	}
-
-	payloadBytes, err := json.Marshal(batch)
-	if err != nil {
-		return fmt.Errorf("failed to marshal batch: %w", err)
-	}
-
-	_, err = reg.CallOne(srvName, "apply-batch", map[string]string{
-		"payload": string(payloadBytes),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to apply batch: %w", err)
-	}
-	return nil
-}
-
-func compareLimits(a, b *float64) bool {
-	if (a == nil) != (b == nil) {
-		return false
-	}
-	if a != nil && *a != *b {
-		return false
-	}
-	return true
+	return blockedMap
 }

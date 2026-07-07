@@ -12,7 +12,6 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/generate"
-	"xraytool/internal/slave"
 	"xraytool/internal/subscription"
 )
 
@@ -64,9 +63,6 @@ func (s *Service) ProcessSQLSubscription(ctx context.Context, cm *subscription.C
 	return subscription.ProcessSQL(ctx, s.registry, cm, dispatcher, subReq, isBanned)
 }
 
-func (s *Service) BuildMasterSnapshot(ctx context.Context) (slave.Snapshot, error) {
-	return slave.BuildMasterSnapshot(ctx, s.registry, s.engine)
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CreateUser

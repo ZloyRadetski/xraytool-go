@@ -9,7 +9,6 @@ import (
 
 	"xraytool/internal/domain"
 	"xraytool/internal/stats"
-	"xraytool/internal/subscription"
 	"xraytool/internal/user"
 )
 
@@ -32,7 +31,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" && body.Action != "usersnapshot" && body.Action != "apply-batch" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" {
+	if body.Email == "" && body.Action != "sync-users" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
@@ -93,52 +92,21 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 		return
 
-	case "usersnapshot":
-		snapshotData, err := r.userSvc.BuildMasterSnapshot(context.Background())
-		if err != nil {
-			r.log.Error("internal sync: failed to build snapshot", "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to build snapshot")
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(snapshotData)
-		return
-
-	case "apply-batch":
-		var payloadDTO struct {
-			Add []struct {
-				Email   string   `json:"email"`
-				UUID    string   `json:"uuid,omitempty"`
-				Auth    string   `json:"auth,omitempty"`
-				Subfile string   `json:"subfile"`
-				Expire  string   `json:"expire"`
-				Limit   *float64 `json:"limit,omitempty"`
-			} `json:"add"`
-			Remove []string `json:"remove"`
-		}
-		if err := json.Unmarshal([]byte(body.Payload), &payloadDTO); err != nil {
-			r.log.Error("internal sync: invalid payload", "err", err)
+	case "sync-users":
+		var users []domain.VPNUserConfig
+		if err := json.Unmarshal([]byte(body.Payload), &users); err != nil {
+			r.log.Error("internal sync: invalid payload for sync-users", "err", err)
 			writeError(w, http.StatusBadRequest, "invalid payload")
 			return
 		}
 
-		var payload domain.BatchPayload
-		payload.Remove = payloadDTO.Remove
-		for _, u := range payloadDTO.Add {
-			cfg := domain.VPNUserConfig{
-				Email:   u.Email,
-				UUID:    u.UUID,
-				Auth:    u.Auth,
-				Subfile: u.Subfile,
-				Expire:  u.Expire,
-			}
-			if u.Limit != nil {
-				cfg.MaxDevices = int(*u.Limit)
-			}
-			payload.Add = append(payload.Add, cfg)
+		result, err := r.engine.SyncUsers(req.Context(), users, true)
+		if err != nil {
+			r.log.Error("internal sync: failed to sync users", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to sync users")
+			return
 		}
 
-		result := subscription.ApplyBatchOperations(r.engine, payload)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 		return
