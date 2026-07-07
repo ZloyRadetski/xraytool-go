@@ -578,6 +578,20 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		liveUsers = nil
 	}
 
+	// Load static template users to protect them from being marked as orphans
+	templateSet := make(map[string]bool)
+	if a.templatePath != "" {
+		if templateCfg, err := Read(a.templatePath); err == nil {
+			if templateUsers, err := ListUsers(templateCfg); err == nil {
+				for _, u := range templateUsers {
+					if u.Email() != "" {
+						templateSet[u.Email()] = true
+					}
+				}
+			}
+		}
+	}
+
 	// 2. Regenerate config.json from template + DB users.
 	if a.templatePath != "" {
 		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers, a.realityRotation, a.realityKeysPath, a.blacklistedAdmins); err != nil {
@@ -643,7 +657,9 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		var toRemove []string
 		for _, u := range liveUsers {
 			if _, ok := dbSet[u.Email]; !ok {
-				toRemove = append(toRemove, u.Email)
+				if !templateSet[u.Email] {
+					toRemove = append(toRemove, u.Email)
+				}
 			}
 		}
 		if len(toRemove) > 0 {
