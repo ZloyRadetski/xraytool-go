@@ -79,7 +79,7 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 		if flow == "" && hasXTLS(ib) {
 			flow = "xtls-rprx-vision"
 		}
-		if flow != "" && hasXTLS(ib) {
+		if flow != "" {
 			result.Set("flow", flow)
 		}
 
@@ -208,9 +208,6 @@ func SubscriptionToVPNUserConfig(sub domain.Subscription) domain.VPNUserConfig {
 		expireVal = sub.EndsAt.Format("02.01.2006")
 	}
 
-	flowVal := GetMetadataString(sub.Metadata, "flow")
-	cipherVal := GetMetadataString(sub.Metadata, "cipher")
-
 	return domain.VPNUserConfig{
 		Email:      sub.Email,
 		UUID:       sub.XrayUUID,
@@ -218,7 +215,5 @@ func SubscriptionToVPNUserConfig(sub domain.Subscription) domain.VPNUserConfig {
 		Subfile:    subfile,
 		Expire:     expireVal,
 		MaxDevices: sub.MaxDevices,
-		Flow:       flowVal,
-		Cipher:     cipherVal,
 	}
 }
