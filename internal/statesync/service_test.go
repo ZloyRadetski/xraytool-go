@@ -8,6 +8,7 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/mocks"
 	"xraytool/internal/statesync"
+	"xraytool/internal/vpn"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -116,7 +117,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return([]domain.Subscription{}, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		engineMock.On("ListUsers", ctx).Return([]domain.VPNUserConfig{}, nil)
+		
+		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 0}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
@@ -144,16 +146,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 			},
 		}
 
-		users := []domain.VPNUserConfig{
-			{
-				Email:      "user1@example.com",
-				UUID:       "uuid1",
-				Auth:       "auth1",
-				Subfile:    "subfile1",
-				Expire:     endsAt.Format("02.01.2006"),
-				MaxDevices: 3,
-			},
-		}
+		expectedUser := vpn.SubscriptionToVPNUserConfig(subs[0])
 
 		regMock.On("Subscriptions").Return(subRepoMock)
 		regMock.On("Users").Return(userRepoMock)
@@ -162,7 +155,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		engineMock.On("ListUsers", ctx).Return(users, nil)
+		
+		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 0}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
@@ -190,16 +184,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 			},
 		}
 
-		users := []domain.VPNUserConfig{
-			{
-				Email:      "user1@example.com",
-				UUID:       "uuid-old",
-				Auth:       "auth-old",
-				Subfile:    "subfile-old",
-				Expire:     "01.01.2000",
-				MaxDevices: 2,
-			},
-		}
+		expectedUser := vpn.SubscriptionToVPNUserConfig(subs[0])
 
 		regMock.On("Subscriptions").Return(subRepoMock)
 		regMock.On("Users").Return(userRepoMock)
@@ -208,19 +193,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		engineMock.On("ListUsers", ctx).Return(users, nil)
-
-		expectedHealedUser := domain.VPNUserConfig{
-			Email:      "user1@example.com",
-			UUID:       "uuid-new",
-			Auth:       "auth-new",
-			Subfile:    "subfile-new",
-			Expire:     endsAt.Format("02.01.2006"),
-			MaxDevices: 5,
-		}
-
-		engineMock.On("RemoveUser", ctx, "user1@example.com").Return(nil)
-		engineMock.On("AddUser", ctx, expectedHealedUser).Return(nil)
+		
+		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 1, Removed: 1}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
@@ -248,6 +222,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 			},
 		}
 
+		expectedUser := vpn.SubscriptionToVPNUserConfig(subs[0])
+
 		regMock.On("Subscriptions").Return(subRepoMock)
 		regMock.On("Users").Return(userRepoMock)
 		regMock.On("AntifraudBans").Return(banRepoMock)
@@ -255,18 +231,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		engineMock.On("ListUsers", ctx).Return([]domain.VPNUserConfig{}, nil)
-
-		expectedNewUser := domain.VPNUserConfig{
-			Email:      "user1@example.com",
-			UUID:       "uuid-new",
-			Auth:       "auth-new",
-			Subfile:    "subfile-new",
-			Expire:     endsAt.Format("02.01.2006"),
-			MaxDevices: 5,
-		}
-
-		engineMock.On("AddUser", ctx, expectedNewUser).Return(nil)
+		
+		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 1, Removed: 0}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
@@ -290,13 +256,6 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 			},
 		}
 
-		users := []domain.VPNUserConfig{
-			{
-				Email: "user1@example.com",
-				UUID:  "uuid1",
-			},
-		}
-
 		regMock.On("Subscriptions").Return(subRepoMock)
 		regMock.On("Users").Return(userRepoMock)
 		regMock.On("AntifraudBans").Return(banRepoMock)
@@ -304,9 +263,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		engineMock.On("ListUsers", ctx).Return(users, nil)
-
-		engineMock.On("RemoveUser", ctx, "user1@example.com").Return(nil)
+		
+		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 1}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
@@ -331,13 +289,6 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 			},
 		}
 
-		users := []domain.VPNUserConfig{
-			{
-				Email: "user1@example.com",
-				UUID:  "uuid1",
-			},
-		}
-
 		dbUsers := []domain.User{
 			{
 				ID:        "user-id-1",
@@ -352,9 +303,8 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return(dbUsers, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		engineMock.On("ListUsers", ctx).Return(users, nil)
-
-		engineMock.On("RemoveUser", ctx, "user1@example.com").Return(nil)
+		
+		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 1}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)

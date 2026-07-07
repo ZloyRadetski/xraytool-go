@@ -33,57 +33,36 @@ func (s *Service) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.Sync
 }
 
 func (s *Service) SelfHealMasterUUIDs(ctx context.Context) (bool, error) {
+	if !s.syncMu.TryLock() {
+		return false, nil // Skip if another synchronization is already in progress
+	}
+	defer s.syncMu.Unlock()
+
 	subs, err := s.registry.Subscriptions().FindAll(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
-	users, err := s.engine.ListUsers(ctx)
-	if err != nil {
-		return false, fmt.Errorf("failed to list users: %w", err)
-	}
-
-	userMap := make(map[string]domain.VPNUserConfig)
-	for _, u := range users {
-		userMap[u.Email] = u
-	}
-
 	blockedMap := s.getBlockedEmails(ctx)
 
-	updatedCount := 0
+	dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
 	for _, sub := range subs {
 		if sub.Email == "" || sub.XrayUUID == "" {
 			continue
 		}
-
-		u, exists := userMap[sub.Email]
-		isActive := sub.Status == "active" && !blockedMap[sub.Email]
-
-		if isActive {
-			expectedUser := vpn.SubscriptionToVPNUserConfig(sub)
-			if !exists {
-				// Add active user missing from Engine
-				if err := s.engine.AddUser(ctx, expectedUser); err == nil {
-					updatedCount++
-				}
-			} else if u.UUID != expectedUser.UUID || u.Auth != expectedUser.Auth || u.Expire != expectedUser.Expire || u.Subfile != expectedUser.Subfile || u.MaxDevices != expectedUser.MaxDevices {
-				// Update mismatched user in Engine
-				s.engine.RemoveUser(ctx, sub.Email)
-				if err := s.engine.AddUser(ctx, expectedUser); err == nil {
-					updatedCount++
-				}
-			}
-		} else {
-			if exists {
-				// Remove inactive/blocked user from Engine
-				if err := s.engine.RemoveUser(ctx, sub.Email); err == nil {
-					updatedCount++
-				}
-			}
+		if sub.Status != "active" || blockedMap[sub.Email] {
+			continue
 		}
+		dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
 	}
 
-	return updatedCount > 0, nil
+	result, err := s.engine.SyncUsers(ctx, dbUsers, true)
+	if err != nil {
+		return false, fmt.Errorf("failed to sync master users: %w", err)
+	}
+
+	changed := (result.Added > 0 || result.Removed > 0)
+	return changed, nil
 }
 
 func (s *Service) getBlockedEmails(ctx context.Context) map[string]bool {
