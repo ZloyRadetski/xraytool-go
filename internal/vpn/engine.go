@@ -238,6 +238,12 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 		return fmt.Errorf("xray adapter RemoveUser: email must not be empty")
 	}
 
+	protected := a.getProtectedTemplateUsers()
+	if protected[email] {
+		a.log.Info("xray adapter: skipping RemoveUser for protected template user", "email", email)
+		return nil
+	}
+
 	var tags []string
 
 	err := Modify(a.configPath, func(cfg RawConfig) error {
@@ -288,6 +294,20 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 //   - Mix of present and absent users → only present ones are removed.
 func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
 	ctx = context.WithoutCancel(ctx)
+	if len(emails) == 0 {
+		return nil
+	}
+
+	protected := a.getProtectedTemplateUsers()
+	var nonProtected []string
+	for _, e := range emails {
+		if e != "" && !protected[e] {
+			nonProtected = append(nonProtected, e)
+		} else if e != "" {
+			a.log.Info("xray adapter: skipping RemoveUsersBulk for protected template user", "email", e)
+		}
+	}
+	emails = nonProtected
 	if len(emails) == 0 {
 		return nil
 	}
@@ -579,26 +599,7 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 	}
 
 	// Load static template users to protect them from being marked as orphans
-	templateSet := make(map[string]bool)
-	if a.templatePath != "" {
-		blacklist := make(map[string]bool)
-		for _, email := range a.blacklistedAdmins {
-			if email != "" {
-				blacklist[email] = true
-			}
-		}
-
-		if templateCfg, err := Read(a.templatePath); err == nil {
-			if templateUsers, err := ListUsers(templateCfg); err == nil {
-				for _, u := range templateUsers {
-					email := u.Email()
-					if email != "" && !blacklist[email] {
-						templateSet[email] = true
-					}
-				}
-			}
-		}
-	}
+	templateSet := a.getProtectedTemplateUsers()
 
 	// 2. Regenerate config.json from template + DB users.
 	if a.templatePath != "" {
@@ -880,4 +881,30 @@ func (a *Adapter) SyncRealityKeys(ctx context.Context, keysBytes []byte) error {
 
 	a.notifyConfigModified()
 	return nil
+}
+
+func (a *Adapter) getProtectedTemplateUsers() map[string]bool {
+	protected := make(map[string]bool)
+	if a.templatePath == "" {
+		return protected
+	}
+
+	blacklist := make(map[string]bool)
+	for _, email := range a.blacklistedAdmins {
+		if email != "" {
+			blacklist[email] = true
+		}
+	}
+
+	if templateCfg, err := Read(a.templatePath); err == nil {
+		if templateUsers, err := ListUsers(templateCfg); err == nil {
+			for _, u := range templateUsers {
+				email := u.Email()
+				if email != "" && !blacklist[email] {
+					protected[email] = true
+				}
+			}
+		}
+	}
+	return protected
 }

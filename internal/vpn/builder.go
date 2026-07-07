@@ -79,7 +79,7 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 		if flow == "" && hasXTLS(ib) {
 			flow = "xtls-rprx-vision"
 		}
-		if flow != "" {
+		if flow != "" && hasXTLS(ib) {
 			result.Set("flow", flow)
 		}
 
