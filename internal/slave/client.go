@@ -149,7 +149,7 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 100<<20))
 	if err != nil {
 		return "", fmt.Errorf("reading response: %w", err)
 	}
@@ -166,53 +166,15 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 }
 
 // CallDecode sends a POST request to <entry endpoint>/<cmd> with params as JSON body.
-// It decodes the JSON response directly into the provided target structure, avoiding loading the entire response into memory.
+// It decodes the JSON response (supporting PHP envelopes) directly into the provided target structure.
 func (c *Client) CallDecode(entry Entry, cmd string, params map[string]string, target interface{}) error {
-	endpoint := entry.Endpoint(c.remotePath)
-	if endpoint == "" {
-		return fmt.Errorf("cannot determine endpoint for slave server")
-	}
-	url := endpoint
-
-	// Copy params to prevent concurrent map mutation when called in parallel goroutines
-	localParams := make(map[string]string, len(params)+1)
-	for k, v := range params {
-		localParams[k] = v
-	}
-	localParams["action"] = cmd
-
-	payload, err := json.Marshal(localParams)
+	out, err := c.Call(entry, cmd, params)
 	if err != nil {
-		return fmt.Errorf("marshaling params: %w", err)
+		return err
 	}
-
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("building request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	applyAuthHeaders(req, entry)
-
-	httpClient := c.http
-	if entry.Insecure || entry.AllowInsecure {
-		httpClient = c.httpInsecure
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request to %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("HTTP %d | %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+	if err := json.Unmarshal([]byte(out), target); err != nil {
 		return fmt.Errorf("decoding response: %w", err)
 	}
-
 	return nil
 }
 

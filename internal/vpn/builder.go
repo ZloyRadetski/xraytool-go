@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"xraytool/internal/domain"
+
 	"github.com/google/uuid"
 )
 
@@ -170,4 +172,48 @@ func BuildDeterministicHy2Pass(uuidVal, email string) string {
 func IsUUID(s string) bool {
 	_, err := uuid.Parse(s)
 	return err == nil
+}
+
+func GetMetadataString(m domain.Metadata, key string) string {
+	if m == nil {
+		return ""
+	}
+	val, ok := m[key]
+	if !ok || val == nil {
+		return ""
+	}
+	str, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return str
+}
+
+func SubscriptionToVPNUserConfig(sub domain.Subscription) domain.VPNUserConfig {
+	authVal := GetMetadataString(sub.Metadata, "auth")
+	if authVal == "" {
+		authVal = GetMetadataString(sub.Metadata, "password")
+	}
+	if authVal == "" || IsUUID(authVal) {
+		authVal = BuildDeterministicHy2Pass(sub.XrayUUID, sub.Email)
+	}
+
+	subfile := GetMetadataString(sub.Metadata, "subfile")
+	if subfile == "" {
+		subfile = sub.ID
+	}
+
+	expireVal := GetMetadataString(sub.Metadata, "expire")
+	if expireVal == "" && sub.EndsAt != nil {
+		expireVal = sub.EndsAt.Format("02.01.2006")
+	}
+
+	return domain.VPNUserConfig{
+		Email:      sub.Email,
+		UUID:       sub.XrayUUID,
+		Auth:       authVal,
+		Subfile:    subfile,
+		Expire:     expireVal,
+		MaxDevices: sub.MaxDevices,
+	}
 }

@@ -77,7 +77,19 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 			writeError(w, http.StatusInternalServerError, "failed to save keys")
 			return
 		}
-		r.log.Info("internal sync: Reality keys successfully synced from master")
+
+		type realityKeySyncer interface {
+			SyncRealityKeys(ctx context.Context, keysBytes []byte) error
+		}
+		if syncer, ok := r.engine.(realityKeySyncer); ok {
+			if err := syncer.SyncRealityKeys(req.Context(), []byte(body.Payload)); err != nil {
+				r.log.Error("internal sync: failed to apply and rebuild reality keys", "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to apply reality keys")
+				return
+			}
+		}
+
+		r.log.Info("internal sync: Reality keys successfully synced from master and rebuilt in running engine")
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 		return
 

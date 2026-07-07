@@ -21,21 +21,7 @@ type SnapshotUser struct {
 	Limit   *float64 `json:"limit,omitempty"`
 }
 
-// getMetadataString safely extracts a string field from domain.Metadata.
-func getMetadataString(m domain.Metadata, key string) string {
-	if m == nil {
-		return ""
-	}
-	val, ok := m[key]
-	if !ok || val == nil {
-		return ""
-	}
-	str, ok := val.(string)
-	if !ok {
-		return ""
-	}
-	return str
-}
+
 
 // BuildMasterSnapshot builds a Snapshot by querying active subscriptions from the DB
 // and merging static template users. Returns an error if querying fails, preventing
@@ -63,31 +49,14 @@ func BuildMasterSnapshot(ctx context.Context, reg domain.Registry, engine domain
 				continue
 			}
 
-			authVal := getMetadataString(sub.Metadata, "auth")
-			if authVal == "" {
-				authVal = getMetadataString(sub.Metadata, "password")
-			}
-			if authVal == "" || vpn.IsUUID(authVal) {
-				authVal = vpn.BuildDeterministicHy2Pass(sub.XrayUUID, sub.Email)
-			}
-
-			subfile := getMetadataString(sub.Metadata, "subfile")
-			if subfile == "" {
-				subfile = sub.ID
-			}
-
-			expireVal := getMetadataString(sub.Metadata, "expire")
-			if expireVal == "" && sub.EndsAt != nil {
-				expireVal = sub.EndsAt.Format("02.01.2006")
-			}
-
-			limitF := float64(sub.MaxDevices)
+			u := vpn.SubscriptionToVPNUserConfig(sub)
+			limitF := float64(u.MaxDevices)
 			active = append(active, SnapshotUser{
-				Email:   sub.Email,
-				UUID:    sub.XrayUUID,
-				Auth:    authVal,
-				Subfile: subfile,
-				Expire:  expireVal,
+				Email:   u.Email,
+				UUID:    u.UUID,
+				Auth:    u.Auth,
+				Subfile: u.Subfile,
+				Expire:  u.Expire,
 				Limit:   &limitF,
 			})
 		}
@@ -131,15 +100,25 @@ func getBlockedEmailsFromRegistry(ctx context.Context, reg domain.Registry) map[
 	}
 
 	// Blocked users (admin block)
-	subs, err := reg.Subscriptions().GetMasterSnapshot(ctx)
+	users, err := reg.Users().FindAll(ctx)
 	if err == nil {
-		// GetMasterSnapshot already filters by active status; additionally check
-		// the user's is_blocked flag by querying all subs and cross-referencing.
-		// For simplicity we exclude subs where the linked user is blocked:
-		// that join is performed inside GetMasterSnapshot (it only returns active,
-		// non-blocked records). Any email not in the result is NOT excluded here
-		// because we want to block only explicitly blocked users.
-		_ = subs // subs returned by GetMasterSnapshot are already filtered
+		blockedUserIDs := make(map[string]bool)
+		for _, u := range users {
+			if u.IsBlocked {
+				blockedUserIDs[u.ID] = true
+			}
+		}
+
+		if len(blockedUserIDs) > 0 {
+			subs, err := reg.Subscriptions().FindAll(ctx)
+			if err == nil {
+				for _, sub := range subs {
+					if blockedUserIDs[sub.UserID] && sub.Email != "" {
+						blockedMap[sub.Email] = true
+					}
+				}
+			}
+		}
 	}
 
 	// Active antifraud bans

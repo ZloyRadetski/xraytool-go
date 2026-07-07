@@ -571,20 +571,19 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 	ctx = context.WithoutCancel(ctx)
 	result := &domain.EngineSyncResult{}
 
-	// 1. Regenerate config.json from template + DB users.
+	// 1. Read current users from the live xray process (before overwriting configPath).
+	liveUsers, err := a.ListUsers(ctx)
+	if err != nil {
+		a.log.Warn("xray adapter: SyncUsers: failed to list live users, will hot-add all", "err", err)
+		liveUsers = nil
+	}
+
+	// 2. Regenerate config.json from template + DB users.
 	if a.templatePath != "" {
 		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers, a.realityRotation, a.realityKeysPath, a.blacklistedAdmins); err != nil {
 			return result, fmt.Errorf("xray adapter SyncUsers: regenerate config: %w", err)
 		}
 		a.log.Info("xray adapter: config regenerated from template", "users", len(dbUsers))
-	}
-
-	// 2. Read current users from the live xray process.
-	liveUsers, err := a.ListUsers(ctx)
-	if err != nil {
-		// If we can't read the live config, we can still hot-add everyone.
-		a.log.Warn("xray adapter: SyncUsers: failed to list live users, will hot-add all", "err", err)
-		liveUsers = nil
 	}
 
 	// 3. Build lookup sets.
@@ -594,20 +593,43 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 			dbSet[u.Email] = u
 		}
 	}
-	liveSet := make(map[string]struct{}, len(liveUsers))
+	liveSet := make(map[string]domain.VPNUserConfig, len(liveUsers))
 	for _, u := range liveUsers {
 		if u.Email != "" {
-			liveSet[u.Email] = struct{}{}
+			liveSet[u.Email] = u
 		}
 	}
 
-	// 4. Hot-add users that are in DB but missing from xray.
+	// 4. Identify users to add or update.
 	var toAdd []domain.VPNUserConfig
-	for email, u := range dbSet {
-		if _, ok := liveSet[email]; !ok {
-			toAdd = append(toAdd, u)
+	var toUpdateRemove []string
+
+	// Helper to check if properties differ
+	compareVPNUserConfigs := func(u1, u2 domain.VPNUserConfig) bool {
+		return u1.UUID == u2.UUID &&
+			u1.Auth == u2.Auth &&
+			u1.Expire == u2.Expire &&
+			u1.Subfile == u2.Subfile &&
+			u1.MaxDevices == u2.MaxDevices
+	}
+
+	for email, dbUser := range dbSet {
+		liveUser, exists := liveSet[email]
+		if !exists {
+			toAdd = append(toAdd, dbUser)
+		} else if !compareVPNUserConfigs(liveUser, dbUser) {
+			toAdd = append(toAdd, dbUser)
+			toUpdateRemove = append(toUpdateRemove, email)
 		}
 	}
+
+	// Hot-remove users we need to update first to avoid duplicates/errors
+	if len(toUpdateRemove) > 0 {
+		if err := a.RemoveUsersBulk(ctx, toUpdateRemove); err != nil {
+			a.log.Warn("xray adapter: SyncUsers: bulk hot-remove for update failed", "count", len(toUpdateRemove), "err", err)
+		}
+	}
+
 	if len(toAdd) > 0 {
 		if err := a.AddUsersBulk(ctx, toAdd); err != nil {
 			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(toAdd), "err", err)
@@ -763,4 +785,73 @@ func configToParams(u domain.VPNUserConfig) ClientParams {
 		Flow:    u.Flow,
 		Limit:   limit,
 	}
+}
+
+func (a *Adapter) SyncRealityKeys(ctx context.Context, keysBytes []byte) error {
+	ctx = context.WithoutCancel(ctx)
+	
+	// 1. Unmarshal keys
+	var keys RealityKeys
+	if err := json.Unmarshal(keysBytes, &keys); err != nil {
+		return fmt.Errorf("sync reality keys: unmarshal: %w", err)
+	}
+	if keys.PrivateKey == "" || keys.PublicKey == "" || len(keys.ShortIDs) == 0 {
+		return fmt.Errorf("sync reality keys: invalid key structure")
+	}
+
+	// 2. Modify config.json on disk to inject these keys
+	err := Modify(a.configPath, func(cfg RawConfig) error {
+		return injectRealityKeys(cfg, &keys)
+	})
+	if err != nil {
+		return fmt.Errorf("sync reality keys: modify config on disk: %w", err)
+	}
+
+	// 3. Find all VLESS/xhttp/splithttp inbounds that use reality and rebuild them
+	cfg, err := Read(a.configPath)
+	if err != nil {
+		return fmt.Errorf("sync reality keys: read config: %w", err)
+	}
+
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return fmt.Errorf("sync reality keys: get inbounds: %w", err)
+	}
+
+	for _, ib := range inbounds {
+		proto := ib.Protocol()
+		if proto != "vless" && proto != "xhttp" && proto != "splithttp" {
+			continue
+		}
+
+		rawStream, ok := ib["streamSettings"]
+		if !ok {
+			continue
+		}
+
+		var stream map[string]json.RawMessage
+		if err := json.Unmarshal(rawStream, &stream); err != nil {
+			continue
+		}
+
+		rawSec, ok := stream["security"]
+		if !ok {
+			continue
+		}
+		var sec string
+		if err := json.Unmarshal(rawSec, &sec); err != nil || sec != "reality" {
+			continue
+		}
+
+		// Rebuild this inbound
+		tag := ib.Tag()
+		if tag != "" {
+			if err := a.RebuildInbound(ctx, tag); err != nil {
+				a.log.Warn("sync reality keys: failed to rebuild inbound", "tag", tag, "err", err)
+			}
+		}
+	}
+
+	a.notifyConfigModified()
+	return nil
 }

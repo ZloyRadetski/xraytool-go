@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"xraytool/internal/domain"
 	"xraytool/internal/statesync"
+	"xraytool/internal/vpn"
 
 	"github.com/spf13/cobra"
 )
@@ -33,11 +34,7 @@ If --sync is specified, it will also trigger statesync to rebuild configurations
 				if sub.Status != "active" || sub.Email == "" || sub.XrayUUID == "" {
 					continue
 				}
-				dbUsers = append(dbUsers, domain.VPNUserConfig{
-					Email:      sub.Email,
-					UUID:       sub.XrayUUID,
-					MaxDevices: sub.MaxDevices,
-				})
+				dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
 			}
 
 			// 2. Call SyncUsers (removeOrphans = true) to rewrite config.json and hot-sync Xray

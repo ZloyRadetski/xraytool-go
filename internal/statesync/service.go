@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"xraytool/internal/domain"
+	"xraytool/internal/vpn"
 )
 
 type Service struct {
@@ -47,6 +48,8 @@ func (s *Service) SelfHealMasterUUIDs(ctx context.Context) (bool, error) {
 		userMap[u.Email] = u
 	}
 
+	blockedMap := s.getBlockedEmails(ctx)
+
 	updatedCount := 0
 	for _, sub := range subs {
 		if sub.Email == "" || sub.XrayUUID == "" {
@@ -54,23 +57,72 @@ func (s *Service) SelfHealMasterUUIDs(ctx context.Context) (bool, error) {
 		}
 
 		u, exists := userMap[sub.Email]
-		if !exists {
-			continue
-		}
+		isActive := sub.Status == "active" && !blockedMap[sub.Email]
 
-		if u.UUID != sub.XrayUUID {
-			// Engine doesn't have an UpdateUUID, so we remove and re-add.
-			s.engine.RemoveUser(ctx, sub.Email)
-			u.UUID = sub.XrayUUID
-			s.engine.AddUser(ctx, u)
-			updatedCount++
+		if isActive {
+			expectedUser := vpn.SubscriptionToVPNUserConfig(sub)
+			if !exists {
+				// Add active user missing from Engine
+				if err := s.engine.AddUser(ctx, expectedUser); err == nil {
+					updatedCount++
+				}
+			} else if u.UUID != expectedUser.UUID || u.Auth != expectedUser.Auth || u.Expire != expectedUser.Expire || u.Subfile != expectedUser.Subfile || u.MaxDevices != expectedUser.MaxDevices {
+				// Update mismatched user in Engine
+				s.engine.RemoveUser(ctx, sub.Email)
+				if err := s.engine.AddUser(ctx, expectedUser); err == nil {
+					updatedCount++
+				}
+			}
+		} else {
+			if exists {
+				// Remove inactive/blocked user from Engine
+				if err := s.engine.RemoveUser(ctx, sub.Email); err == nil {
+					updatedCount++
+				}
+			}
 		}
 	}
 
-	if updatedCount > 0 {
-		return true, nil
+	return updatedCount > 0, nil
+}
+
+func (s *Service) getBlockedEmails(ctx context.Context) map[string]bool {
+	blockedMap := make(map[string]bool)
+	if s.registry == nil {
+		return blockedMap
 	}
-	return false, nil
+
+	// Blocked users (admin block)
+	users, err := s.registry.Users().FindAll(ctx)
+	if err == nil {
+		blockedUserIDs := make(map[string]bool)
+		for _, u := range users {
+			if u.IsBlocked {
+				blockedUserIDs[u.ID] = true
+			}
+		}
+
+		if len(blockedUserIDs) > 0 {
+			subs, err := s.registry.Subscriptions().FindAll(ctx)
+			if err == nil {
+				for _, sub := range subs {
+					if blockedUserIDs[sub.UserID] && sub.Email != "" {
+						blockedMap[sub.Email] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Active antifraud bans
+	bans, err := s.registry.AntifraudBans().FindActive(ctx)
+	if err == nil {
+		for _, b := range bans {
+			blockedMap[b.Email] = true
+		}
+	}
+
+	return blockedMap
 }
 
 

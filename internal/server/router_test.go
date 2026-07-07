@@ -16,16 +16,16 @@ func TestRouter_CatchAll_404(t *testing.T) {
 func TestRouter_AuthMiddleware_MissingKey(t *testing.T) {
 	r := newTestRouter(t)
 	w := do(r, "POST", "/api/v1/users/register", "", "")
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
 	}
 }
 
 func TestRouter_AuthMiddleware_WrongKey(t *testing.T) {
 	r := newTestRouter(t)
 	w := do(r, "POST", "/api/v1/users/register", "", "wrong-key")
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
 	}
 }
 

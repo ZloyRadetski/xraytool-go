@@ -141,11 +141,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 						if sub.Status != "active" || sub.Email == "" || sub.XrayUUID == "" {
 							continue
 						}
-						dbUsers = append(dbUsers, domain.VPNUserConfig{
-							Email:      sub.Email,
-							UUID:       sub.XrayUUID,
-							MaxDevices: sub.MaxDevices,
-						})
+						dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
 					}
 					result, syncErr := vpnEngine.SyncUsers(cmd.Context(), dbUsers, false)
 					if syncErr != nil {

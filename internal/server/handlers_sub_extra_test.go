@@ -9,7 +9,7 @@ func TestSubscriptionV2(t *testing.T) {
 	r := newTestRouter(t)
 
 	// Create user with subfile "subABC"
-	wReg := doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":5001,"username":"SubUser"}`)
+	wReg := doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":9995001,"username":"SubUser"}`)
 	if wReg.Code != http.StatusCreated {
 		t.Fatalf("failed to register: %d", wReg.Code)
 	}
