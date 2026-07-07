@@ -581,11 +581,19 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 	// Load static template users to protect them from being marked as orphans
 	templateSet := make(map[string]bool)
 	if a.templatePath != "" {
+		blacklist := make(map[string]bool)
+		for _, email := range a.blacklistedAdmins {
+			if email != "" {
+				blacklist[email] = true
+			}
+		}
+
 		if templateCfg, err := Read(a.templatePath); err == nil {
 			if templateUsers, err := ListUsers(templateCfg); err == nil {
 				for _, u := range templateUsers {
-					if u.Email() != "" {
-						templateSet[u.Email()] = true
+					email := u.Email()
+					if email != "" && !blacklist[email] {
+						templateSet[email] = true
 					}
 				}
 			}
