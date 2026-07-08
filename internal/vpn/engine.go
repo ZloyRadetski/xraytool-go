@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -35,6 +37,7 @@ type Adapter struct {
 	realityKeysPath   string
 	log               *slog.Logger
 	rebuildMu         sync.Mutex // Serializes dynamic inbound rebuild operations
+	syncMu            sync.Mutex // Serializes all state modifications (disk and gRPC) to prevent races
 	OnConfigModified  func()
 	blacklistedAdmins []string
 }
@@ -79,6 +82,41 @@ func wrapError(err error) error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Dirty State & Self-Healing Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (a *Adapter) markDirty() {
+	dirtyPath := a.configPath + ".dirty"
+	if err := os.WriteFile(dirtyPath, []byte("1"), 0644); err != nil {
+		a.log.Warn("xray adapter: failed to write dirty state file", "path", dirtyPath, "err", err)
+	}
+}
+
+func (a *Adapter) isDirty() bool {
+	dirtyPath := a.configPath + ".dirty"
+	_, err := os.Stat(dirtyPath)
+	return err == nil
+}
+
+func (a *Adapter) clearDirty() {
+	dirtyPath := a.configPath + ".dirty"
+	_ = os.Remove(dirtyPath)
+}
+
+func (a *Adapter) healDirty(ctx context.Context) {
+	if a.isDirty() {
+		a.log.Info("xray adapter: dirty state detected, restarting xray to sync with disk")
+		err := exec.CommandContext(ctx, "systemctl", "restart", "xray").Run()
+		if err != nil {
+			a.log.Error("xray adapter: failed to restart xray for healing", "err", err)
+		} else {
+			a.clearDirty()
+			a.log.Info("xray adapter: xray restarted successfully, dirty state cleared")
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AddUser — persist to config + hot-add via gRPC
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -98,10 +136,20 @@ func wrapError(err error) error {
 //   - User already in config → noop (idempotent).
 //   - Xray not running during hot-add → warn + return nil.
 func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.addUserLocked(ctx, user)
+}
+
+func (a *Adapter) addUserLocked(ctx context.Context, user domain.VPNUserConfig) error {
 	ctx = context.WithoutCancel(ctx)
 	if user.Email == "" {
 		return fmt.Errorf("xray adapter AddUser: email must not be empty")
 	}
+
+	a.healDirty(ctx)
+
+	oldCfg, _ := Read(a.configPath)
 
 	var clientsPayload []TaggedClient
 
@@ -136,13 +184,14 @@ func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error 
 	// Hot-add — best-effort, non-fatal.
 	if len(clientsPayload) > 0 {
 		if err := a.grpc.AddUser(ctx, clientsPayload, a.configPath); err != nil {
+			a.markDirty()
 			a.log.Warn("xray adapter: hot-add via gRPC failed (config already updated on disk)",
 				"email", user.Email, "err", err)
 		}
 	}
 
 	// After hot-add, rebuild any hysteria2 inbounds (they don't support per-user add).
-	a.rebuildHysteriaInbounds(ctx)
+	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
 	a.log.Info("xray adapter: user added", "email", user.Email)
 	a.notifyConfigModified()
@@ -163,10 +212,20 @@ func (a *Adapter) AddUser(ctx context.Context, user domain.VPNUserConfig) error 
 //   - Empty slice → returns nil immediately (no-op).
 //   - All users already in config → no disk I/O, no gRPC call.
 func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.addUsersBulkLocked(ctx, users)
+}
+
+func (a *Adapter) addUsersBulkLocked(ctx context.Context, users []domain.VPNUserConfig) error {
 	ctx = context.WithoutCancel(ctx)
 	if len(users) == 0 {
 		return nil
 	}
+
+	a.healDirty(ctx)
+
+	oldCfg, _ := Read(a.configPath)
 
 	var allPayloads []TaggedClient
 
@@ -203,13 +262,14 @@ func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig
 	// Single gRPC batch call for all users — best-effort.
 	if len(allPayloads) > 0 {
 		if err := a.grpc.AddUser(ctx, allPayloads, a.configPath); err != nil {
+			a.markDirty()
 			a.log.Warn("xray adapter: bulk hot-add via gRPC failed (config already updated on disk)",
 				"count", len(users), "err", err)
 		}
 	}
 
 	// After hot-add, rebuild any hysteria2 inbounds (they don't support per-user add).
-	a.rebuildHysteriaInbounds(ctx)
+	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
 	a.log.Info("xray adapter: bulk user add completed", "requested", len(users), "hot_added", len(allPayloads))
 	a.notifyConfigModified()
@@ -233,6 +293,12 @@ func (a *Adapter) AddUsersBulk(ctx context.Context, users []domain.VPNUserConfig
 //   - Xray not running → gRPC warns, method still returns nil.
 //   - Empty email → early error.
 func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.removeUserLocked(ctx, email)
+}
+
+func (a *Adapter) removeUserLocked(ctx context.Context, email string) error {
 	ctx = context.WithoutCancel(ctx)
 	if email == "" {
 		return fmt.Errorf("xray adapter RemoveUser: email must not be empty")
@@ -243,6 +309,10 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 		a.log.Info("xray adapter: skipping RemoveUser for protected template user", "email", email)
 		return nil
 	}
+
+	a.healDirty(ctx)
+
+	oldCfg, _ := Read(a.configPath)
 
 	var tags []string
 
@@ -267,13 +337,14 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 	// Hot-remove — best-effort.
 	if len(tags) > 0 {
 		if err := a.grpc.RemoveUser(ctx, email, tags); err != nil {
+			a.markDirty()
 			a.log.Warn("xray adapter: hot-remove via gRPC failed (config already updated on disk)",
 				"email", email, "err", err)
 		}
 	}
 
 	// After hot-remove, rebuild any hysteria2 inbounds (they don't support per-user remove).
-	a.rebuildHysteriaInbounds(ctx)
+	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
 	a.log.Info("xray adapter: user removed", "email", email)
 	a.notifyConfigModified()
@@ -293,6 +364,12 @@ func (a *Adapter) RemoveUser(ctx context.Context, email string) error {
 //   - Empty slice → returns nil immediately (no-op).
 //   - Mix of present and absent users → only present ones are removed.
 func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.removeUsersBulkLocked(ctx, emails)
+}
+
+func (a *Adapter) removeUsersBulkLocked(ctx context.Context, emails []string) error {
 	ctx = context.WithoutCancel(ctx)
 	if len(emails) == 0 {
 		return nil
@@ -311,6 +388,10 @@ func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
 	if len(emails) == 0 {
 		return nil
 	}
+
+	a.healDirty(ctx)
+
+	oldCfg, _ := Read(a.configPath)
 
 	// Build a set for quick membership checks.
 	emailSet := make(map[string]struct{}, len(emails))
@@ -360,13 +441,14 @@ func (a *Adapter) RemoveUsersBulk(ctx context.Context, emails []string) error {
 			continue
 		}
 		if err := a.grpc.RemoveUser(ctx, email, tags); err != nil {
+			a.markDirty()
 			a.log.Warn("xray adapter: hot-remove via gRPC failed in bulk (config already updated on disk)",
 				"email", email, "err", err)
 		}
 	}
 
 	// After hot-remove, rebuild any hysteria2 inbounds (they don't support per-user remove).
-	a.rebuildHysteriaInbounds(ctx)
+	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
 	a.log.Info("xray adapter: bulk user remove completed", "count", len(tagsByEmail))
 	a.notifyConfigModified()
@@ -460,6 +542,9 @@ func (a *Adapter) ListUsers(_ context.Context) ([]domain.VPNUserConfig, error) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+
 	ctx = context.WithoutCancel(ctx)
 	var found bool
 	err := Modify(a.configPath, func(cfg RawConfig) error {
@@ -482,6 +567,9 @@ func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
 }
 
 func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+
 	ctx = context.WithoutCancel(ctx)
 	var found bool
 	err := Modify(a.configPath, func(cfg RawConfig) error {
@@ -510,6 +598,9 @@ func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) err
 // BanUser performs a soft ban by hot-removing the user from Xray's memory
 // without touching the config file.
 func (a *Adapter) BanUser(ctx context.Context, email string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+
 	ctx = context.WithoutCancel(ctx)
 	cfg, err := Read(a.configPath)
 	if err != nil {
@@ -523,6 +614,7 @@ func (a *Adapter) BanUser(ctx context.Context, email string) error {
 		return nil // Not in any inbound
 	}
 	if err := a.grpc.RemoveUser(ctx, email, tags); err != nil {
+		a.markDirty()
 		return fmt.Errorf("xray adapter BanUser grpc: %w", err)
 	}
 	a.log.Info("xray adapter: user soft-banned (removed from memory)", "email", email)
@@ -532,6 +624,9 @@ func (a *Adapter) BanUser(ctx context.Context, email string) error {
 // UnbanUser lifts a soft ban by hot-adding the user back into Xray's memory
 // from the config file.
 func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+
 	ctx = context.WithoutCancel(ctx)
 	cfg, err := Read(a.configPath)
 	if err != nil {
@@ -570,9 +665,10 @@ func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
 	}
 
 	if err := a.grpc.AddUser(ctx, payload, a.configPath); err != nil {
+		a.markDirty()
 		return fmt.Errorf("xray adapter UnbanUser grpc: %w", err)
 	}
-	a.log.Info("xray adapter: user unbanned (added to memory)", "email", email)
+	a.log.Info("xray adapter: user unbanned (restored memory)", "email", email)
 	return nil
 }
 
@@ -588,8 +684,16 @@ func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
 //     extra users in xray are never removed.
 //   - removeOrphans=true cleans up users from xray that are not in dbUsers.
 func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.syncUsersLocked(ctx, dbUsers, removeOrphans)
+}
+
+func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
 	ctx = context.WithoutCancel(ctx)
 	result := &domain.EngineSyncResult{}
+
+	a.healDirty(ctx)
 
 	// 1. Read current users from the live xray process (before overwriting configPath).
 	liveUsers, err := a.ListUsers(ctx)
@@ -597,6 +701,8 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 		a.log.Warn("xray adapter: SyncUsers: failed to list live users, will hot-add all", "err", err)
 		liveUsers = nil
 	}
+
+	oldCfg, _ := Read(a.configPath)
 
 	dbEmails := make(map[string]bool, len(dbUsers))
 	for _, u := range dbUsers {
@@ -655,13 +761,13 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 
 	// Hot-remove users we need to update first to avoid duplicates/errors
 	if len(toUpdateRemove) > 0 {
-		if err := a.RemoveUsersBulk(WithBypassProtection(ctx, true), toUpdateRemove); err != nil {
+		if err := a.removeUsersBulkLocked(WithBypassProtection(ctx, true), toUpdateRemove); err != nil {
 			a.log.Warn("xray adapter: SyncUsers: bulk hot-remove for update failed", "count", len(toUpdateRemove), "err", err)
 		}
 	}
 
 	if len(toAdd) > 0 {
-		if err := a.AddUsersBulk(ctx, toAdd); err != nil {
+		if err := a.addUsersBulkLocked(ctx, toAdd); err != nil {
 			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(toAdd), "err", err)
 		} else {
 			result.Added = len(toAdd)
@@ -679,7 +785,22 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 			}
 		}
 		if len(toRemove) > 0 {
-			if err := a.RemoveUsersBulk(ctx, toRemove); err != nil {
+			// Safety threshold: Circuit Breaker
+			threshold := int(float64(len(liveUsers)) * 0.3)
+			if threshold < 10 {
+				threshold = 10
+			}
+			if len(toRemove) > threshold {
+				a.log.Error("CRITICAL: SyncUsers safety threshold exceeded! Too many orphans to remove. Database might be corrupted or empty.",
+					"live_count", len(liveUsers),
+					"to_remove_count", len(toRemove),
+					"threshold", threshold,
+				)
+				return result, fmt.Errorf("sync aborted: safety threshold exceeded (want to remove %d out of %d users, threshold is %d)",
+					len(toRemove), len(liveUsers), threshold)
+			}
+
+			if err := a.removeUsersBulkLocked(ctx, toRemove); err != nil {
 				a.log.Warn("xray adapter: SyncUsers: bulk hot-remove failed", "count", len(toRemove), "err", err)
 			} else {
 				result.Removed = len(toRemove)
@@ -688,7 +809,7 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 	}
 
 	// 6. Rebuild all hysteria2 inbounds to apply the full user list.
-	a.rebuildHysteriaInbounds(ctx)
+	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
 	a.log.Info("xray adapter: sync completed",
 		"db_users", len(dbUsers),
@@ -707,11 +828,14 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 // RebuildInbound hot-rebuilds a single inbound by its tag.
 // It reads the current config.json, finds the inbound, serializes it to JSON,
 // and calls the gRPC client to remove then re-add it.
-// Best-effort: failures are logged but not fatal — the config on disk is correct.
 func (a *Adapter) RebuildInbound(ctx context.Context, tag string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.rebuildInboundLocked(ctx, tag)
+}
+
+func (a *Adapter) rebuildInboundLocked(ctx context.Context, tag string) error {
 	ctx = context.WithoutCancel(ctx)
-	a.rebuildMu.Lock()
-	defer a.rebuildMu.Unlock()
 
 	cfg, err := Read(a.configPath)
 	if err != nil {
@@ -723,40 +847,37 @@ func (a *Adapter) RebuildInbound(ctx context.Context, tag string) error {
 		return fmt.Errorf("xray adapter RebuildInbound: get inbounds: %w", err)
 	}
 
-	var target RawInbound
-	found := false
+	var found RawInbound
 	for _, ib := range inbounds {
 		if ib.Tag() == tag {
-			target = ib
-			found = true
+			found = ib
 			break
 		}
 	}
-	if !found {
+
+	if found == nil {
 		return fmt.Errorf("xray adapter RebuildInbound: inbound %q not found in config", tag)
 	}
 
-	// Marshal the inbound to JSON as a single object.
-	inboundJSON, err := json.Marshal(target)
+	inboundJSON, err := json.Marshal(found)
 	if err != nil {
 		return fmt.Errorf("xray adapter RebuildInbound: marshal inbound: %w", err)
 	}
 
-	a.log.Info("xray adapter: hot-rebuilding inbound", "tag", tag, "protocol", target.Protocol())
-
 	if err := a.grpc.RebuildInbound(ctx, tag, inboundJSON); err != nil {
+		a.markDirty()
 		a.log.Warn("xray adapter: RebuildInbound via gRPC failed (config already on disk)",
 			"tag", tag, "err", err)
-		// Non-fatal: config on disk is correct.
 	}
 
 	return nil
 }
 
 // rebuildHysteriaInbounds reads the current config and hot-rebuilds every
-// hysteria/hysteria2/hy2 inbound. Called after AddUser/RemoveUser operations
-// because these protocols don't support per-user hot-add/hot-remove.
-func (a *Adapter) rebuildHysteriaInbounds(ctx context.Context) {
+// hysteria/hysteria2/hy2 inbound if it has changed compared to oldCfg.
+// Called after AddUser/RemoveUser operations because these protocols don't
+// support per-user hot-add/hot-remove.
+func (a *Adapter) rebuildHysteriaInbounds(ctx context.Context, oldCfg RawConfig) {
 	a.rebuildMu.Lock()
 	defer a.rebuildMu.Unlock()
 
@@ -770,6 +891,23 @@ func (a *Adapter) rebuildHysteriaInbounds(ctx context.Context) {
 	if err != nil {
 		a.log.Warn("xray adapter: rebuildHysteriaInbounds: get inbounds failed", "err", err)
 		return
+	}
+
+	// Helper to find inbound by tag in oldCfg
+	getOldInbound := func(tag string) (RawInbound, bool) {
+		if oldCfg == nil {
+			return nil, false
+		}
+		oldInbounds, err := oldCfg.GetInbounds()
+		if err != nil {
+			return nil, false
+		}
+		for _, ib := range oldInbounds {
+			if ib.Tag() == tag {
+				return ib, true
+			}
+		}
+		return nil, false
 	}
 
 	for _, ib := range inbounds {
@@ -786,6 +924,15 @@ func (a *Adapter) rebuildHysteriaInbounds(ctx context.Context) {
 			a.log.Warn("xray adapter: rebuildHysteriaInbounds: marshal inbound failed",
 				"tag", tag, "err", err)
 			continue
+		}
+
+		// Check if the inbound is unchanged compared to oldCfg
+		if oldIb, ok := getOldInbound(tag); ok {
+			oldJSON, err := json.Marshal(oldIb)
+			if err == nil && string(inboundJSON) == string(oldJSON) {
+				a.log.Debug("xray adapter: hysteria inbound unchanged, skipping rebuild", "tag", tag)
+				continue
+			}
 		}
 
 		a.log.Info("xray adapter: hot-rebuilding hysteria inbound", "tag", tag)
@@ -820,6 +967,12 @@ func configToParams(u domain.VPNUserConfig) ClientParams {
 }
 
 func (a *Adapter) SyncRealityKeys(ctx context.Context, keysBytes []byte) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	return a.syncRealityKeysLocked(ctx, keysBytes)
+}
+
+func (a *Adapter) syncRealityKeysLocked(ctx context.Context, keysBytes []byte) error {
 	ctx = context.WithoutCancel(ctx)
 	
 	// 1. Unmarshal keys
@@ -878,7 +1031,7 @@ func (a *Adapter) SyncRealityKeys(ctx context.Context, keysBytes []byte) error {
 		// Rebuild this inbound
 		tag := ib.Tag()
 		if tag != "" {
-			if err := a.RebuildInbound(ctx, tag); err != nil {
+			if err := a.rebuildInboundLocked(ctx, tag); err != nil {
 				a.log.Warn("sync reality keys: failed to rebuild inbound", "tag", tag, "err", err)
 			}
 		}
