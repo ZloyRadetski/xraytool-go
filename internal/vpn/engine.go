@@ -15,11 +15,14 @@ package vpn
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 
@@ -117,6 +120,57 @@ func (a *Adapter) healDirty(ctx context.Context) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// State Hashing Verification Helpers (Step 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (a *Adapter) calculateStateHash(dbUsers []domain.VPNUserConfig) (string, error) {
+	h := sha256.New()
+
+	// 1. Hash the template file if it exists
+	if a.templatePath != "" {
+		data, err := os.ReadFile(a.templatePath)
+		if err == nil {
+			h.Write(data)
+		} else {
+			h.Write([]byte("template_err"))
+		}
+	}
+
+	// 2. Hash reality rotation settings
+	h.Write([]byte(fmt.Sprintf("rot:%t;keys:%s;", a.realityRotation, a.realityKeysPath)))
+	if a.realityRotation && a.realityKeysPath != "" {
+		data, err := os.ReadFile(a.realityKeysPath)
+		if err == nil {
+			h.Write(data)
+		}
+	}
+
+	// 3. Hash blacklisted admins
+	for _, admin := range a.blacklistedAdmins {
+		h.Write([]byte("admin:" + admin + ";"))
+	}
+
+	// 4. Sort users by Email to ensure stable ordering
+	sortedUsers := make([]domain.VPNUserConfig, len(dbUsers))
+	copy(sortedUsers, dbUsers)
+	sort.Slice(sortedUsers, func(i, j int) bool {
+		return sortedUsers[i].Email < sortedUsers[j].Email
+	})
+
+	// 5. Hash each user's fields
+	for _, u := range sortedUsers {
+		h.Write([]byte(fmt.Sprintf("u:%s|%s|%s|%s|%s|%d;", u.Email, u.UUID, u.Auth, u.Subfile, u.Expire, u.MaxDevices)))
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func (a *Adapter) invalidateHash() {
+	hashPath := a.configPath + ".hash"
+	_ = os.Remove(hashPath)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AddUser — persist to config + hot-add via gRPC
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -192,6 +246,8 @@ func (a *Adapter) addUserLocked(ctx context.Context, user domain.VPNUserConfig) 
 
 	// After hot-add, rebuild any hysteria2 inbounds (they don't support per-user add).
 	a.rebuildHysteriaInbounds(ctx, oldCfg)
+
+	a.invalidateHash()
 
 	a.log.Info("xray adapter: user added", "email", user.Email)
 	a.notifyConfigModified()
@@ -271,6 +327,8 @@ func (a *Adapter) addUsersBulkLocked(ctx context.Context, users []domain.VPNUser
 	// After hot-add, rebuild any hysteria2 inbounds (they don't support per-user add).
 	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
+	a.invalidateHash()
+
 	a.log.Info("xray adapter: bulk user add completed", "requested", len(users), "hot_added", len(allPayloads))
 	a.notifyConfigModified()
 	return nil
@@ -345,6 +403,8 @@ func (a *Adapter) removeUserLocked(ctx context.Context, email string) error {
 
 	// After hot-remove, rebuild any hysteria2 inbounds (they don't support per-user remove).
 	a.rebuildHysteriaInbounds(ctx, oldCfg)
+
+	a.invalidateHash()
 
 	a.log.Info("xray adapter: user removed", "email", email)
 	a.notifyConfigModified()
@@ -449,6 +509,8 @@ func (a *Adapter) removeUsersBulkLocked(ctx context.Context, emails []string) er
 
 	// After hot-remove, rebuild any hysteria2 inbounds (they don't support per-user remove).
 	a.rebuildHysteriaInbounds(ctx, oldCfg)
+
+	a.invalidateHash()
 
 	a.log.Info("xray adapter: bulk user remove completed", "count", len(tagsByEmail))
 	a.notifyConfigModified()
@@ -561,6 +623,7 @@ func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
 	if !found {
 		return fmt.Errorf("xray adapter SetExpire: user %q not found in config", email)
 	}
+	a.invalidateHash()
 	a.log.Info("xray adapter: expire updated", "email", email, "expire", expire)
 	a.notifyConfigModified()
 	return nil
@@ -586,6 +649,7 @@ func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) err
 	if !found {
 		return fmt.Errorf("xray adapter SetLimit: user %q not found in config", email)
 	}
+	a.invalidateHash()
 	a.log.Info("xray adapter: limit updated", "email", email, "limit", limit)
 	a.notifyConfigModified()
 	return nil
@@ -617,6 +681,7 @@ func (a *Adapter) BanUser(ctx context.Context, email string) error {
 		a.markDirty()
 		return fmt.Errorf("xray adapter BanUser grpc: %w", err)
 	}
+	a.invalidateHash()
 	a.log.Info("xray adapter: user soft-banned (removed from memory)", "email", email)
 	return nil
 }
@@ -668,6 +733,7 @@ func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
 		a.markDirty()
 		return fmt.Errorf("xray adapter UnbanUser grpc: %w", err)
 	}
+	a.invalidateHash()
 	a.log.Info("xray adapter: user unbanned (restored memory)", "email", email)
 	return nil
 }
@@ -694,6 +760,18 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 	result := &domain.EngineSyncResult{}
 
 	a.healDirty(ctx)
+
+	// Calculate desired state hash
+	dbHash, err := a.calculateStateHash(dbUsers)
+	if err == nil {
+		hashPath := a.configPath + ".hash"
+		if localHashBytes, err := os.ReadFile(hashPath); err == nil {
+			if string(localHashBytes) == dbHash && !a.isDirty() {
+				a.log.Info("xray adapter: state hash matches local hash, skipping sync")
+				return &domain.EngineSyncResult{Added: 0, Removed: 0}, nil
+			}
+		}
+	}
 
 	// 1. Read current users from the live xray process (before overwriting configPath).
 	liveUsers, err := a.ListUsers(ctx)
@@ -810,6 +888,14 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 
 	// 6. Rebuild all hysteria2 inbounds to apply the full user list.
 	a.rebuildHysteriaInbounds(ctx, oldCfg)
+
+	// Save the new successfully applied state hash
+	if err == nil {
+		hashPath := a.configPath + ".hash"
+		if err := os.WriteFile(hashPath, []byte(dbHash), 0644); err != nil {
+			a.log.Warn("xray adapter: failed to write state hash", "err", err)
+		}
+	}
 
 	a.log.Info("xray adapter: sync completed",
 		"db_users", len(dbUsers),
@@ -1037,6 +1123,7 @@ func (a *Adapter) syncRealityKeysLocked(ctx context.Context, keysBytes []byte) e
 		}
 	}
 
+	a.invalidateHash()
 	a.notifyConfigModified()
 	return nil
 }
