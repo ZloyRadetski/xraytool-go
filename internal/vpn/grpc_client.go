@@ -291,7 +291,7 @@ func (g *GRPCClient) AddUser(ctx context.Context, payload []TaggedClient, config
 
 		if err := g.AddUserSingle(ctx, tc.Tag, proto, clientJSON); err != nil {
 			if strings.Contains(err.Error(), "unsupported protocol") {
-				g.log.Info("xrayapi: queuing unsupported protocol for legacy hot-add", "tag", tc.Tag, "proto", proto)
+				g.log.Debug("xrayapi: queuing unsupported protocol for legacy hot-add", "tag", tc.Tag, "proto", proto)
 				fallbackPayloads = append(fallbackPayloads, tc)
 			} else {
 				errs = append(errs, err.Error())
