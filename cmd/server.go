@@ -182,12 +182,12 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 
 				// 🟢 Anti-Fraud Module 🟢──────────────────────────────────────────────
 				if deps.Cfg.AntiFraud.Enabled {
-					saltAPIKey := deps.Cfg.Server.APIKey
-					if !deps.Cfg.IsMaster() && deps.Cfg.MasterAPI.APIKey != "" {
-						saltAPIKey = deps.Cfg.MasterAPI.APIKey
-					}
-					if deps.Cfg.AntiFraud.SaltSecret != "" {
-						saltAPIKey = deps.Cfg.AntiFraud.SaltSecret
+					saltAPIKey := deps.Cfg.AntiFraud.SaltSecret
+					if saltAPIKey == "" {
+						// Use a cluster-wide constant fallback if SaltSecret is not explicitly set.
+						// Falling back to Server.APIKey / MasterAPI.APIKey causes hash mismatches
+						// when slaves have unique API keys.
+						saltAPIKey = "xraytool_default_antifraud_salt_secret"
 					}
 
 					afConfig := &antifraud.Config{
