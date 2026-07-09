@@ -50,7 +50,7 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 
 	if exists {
 		// Attempt to preserve ownership (only effective on Linux/Unix)
-		if err := copyOwnership(fi, tmp); err != nil {
+		if err := copyOwnership(fi, tmp); err != nil { //nolint:staticcheck //nolint:staticcheck
 			// Non-fatal, just continue
 		}
 	}

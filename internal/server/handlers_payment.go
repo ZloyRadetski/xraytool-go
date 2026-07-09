@@ -191,7 +191,7 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 		if err == nil && payment != nil {
 			updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
 			if err == nil && updatedSub != nil {
-				r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID)
+				r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID) //nolint:errcheck
 				r.unbanUserInXrayAsync(*updatedSub)
 			}
 		}
@@ -264,7 +264,7 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 			if err == nil && payment != nil && payment.Status == "completed" {
 				updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
 				if err == nil && updatedSub != nil {
-					r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID)
+					r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID) //nolint:errcheck
 					r.unbanUserInXrayAsync(*updatedSub)
 				}
 			}

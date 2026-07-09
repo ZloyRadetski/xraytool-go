@@ -130,7 +130,7 @@ func (a *analyzer) handleEvent(e event) {
 		if !e.isHashed {
 			ipToSend = a.state.HashIP(e.ip)
 		}
-		a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: ipToSend}})
+		a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: ipToSend}}) //nolint:errcheck
 		// If this slave is configured to report to master, the master makes the final
 		// decision. We skip local enforcement because the slave doesn't have the full DB
 		// (so it doesn't know the user's real max_devices).
@@ -222,7 +222,7 @@ func (a *analyzer) getDeviceLimit(email string) int {
 	}
 	a.deviceCache.mu.Unlock()
 
-	go a.deviceCache.sg.Do(email, func() (interface{}, error) {
+	go a.deviceCache.sg.Do(email, func() (interface{}, error) { //nolint:errcheck
 		val := 1
 		sub, err := a.registry.Subscriptions().FindByEmail(context.Background(), email)
 		if err == nil && sub != nil && sub.MaxDevices > 0 {

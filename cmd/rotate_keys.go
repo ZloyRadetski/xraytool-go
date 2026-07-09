@@ -15,7 +15,7 @@ func rotateKeysCmd(deps *AppDeps) *cobra.Command {
 		Use:   "rotate-keys",
 		Short: "Force rotation of Reality keys and Short IDs and sync them across the cluster",
 		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			if !deps.Cfg.Reality.RotationEnabled {
 				fmt.Println("ERROR|reality.rotation_enabled is not enabled in config")

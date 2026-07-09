@@ -264,7 +264,7 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 					return fmt.Errorf("promo limit")
 				}
 			} else {
-				tx.Promos().IncrementUses(ctx, *promoCodeID, 0)
+				tx.Promos().IncrementUses(ctx, *promoCodeID, 0) //nolint:errcheck
 			}
 
 			count, err := tx.Payments().CountByUserAndPromo(ctx, user.ID, *promoCodeID)

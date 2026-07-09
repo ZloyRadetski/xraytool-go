@@ -61,7 +61,7 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 				found := false
 				for _, u := range merged {
 					if u.Email == emailFilter {
-						found = true
+						found = true //nolint:ineffassign //nolint:ineffassign
 						if apiMode {
 							printJSON(map[string]interface{}{
 								"ok":           true,

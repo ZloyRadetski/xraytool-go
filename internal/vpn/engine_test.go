@@ -87,7 +87,7 @@ func TestAdapter_HysteriaRebuildOptimization(t *testing.T) {
 	}
 
 	clearCalls := func() {
-		os.WriteFile(logPath, []byte(""), 0644)
+		os.WriteFile(logPath, []byte(""), 0644) //nolint:errcheck
 	}
 
 	// Scenario 1: Add a user for the first time.

@@ -5,6 +5,7 @@ import (
 	"os"
 )
 
+//nolint:unused
 func main() {
 	if os.Getenv("MOCK_XRAY_FAIL") == "1" {
 		fmt.Fprintln(os.Stderr, "Mock error output")

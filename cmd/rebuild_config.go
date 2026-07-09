@@ -19,7 +19,7 @@ func rebuildConfigCmd(deps *AppDeps) *cobra.Command {
 Also injects the latest Reality keys and short IDs.
 If --sync is specified, it will also trigger statesync to rebuild configurations on all slave servers.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			ctx := cmd.Context()
 

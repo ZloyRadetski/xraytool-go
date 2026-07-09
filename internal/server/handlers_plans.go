@@ -38,7 +38,7 @@ func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
 func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Request) {
@@ -93,7 +93,7 @@ func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
 		"valid":            true,
 		"discount_percent": promo.DiscountPercent,
 		"id":               promo.ID,

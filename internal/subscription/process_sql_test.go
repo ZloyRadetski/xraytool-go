@@ -36,7 +36,7 @@ func TestProcessSQL_AntiFraudBan(t *testing.T) {
 		os.Remove("test_xray_config_af.json")
 	}()
 
-	os.WriteFile("test_xray_config_af.json", []byte(`{}`), 0644)
+	os.WriteFile("test_xray_config_af.json", []byte(`{}`), 0644) //nolint:errcheck
 
 	// 1. Create a valid subscription
 	db.Create(&database.User{ID: "u1", Username: "u1", IsBlocked: false})
@@ -97,7 +97,7 @@ func TestProcessSQL_Normal(t *testing.T) {
 		os.Remove("test_xray_config_normal.json")
 	}()
 
-	os.WriteFile("test_xray_config_normal.json", []byte(`{}`), 0644)
+	os.WriteFile("test_xray_config_normal.json", []byte(`{}`), 0644) //nolint:errcheck
 
 	// 1. Create a valid subscription
 	db.Create(&database.User{ID: "u2", Username: "u2", IsBlocked: false})
@@ -154,8 +154,8 @@ func TestProcessSQL_RealityRotationPlaceholders(t *testing.T) {
 		os.Remove("test_configs.txt")
 	}()
 
-	os.WriteFile("test_xray_config_rr.json", []byte(`{}`), 0644)
-	os.WriteFile("test_configs.txt", []byte("# Header\n{\"pbk\": \"{PBK}\", \"sid\": \"{SID}\"}"), 0644)
+	os.WriteFile("test_xray_config_rr.json", []byte(`{}`), 0644) //nolint:errcheck
+	_ = os.WriteFile("test_configs.txt", []byte("# Header\n{\"pbk\": \"{PBK}\", \"sid\": \"{SID}\"}"), 0644)
 
 	db.Create(&database.User{ID: "u3", Username: "u3", IsBlocked: false})
 	sub := database.Subscription{
@@ -246,8 +246,8 @@ func TestProcessSQL_InferredTrafficStats(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(inferredStatsFile, []byte(inferredStatsJSON), 0644))
 
-	os.WriteFile(tempDir+"/xray_config.json", []byte(`{}`), 0644)
-	os.WriteFile(tempDir+"/configs.txt", []byte("# Header\n{\"email\": \"{EMAIL}\", \"up\": {UP}, \"down\": {DOWN}}"), 0644)
+	_ = os.WriteFile(tempDir+"/xray_config.json", []byte(`{}`), 0644)
+	_ = os.WriteFile(tempDir+"/configs.txt", []byte("# Header\n{\"email\": \"{EMAIL}\", \"up\": {UP}, \"down\": {DOWN}}"), 0644)
 
 	db.Create(&database.User{ID: "u_traffic", Username: "u_traffic", RefCode: "ref_traffic", IsBlocked: false})
 	db.Create(&database.Subscription{
@@ -324,7 +324,7 @@ func TestProcessSQL_BlacklistedAdmin(t *testing.T) {
 	}()
 
 	// Config does NOT contain the admin (because they are blacklisted and filtered out)
-	os.WriteFile("test_xray_config_bla.json", []byte(`{"inbounds":[]}`), 0644)
+	os.WriteFile("test_xray_config_bla.json", []byte(`{"inbounds":[]}`), 0644) //nolint:errcheck
 
 	// Template contains the hardcoded admin
 	tmplJSON := `{
@@ -344,7 +344,7 @@ func TestProcessSQL_BlacklistedAdmin(t *testing.T) {
 			}
 		]
 	}`
-	os.WriteFile("test_xray_template_bla.json", []byte(tmplJSON), 0644)
+	os.WriteFile("test_xray_template_bla.json", []byte(tmplJSON), 0644) //nolint:errcheck
 
 	cfg := &appconfig.Config{
 		Paths: appconfig.PathsConf{

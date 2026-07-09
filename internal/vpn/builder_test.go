@@ -85,7 +85,7 @@ func TestBuildClient(t *testing.T) {
 			}
 			data, _ := json.Marshal(ibMap)
 			var ib RawInbound
-			json.Unmarshal(data, &ib)
+			json.Unmarshal(data, &ib) //nolint:errcheck
 
 			client, err := BuildClient(ib, tt.params)
 			if (err != nil) != tt.wantErr {

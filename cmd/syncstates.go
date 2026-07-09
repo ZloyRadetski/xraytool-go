@@ -19,7 +19,7 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 		Use:   "syncstates",
 		Short: "Synchronise user state from master to all slaves",
 		Run: func(cmd *cobra.Command, _ []string) {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			if !deps.Cfg.IsMaster() {
 				fmt.Println("ERROR|syncstates can only run on master node")

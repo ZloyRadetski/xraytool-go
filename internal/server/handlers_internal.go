@@ -108,13 +108,13 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(result) //nolint:errcheck
 		return
 
 	case "cli-stats":
 		result := stats.GenerateLocalStats(r.cfg, r.engine)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(result) //nolint:errcheck
 		return
 
 	case "newuser":

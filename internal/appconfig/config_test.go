@@ -110,14 +110,14 @@ func TestIsMaster(t *testing.T) {
 func TestLoadErrors(t *testing.T) {
 	// 1. Unparseable JSON/YAML
 	tmpFile := filepath.Join(t.TempDir(), "invalid.yaml")
-	os.WriteFile(tmpFile, []byte("invalid: [yaml: {"), 0644)
+	_ = os.WriteFile(tmpFile, []byte("invalid: [yaml: {"), 0644)
 	if _, err := Load(tmpFile); err == nil {
 		t.Error("Expected error parsing invalid config")
 	}
 
 	// 2. MkdirAll error (parent is a file)
 	parentFile := filepath.Join(t.TempDir(), "parent.txt")
-	os.WriteFile(parentFile, []byte(""), 0644)
+	_ = os.WriteFile(parentFile, []byte(""), 0644)
 	if _, err := Load(filepath.Join(parentFile, "config.yaml")); err == nil {
 		t.Error("Expected error creating config directory")
 	}
@@ -169,7 +169,7 @@ subscription:
   user_agent_whitelist: []
   user_agent_no_checks: []
 `
-	os.WriteFile(tmpFile, []byte(customYAML), 0644)
+	_ = os.WriteFile(tmpFile, []byte(customYAML), 0644)
 	cfg, err := Load(tmpFile)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -206,7 +206,7 @@ paths:
   subscription_template: "/legacy/sub.txt"
   subscription_vless_template: "/legacy/vless.txt"
 `
-	os.WriteFile(tmpFile, []byte(customYAML), 0644)
+	_ = os.WriteFile(tmpFile, []byte(customYAML), 0644)
 	cfg, err := Load(tmpFile)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)

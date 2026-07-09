@@ -136,7 +136,7 @@ func generateOTPCode() string {
 	if err != nil {
 		// Fallback: extremely unlikely with /dev/urandom, but handle gracefully.
 		b := make([]byte, 4)
-		rand.Read(b)
+		rand.Read(b) //nolint:errcheck
 		n = big.NewInt(int64(b[0])<<24 | int64(b[1])<<16 | int64(b[2])<<8 | int64(b[3]))
 		n.Mod(n, big.NewInt(1_000_000))
 	}

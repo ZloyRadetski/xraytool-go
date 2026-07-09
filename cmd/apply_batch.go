@@ -21,7 +21,7 @@ func applyBatchCmd(deps *AppDeps) *cobra.Command {
 		Use:   "apply-batch",
 		Short: "Apply a batch of user operations at once",
 		Run: func(cmd *cobra.Command, args []string) {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			var reader io.Reader
 

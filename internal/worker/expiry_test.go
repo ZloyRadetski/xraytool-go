@@ -46,7 +46,7 @@ func setupTestWorker(t *testing.T, db *gorm.DB, cfg *appconfig.Config) *ExpiryWo
 	tmpDir := t.TempDir()
 	if cfg.Paths.XrayConfig == "" {
 		cfg.Paths.XrayConfig = filepath.Join(tmpDir, "config.json")
-		os.WriteFile(cfg.Paths.XrayConfig, []byte(`{"inbounds":[]}`), 0644)
+		os.WriteFile(cfg.Paths.XrayConfig, []byte(`{"inbounds":[]}`), 0644) //nolint:errcheck
 	}
 
 	return NewExpiryWorker(database.NewRegistry(db), cfg, nil, &vpn.NoopEngine{}, logger)

@@ -90,7 +90,7 @@ func TestValidatePromoCode(t *testing.T) {
 			}
 			if tt.wantStatus == 200 {
 				var resp map[string]interface{}
-				json.Unmarshal(w.Body.Bytes(), &resp)
+				json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 				if resp["valid"] != tt.wantValid {
 					t.Errorf("expected valid=%v, got %v", tt.wantValid, resp["valid"])
 				}
@@ -154,7 +154,7 @@ func TestCreatePaymentWithPlan(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 	paymentID := int64(resp["payment_id"].(float64))
 	var p database.Payment
 	testDB.First(&p, paymentID)
@@ -180,7 +180,7 @@ func TestCreatePaymentWithPlan(t *testing.T) {
 	}
 
 	var resp2 map[string]interface{}
-	json.Unmarshal(w2.Body.Bytes(), &resp2)
+	json.Unmarshal(w2.Body.Bytes(), &resp2) //nolint:errcheck
 	paymentID2 := int64(resp2["payment_id"].(float64))
 	var p2 database.Payment
 	testDB.First(&p2, paymentID2)

@@ -71,7 +71,7 @@ type Router struct {
 	ingestEvents func(slaveID string, events []domain.FraudEvent)
 
 	bgTasks  sync.WaitGroup
-	webRegMu sync.Mutex
+	webRegMu sync.Mutex //nolint:unused
 }
 
 // Shutdown waits for all background tasks (like webhooks and xray unbans) to complete.
@@ -221,7 +221,7 @@ func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 			r.logIntruder(req, "invalid or missing X-API-Key")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"unauthorized"}`))
+			w.Write([]byte(`{"error":"unauthorized"}`)) //nolint:errcheck
 			return
 		}
 		next(w, req)

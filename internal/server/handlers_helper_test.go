@@ -38,7 +38,7 @@ func newTestRouter(t *testing.T) *server.Router {
 	t.Helper()
 
 	f, _ := os.CreateTemp("", "xrayconfig_*.json")
-	f.WriteString(`{"inbounds":[]}`)
+	f.WriteString(`{"inbounds":[]}`) //nolint:errcheck
 	f.Close()
 	t.Cleanup(func() { os.Remove(f.Name()) })
 

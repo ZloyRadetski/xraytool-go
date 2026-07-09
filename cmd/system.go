@@ -47,7 +47,7 @@ func updateGeoCmd(deps *AppDeps) *cobra.Command {
 		Use:   "update-geo",
 		Short: "Update geoip.dat and geosite.dat files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 			fmt.Println("[INFO] Updating geo databases…")
 			geoFiles := []struct {
 				url  string
@@ -86,7 +86,7 @@ func migrateCmd(deps *AppDeps) *cobra.Command {
 		Use:   "migrate",
 		Short: "Clean legacy fields from config and sync all users with current templates",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			engine := deps.Engine
 			users, err := engine.ListUsers(context.Background())

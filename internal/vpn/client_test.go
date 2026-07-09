@@ -63,13 +63,13 @@ func TestClient_AddUser(t *testing.T) {
 	// Create a dummy config
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.json")
-	os.WriteFile(cfgPath, []byte(`{"inbounds":[
+	_ = os.WriteFile(cfgPath, []byte(`{"inbounds":[
 		{"tag":"tag1","protocol":"vless","port":443,"settings":{"clients":[]}},
 		{"tag":"tag2","protocol":"vmess","port":8443,"settings":null}
 	]}`), 0644)
 
 	var rc RawClient
-	json.Unmarshal([]byte(`{"id":"uuid-1","email":"test@example.com"}`), &rc)
+	json.Unmarshal([]byte(`{"id":"uuid-1","email":"test@example.com"}`), &rc) //nolint:errcheck
 
 	payload := []TaggedClient{
 		{Tag: "tag1", Client: rc},

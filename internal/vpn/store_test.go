@@ -63,7 +63,7 @@ func TestReadWriteModify(t *testing.T) {
 	// Write invalid JSON (can't really happen since RawConfig wraps RawMessage, but let's test marshal fail? Wait, marshaling a map[string]json.RawMessage with invalid json inside just writes it.
 	// Oh, if we put an unmarshalable thing... we can't really do that since RawMessage is just []byte.
 	// Wait, what if we test read with bad json?
-	os.WriteFile(path, []byte(`{bad json`), 0644)
+	os.WriteFile(path, []byte(`{bad json`), 0644) //nolint:errcheck
 	_, err = Read(path)
 	if err == nil || !strings.Contains(err.Error(), "parsing xray config") {
 		t.Errorf("expected parse error, got %v", err)

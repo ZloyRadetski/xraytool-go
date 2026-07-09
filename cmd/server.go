@@ -53,6 +53,7 @@ func logIntruder(r *http.Request, reason string) {
 	logger.Warnf("\n[!!!] INTRUDER ALERT | %s\nIP: %s\n--- Request Dump ---\n%s\n--------------------\n", reason, ip, dumpStr)
 }
 
+//nolint:unused
 func isPathAllowed(cfg *appconfig.Config, path string) bool {
 	realPath, err := filepath.EvalSymlinks(path)
 	if err != nil {

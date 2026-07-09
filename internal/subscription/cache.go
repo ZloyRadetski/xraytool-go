@@ -32,7 +32,7 @@ type CacheManager struct {
 
 	// ModTimes to detect file changes on disk
 	xrayConfigModTime  time.Time
-	limitedDBModTime   time.Time
+	limitedDBModTime   time.Time //nolint:unused
 	subTemplateModTime time.Time
 	routeGlobalModTime time.Time
 	routeRUModTime     time.Time

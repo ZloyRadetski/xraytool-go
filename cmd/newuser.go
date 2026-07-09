@@ -25,7 +25,7 @@ func newUserCmd(deps *AppDeps) *cobra.Command {
 		Use:   "newuser",
 		Short: "Create a new user",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)

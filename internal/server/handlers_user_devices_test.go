@@ -29,7 +29,7 @@ func TestDevices(t *testing.T) {
 		t.Fatalf("expected 200, got %d", wGetD.Code)
 	}
 	var devs []map[string]interface{}
-	json.Unmarshal(wGetD.Body.Bytes(), &devs)
+	json.Unmarshal(wGetD.Body.Bytes(), &devs) //nolint:errcheck
 	if len(devs) != 0 {
 		t.Errorf("expected 0 devices")
 	}

@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -101,7 +102,7 @@ func TestUpdatePaymentStatus_ExtendsSubscription(t *testing.T) {
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":5001,"username":"payment_extender_user"}`)
 
 	// Get subscription to check its initial expiry (which is nil)
-	sub, err := testReg.Subscriptions().FindByEmail(nil, "bot_client_5001")
+	sub, err := testReg.Subscriptions().FindByEmail(context.TODO(), "bot_client_5001")
 	if err != nil {
 		t.Fatalf("failed to find subscription: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestUpdatePaymentStatus_ExtendsSubscription(t *testing.T) {
 	}
 
 	// 5. Verify the subscription is extended by 3 months (endsAt should be roughly time.Now() + 3 months)
-	updatedSub, err := testReg.Subscriptions().FindByEmail(nil, "bot_client_5001")
+	updatedSub, err := testReg.Subscriptions().FindByEmail(context.TODO(), "bot_client_5001")
 	if err != nil {
 		t.Fatalf("failed to load updated subscription: %v", err)
 	}

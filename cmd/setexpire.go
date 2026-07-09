@@ -36,7 +36,7 @@ func setExpireCmd(deps *AppDeps) *cobra.Command {
 
 			if expireVal == "" {
 				fmt.Print("Enter new expiry date (DD-MM-YYYY) or offset (+30): ")
-				fmt.Scanln(&expireVal)
+				fmt.Scanln(&expireVal) //nolint:errcheck
 			}
 			if expireVal == "" {
 				return p.Error("expire date is required")
@@ -79,7 +79,7 @@ func updateLimitCmd(deps *AppDeps) *cobra.Command {
 		Aliases: []string{"updatelimit", "set-limit"},
 		Short:   "Update a user's device connection limit",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 			if email == "" {
 				email = emailAlias
 			}

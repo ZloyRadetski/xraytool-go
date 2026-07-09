@@ -25,13 +25,13 @@ func TestRegistryServers(t *testing.T) {
 
 func TestRegistryPropagateAndCallOne(t *testing.T) {
 	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status":"success","output":"s1_ok"}`))
+		w.Write([]byte(`{"status":"success","output":"s1_ok"}`)) //nolint:errcheck
 	}))
 	defer ts1.Close()
 
 	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`error`))
+		w.Write([]byte(`error`)) //nolint:errcheck
 	}))
 	defer ts2.Close()
 
@@ -89,12 +89,12 @@ func TestRegistryPropagateAndCallOne(t *testing.T) {
 
 func TestRegistryPropagateAll_ConcurrencySafe(t *testing.T) {
 	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status":"success","output":"ok"}`))
+		w.Write([]byte(`{"status":"success","output":"ok"}`)) //nolint:errcheck
 	}))
 	defer ts1.Close()
 
 	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status":"success","output":"ok"}`))
+		w.Write([]byte(`{"status":"success","output":"ok"}`)) //nolint:errcheck
 	}))
 	defer ts2.Close()
 

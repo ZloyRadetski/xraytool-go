@@ -293,7 +293,7 @@ func (s *Service) UnlimitUser(ctx context.Context, req UnlimitUserRequest) (*Cre
 	auth := req.Auth
 
 	if !req.SkipDB && s.registry != nil {
-		s.registry.AntifraudBans().DeleteByEmail(ctx, email)
+		s.registry.AntifraudBans().DeleteByEmail(ctx, email) //nolint:errcheck
 	}
 
 	// Defaults for missing fields.
@@ -493,7 +493,7 @@ func (s *Service) BlockOrRemoveUser(ctx context.Context, req ModifyUserRequest) 
 			// If user is not in the engine config, we treat it as already removed.
 			// The DB update still proceeds so state stays consistent.
 			if req.Action == "rm" && !req.SkipDB && s.registry != nil {
-				s.registry.AntifraudBans().DeleteByEmail(ctx, email)
+				s.registry.AntifraudBans().DeleteByEmail(ctx, email) //nolint:errcheck
 			}
 			s.propagateBlockOrRemove(email, req.Action, req.Legacy)
 			return nil
@@ -541,7 +541,7 @@ func (s *Service) setStatus(ctx context.Context, email, status string) {
 	subRepo := s.registry.Subscriptions()
 	if sub, err := subRepo.FindByEmail(ctx, email); err == nil {
 		sub.Status = status
-		subRepo.Update(ctx, sub)
+		subRepo.Update(ctx, sub) //nolint:errcheck
 	}
 }
 
@@ -549,7 +549,7 @@ func (s *Service) blockDB(ctx context.Context, email string) {
 	subRepo := s.registry.Subscriptions()
 	if sub, err := subRepo.FindByEmail(ctx, email); err == nil {
 		sub.Status = "blocked"
-		subRepo.Update(ctx, sub)
+		subRepo.Update(ctx, sub) //nolint:errcheck
 	}
 }
 
@@ -563,7 +563,7 @@ func (s *Service) setExpireDB(ctx context.Context, email, expireStr string) {
 				sub.EndsAt = &t
 			}
 		}
-		subRepo.Update(ctx, sub)
+		subRepo.Update(ctx, sub) //nolint:errcheck
 	}
 }
 
@@ -571,7 +571,7 @@ func (s *Service) setLimitDB(ctx context.Context, email string, limit int) {
 	subRepo := s.registry.Subscriptions()
 	if sub, err := subRepo.FindByEmail(ctx, email); err == nil {
 		sub.MaxDevices = limit
-		subRepo.Update(ctx, sub)
+		subRepo.Update(ctx, sub) //nolint:errcheck
 	}
 }
 

@@ -18,7 +18,7 @@ func init() {
 	cfg := &appconfig.Config{
 		Logging: appconfig.LoggingConf{Level: "error", Format: "console"},
 	}
-	logger.Init(cfg)
+	logger.Init(cfg) //nolint:errcheck
 }
 
 func TestDispatcherSync(t *testing.T) {

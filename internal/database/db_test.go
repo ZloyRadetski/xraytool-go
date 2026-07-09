@@ -257,7 +257,7 @@ func TestMetadata_NullHandling(t *testing.T) {
 
 	var u database.User
 	db.First(&u, "id = ?", "u1")
-	if u.Metadata != nil && len(u.Metadata) > 0 {
+	if len(u.Metadata) > 0 {
 		t.Errorf("expected nil or empty metadata, got %v", u.Metadata)
 	}
 }

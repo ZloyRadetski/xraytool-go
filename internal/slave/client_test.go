@@ -79,11 +79,11 @@ func TestClientCall(t *testing.T) {
 		}
 
 		var req map[string]string
-		json.NewDecoder(r.Body).Decode(&req)
+		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
 
 		if r.URL.Path == "/sync" {
 			if req["action"] == "sync" {
-				w.Write([]byte(`{"status":"success","output":"test_ok"}`))
+				w.Write([]byte(`{"status":"success","output":"test_ok"}`)) //nolint:errcheck
 				return
 			}
 		}

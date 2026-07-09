@@ -45,7 +45,7 @@ func TestLoggerInitializationAndLevels(t *testing.T) {
 
 	// Flush and read
 	if defaultLogger.file != nil {
-		defaultLogger.file.Sync()
+		defaultLogger.file.Sync() //nolint:errcheck
 	}
 	Close()
 

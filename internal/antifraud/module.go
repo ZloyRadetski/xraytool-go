@@ -168,7 +168,7 @@ func (m *Module) IngestEvents(slaveID string, events []domain.FraudEvent) {
 func (m *Module) ForceUnban(email string) {
 	m.banStore.clearBan(email)
 	// Best-effort DB cleanup; errors are non-fatal.
-	m.registry.AntifraudBans().DeleteByEmail(context.Background(), email)
+	m.registry.AntifraudBans().DeleteByEmail(context.Background(), email) //nolint:errcheck
 	m.log.Info("antifraud: ban forcefully lifted (admin action)", slog.String("email", email))
 }
 

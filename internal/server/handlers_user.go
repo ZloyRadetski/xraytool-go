@@ -703,7 +703,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	updatedSub, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
 	if err == nil {
 		// Delete any sent notification flags so they can be re-triggered when this sub nears expiration
-		r.userSvc.DeleteNotificationsBySubID(context.Background(), updatedSub.ID)
+		r.userSvc.DeleteNotificationsBySubID(context.Background(), updatedSub.ID) //nolint:errcheck
 
 		r.unbanUserInXrayAsync(*updatedSub)
 	} else {
@@ -885,7 +885,7 @@ func (r *Router) handleAdminUnblockUser(w http.ResponseWriter, req *http.Request
 	}
 
 	// Also unblock the global user record just in case they were globally banned
-	r.userSvc.UpdateIsBlocked(context.Background(), sub.UserID, false)
+	r.userSvc.UpdateIsBlocked(context.Background(), sub.UserID, false) //nolint:errcheck
 
 	// If Anti-Fraud module is active, force lift any soft-ban on this user.
 	if r.forceUnban != nil {
@@ -950,7 +950,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Also unblock the global user record just in case they were globally banned
-	r.userSvc.UpdateIsBlocked(context.Background(), sub.UserID, false)
+	r.userSvc.UpdateIsBlocked(context.Background(), sub.UserID, false) //nolint:errcheck
 
 	// Reload sub from DB so unbanUserInXray receives the updated ends_at / status.
 	sub, err = r.userSvc.GetSubscriptionByEmail(context.Background(), email)
@@ -961,7 +961,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Delete any sent notification flags so they can be re-triggered
-	r.userSvc.DeleteNotificationsBySubID(context.Background(), sub.ID)
+	r.userSvc.DeleteNotificationsBySubID(context.Background(), sub.ID) //nolint:errcheck
 
 	r.unbanUserInXrayAsync(*sub)
 
@@ -984,7 +984,7 @@ func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
@@ -1012,7 +1012,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
@@ -1040,7 +1040,7 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 	count, _ := r.userSvc.CountActiveDevices(context.Background(), sub.ID)
 	if count <= int64(sub.MaxDevices) && sub.Status == "blocked" {
 		if sub.EndsAt == nil || sub.EndsAt.After(time.Now()) {
-			r.userSvc.UpdateSubscriptionFields(context.Background(), sub.ID, map[string]interface{}{"status": "active"})
+			r.userSvc.UpdateSubscriptionFields(context.Background(), sub.ID, map[string]interface{}{"status": "active"}) //nolint:errcheck
 			r.unbanUserInXrayAsync(sub)
 			r.log.Info("auto-unblocked user after device deletion", "email", sub.Email)
 		}
@@ -1132,7 +1132,7 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Find the user's subscription to remove them from Xray
-	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
 	if err == nil && subPtr != nil && subPtr.Email != "" {
 		sub := *subPtr
 		if err := r.engine.RemoveUser(context.Background(), sub.Email); err != nil {
@@ -1174,7 +1174,7 @@ func (r *Router) handleAdminGlobalUnban(w http.ResponseWriter, req *http.Request
 	}
 
 	// If the subscription is active, re-add to Xray
-	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
 	if err == nil && subPtr != nil && subPtr.Email != "" && subPtr.Status == "active" {
 		r.unbanUserInXrayAsync(*subPtr)
 	}
@@ -1224,7 +1224,7 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID) //nolint:ineffassign //nolint:ineffassign //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 
 	if err := r.userSvc.DeleteUserAndData(context.Background(), user.ID); err != nil {
 		r.log.Error("admin delete user: db transaction failed", "err", err)

@@ -55,7 +55,7 @@ func (r *Router) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Req
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(promo)
+	json.NewEncoder(w).Encode(promo) //nolint:errcheck
 }
 
 // handleAdminListPromoCodes returns all promo codes.
@@ -68,7 +68,7 @@ func (r *Router) handleAdminListPromoCodes(w http.ResponseWriter, req *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(codes)
+	json.NewEncoder(w).Encode(codes) //nolint:errcheck
 }
 
 // handleAdminDeletePromoCode hard-deletes or deactivates a promo code.
@@ -151,5 +151,5 @@ func (r *Router) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	json.NewEncoder(w).Encode(promo)
+	json.NewEncoder(w).Encode(promo) //nolint:errcheck
 }

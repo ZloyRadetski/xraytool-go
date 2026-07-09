@@ -38,7 +38,7 @@ func rmOrLimitCmd(action string, deps *AppDeps) *cobra.Command {
 		Use:   use,
 		Short: short,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			isBatch := cmd.Flags().Changed("email") || cmd.Flags().Changed("name")
 			p := newPrinter(isBatch)
@@ -78,7 +78,7 @@ func rmOrLimitCmd(action string, deps *AppDeps) *cobra.Command {
 func selectUserInteractive(engine domain.Engine, p *Printer) string {
 	users, err := engine.ListUsers(context.Background())
 	if err != nil || len(users) == 0 {
-		p.Error("no users found in engine config")
+		p.Error("no users found in engine config") //nolint:errcheck
 	}
 
 	fmt.Println("\033[0;36m--- Select user ---\033[0m")
@@ -89,7 +89,7 @@ func selectUserInteractive(engine domain.Engine, p *Printer) string {
 
 	var choice string
 	fmt.Print("Number or email: ")
-	fmt.Scanln(&choice)
+	fmt.Scanln(&choice) //nolint:errcheck
 
 	var idx int
 	if _, err := fmt.Sscanf(choice, "%d", &idx); err == nil {

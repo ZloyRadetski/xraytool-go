@@ -351,7 +351,7 @@ func TestRegenerateConfig_TemplateNotFound(t *testing.T) {
 func TestRegenerateConfig_BadTemplateJSON(t *testing.T) {
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad.json")
-	os.WriteFile(badPath, []byte(`{bad json`), 0644)
+	_ = os.WriteFile(badPath, []byte(`{bad json`), 0644)
 
 	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil, false, "", nil)
 	if err == nil {
@@ -421,14 +421,14 @@ func TestRegenerateConfig_RealityRotation(t *testing.T) {
 	// Check streamSettings realitySettings updated
 	rawStream := ib["streamSettings"]
 	var stream map[string]json.RawMessage
-	json.Unmarshal(rawStream, &stream)
+	json.Unmarshal(rawStream, &stream) //nolint:errcheck
 	var reality map[string]json.RawMessage
-	json.Unmarshal(stream["realitySettings"], &reality)
+	json.Unmarshal(stream["realitySettings"], &reality) //nolint:errcheck
 
 	var pkey string
-	json.Unmarshal(reality["privateKey"], &pkey)
+	json.Unmarshal(reality["privateKey"], &pkey) //nolint:errcheck
 	var sids []string
-	json.Unmarshal(reality["shortIds"], &sids)
+	json.Unmarshal(reality["shortIds"], &sids) //nolint:errcheck
 
 	if pkey != keys.PrivateKey {
 		t.Errorf("expected privateKey %q, got %q", keys.PrivateKey, pkey)

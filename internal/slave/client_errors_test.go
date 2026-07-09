@@ -47,7 +47,7 @@ func TestClientCallErrors(t *testing.T) {
 	// 5. Bad status code with body
 	ts500Body := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal error"))
+		w.Write([]byte("internal error")) //nolint:errcheck
 	}))
 	defer ts500Body.Close()
 	_, err = client.Call(Entry{URL: ts500Body.URL}, "cmd", nil)
@@ -57,7 +57,7 @@ func TestClientCallErrors(t *testing.T) {
 
 	// 6. Insecure client path
 	tsInsecure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`ok`))
+		w.Write([]byte(`ok`)) //nolint:errcheck
 	}))
 	defer tsInsecure.Close()
 	_, err = client.Call(Entry{URL: tsInsecure.URL, AllowInsecure: true}, "cmd", nil)
@@ -156,9 +156,13 @@ func TestEntryEndpointEmpty(t *testing.T) {
 	}
 }
 
+//nolint:unused
 type errReader struct{}
-
-func (errReader) Read(p []byte) (n int, err error) {
+ //nolint:unused
+//nolint:unused
+//nolint:unused
+//nolint:unused
+func (errReader) Read(p []byte) (n int, err error) { //nolint:unused
 	return 0, errors.New("mock read error")
 }
 

@@ -15,7 +15,7 @@ func syncXrayCmd(deps *AppDeps) *cobra.Command {
 based on the XrayUUIDs stored in the SQLite database. Does not delete any clients.
 Only modifies existing clients in the engine that match by email.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			requireRoot()
+			requireRoot() //nolint:errcheck
 
 			svc := statesync.NewService(deps.Registry, deps.Engine, nil)
 			changed, err := svc.SelfHealMasterUUIDs(cmd.Context())

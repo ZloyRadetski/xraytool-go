@@ -62,7 +62,7 @@ func NewRootCmd() *cobra.Command {
 			deps.RunCleanup()
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
+			cmd.Help() //nolint:errcheck
 		},
 	}
 

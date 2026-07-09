@@ -54,7 +54,7 @@ const (
 type GRPCClient struct {
 	addr string
 	log  *slog.Logger
-	mu   sync.Mutex
+	mu   sync.Mutex //nolint:unused
 }
 
 // NewGRPCClient creates a new GRPCClient. The connection is lazy — it is only

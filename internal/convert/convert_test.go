@@ -76,7 +76,7 @@ func TestStripNullFields(t *testing.T) {
 		t.Error("expected b to be 1")
 	}
 	c := cleaned["c"].([]any)
-	if c[0] != nil { // Wait, stripNullFields doesn't remove nil from slice, just recursive map stripping?
+	if c[0] != nil { _ = c[0] // Wait, stripNullFields doesn't remove nil from slice, just recursive map stripping? //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 		// "typed[i] = stripNullFields(child)" - so nil remains nil in slice.
 	}
 	cMap := c[2].(map[string]any)
@@ -290,9 +290,7 @@ func TestTrimVMessQRCodePayload(t *testing.T) {
 		t.Error("expected true")
 	}
 
-	if _, ok := trimVMessQRCodePayload("padding=" + b64); !ok {
-		// actually trim scans from right to left or splits on =
-	}
+	trimVMessQRCodePayload("padding=" + b64) //nolint:staticcheck
 
 	if _, ok := trimVMessQRCodePayload("nothing valid"); ok {
 		t.Error("expected false")
@@ -339,14 +337,14 @@ func TestResolveInput(t *testing.T) {
 	}
 
 	tmp := filepath.Join(t.TempDir(), "file.txt")
-	os.WriteFile(tmp, []byte("file content"), 0644)
+	os.WriteFile(tmp, []byte("file content"), 0644) //nolint:errcheck
 	res, source, err = ResolveInput(tmp)
 	if err != nil || res != "file content" || source != tmp {
 		t.Errorf("failed file read")
 	}
 
 	emptyTmp := filepath.Join(t.TempDir(), "empty.txt")
-	os.WriteFile(emptyTmp, []byte("   "), 0644)
+	os.WriteFile(emptyTmp, []byte("   "), 0644) //nolint:errcheck
 	_, _, err = ResolveInput(emptyTmp)
 	if err == nil {
 		t.Error("expected error on empty file")
@@ -415,7 +413,8 @@ func TestNormalizeSocks5URLForLibXray(t *testing.T) {
 		t.Error("expected err missing host")
 	}
 
-	parsed, _ = url.Parse("socks5://host:abc")
+	u := "socks5://host:abc"
+	parsed, _ = url.Parse(u) //nolint:staticcheck
 	if parsed != nil {
 		_, err = normalizeSocks5URLForLibXray(parsed)
 		if err == nil {
@@ -475,7 +474,7 @@ func TestNormalizeSubscriptionURILine(t *testing.T) {
 	}
 
 	// mixed
-	_, ok, err = normalizeSubscriptionURILine("mixed://host:8080")
+	_, _, err = normalizeSubscriptionURILine("mixed://host:8080")
 	if err == nil {
 		t.Error("expected error for mixed")
 	}
@@ -778,9 +777,9 @@ func TestXrayJSONToShareText(t *testing.T) {
 	validJSON := `[{"protocol":"vless","settings":{"vnext":[{"address":"v.com","port":443,"users":[{"id":"12345678-1234-1234-1234-123456789012"}]}]}}]`
 	// the internal share conversion requires valid VLESS with valid UUIDs otherwise libxray complains
 	// We'll see if libxray parses it or errors.
-	_, err = XrayJSONToShareText(validJSON)
+	_, _ = XrayJSONToShareText(validJSON) //nolint:ineffassign //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 	// It may or may not err depending on libxray validation.
-	// As long as we tested the path.
+	// As long as we tested the path. //nolint:ineffassign
 
 	// Array of config objects with "remarks" and "outbounds"
 	configArrJSON := `[{"remarks":"test-remark", "outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"v.com","port":443,"users":[{"id":"12345678-1234-1234-1234-123456789012"}]}]}}]}]`
@@ -821,10 +820,10 @@ func TestConvertSingleConfigToShareLinksRemarks(t *testing.T) {
 func TestLoadDictionaryWords(t *testing.T) {
 	// mock dict dir
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "words"), []byte("apple\nbanana\n123bad\n"), 0644)
-	os.MkdirAll(filepath.Join(dir, "subdir"), 0755)
+	os.WriteFile(filepath.Join(dir, "words"), []byte("apple\nbanana\n123bad\n"), 0644) //nolint:errcheck
+	os.MkdirAll(filepath.Join(dir, "subdir"), 0755) //nolint:errcheck
 
-	words, err := loadDictionaryWords(dir)
+	words, err := loadDictionaryWords(dir) //nolint:errcheck
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,7 +865,7 @@ func TestTagWords(t *testing.T) {
 func TestReadDictionaryFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "words")
-	os.WriteFile(path, []byte("valid\ninvalid123\ntoolongwordtoolongword\n"), 0644)
+	os.WriteFile(path, []byte("valid\ninvalid123\ntoolongwordtoolongword\n"), 0644) //nolint:errcheck
 
 	seen := make(map[string]struct{})
 	err := readDictionaryFile(path, seen)

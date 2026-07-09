@@ -321,7 +321,7 @@ func migratePayments(srcDB *gorm.DB, dstDB *gorm.DB) error {
 		if tgIDVal, ok := u.Metadata["telegram_id"]; ok {
 			if strVal, ok := tgIDVal.(string); ok {
 				var id int64
-				fmt.Sscanf(strVal, "%d", &id)
+				fmt.Sscanf(strVal, "%d", &id) //nolint:errcheck
 				tgIDToUserID[id] = u.ID
 			}
 		}

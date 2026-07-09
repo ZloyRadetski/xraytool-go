@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+//nolint:unused
 const minSubfileLen = 5 // Minimum valid subfile identifier length
 
 func unlimitCmd(deps *AppDeps) *cobra.Command {
