@@ -149,7 +149,26 @@ func (s *Service) AppendRemoveEvent(ctx context.Context, email string) (int64, e
 
 // MasterState returns the current master sync state (event_id + hash).
 func (s *Service) MasterState(ctx context.Context) (domain.SyncState, error) {
-	return s.registry.SyncEvents().GetState(ctx)
+	state, err := s.registry.SyncEvents().GetState(ctx)
+	if err != nil {
+		return state, err
+	}
+
+	// Migration check: if we have users but no sync state, initialize it
+	if state.LastEventID == 0 && state.StateHash == "" {
+		users, _ := s.BuildSnapshot(ctx)
+		if len(users) > 0 {
+			state = domain.SyncState{
+				LastEventID: 1,
+				StateHash:   "migrated_from_legacy",
+			}
+			if err := s.registry.SyncEvents().SaveState(ctx, state); err == nil {
+				s.log.Info("sync state initialized for migration", "users", len(users))
+			}
+		}
+	}
+
+	return state, nil
 }
 
 // BuildDelta returns the ordered list of events since afterID.
