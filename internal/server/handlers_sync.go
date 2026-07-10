@@ -223,10 +223,12 @@ func (r *Router) handleSyncFullTrigger(w http.ResponseWriter, req *http.Request,
 		return
 	}
 	targetHash := body.Auth
-	masterBaseURL := body.UUID // Master passes its own base URL so slave can pull.
+	
+	// Slave reads its own configured master URL to know where to pull from.
+	masterBaseURL := r.cfg.MasterAPI.URL
 
 	if masterBaseURL == "" {
-		writeError(w, http.StatusBadRequest, "master_url is required")
+		writeError(w, http.StatusBadRequest, "master_api.url is not configured on this slave")
 		return
 	}
 

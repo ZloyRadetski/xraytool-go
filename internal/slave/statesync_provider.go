@@ -108,8 +108,8 @@ func (p *stateSyncProvider) syncOneSlave(
 	// ── Phase 1: Ping ────────────────────────────────────────────────────────
 	var checkResult domain.SyncCheckResult
 	err := p.registry.client.CallDecode(entry, "sync-ping", map[string]string{
-		"last_event_id": strconv.FormatInt(masterState.LastEventID, 10),
-		"state_hash":    masterState.StateHash,
+		"payload": strconv.FormatInt(masterState.LastEventID, 10),
+		"auth":    masterState.StateHash,
 	}, &checkResult)
 	if err != nil {
 		return fmt.Errorf("ping failed: %w", err)
@@ -156,9 +156,9 @@ func (p *stateSyncProvider) sendDelta(entry Entry, delta []domain.SyncDeltaEvent
 		return fmt.Errorf("marshal delta: %w", err)
 	}
 	_, err = p.registry.client.Call(entry, "sync-delta", map[string]string{
-		"events":              string(eventsJSON),
-		"target_event_id":     strconv.FormatInt(masterState.LastEventID, 10),
-		"target_state_hash":   masterState.StateHash,
+		"payload": string(eventsJSON),
+		"uuid":    strconv.FormatInt(masterState.LastEventID, 10),
+		"auth":    masterState.StateHash,
 	})
 	return err
 }
@@ -171,10 +171,8 @@ func (p *stateSyncProvider) triggerFullSync(
 	masterState domain.SyncState,
 ) error {
 	_, err := p.registry.client.Call(entry, "sync-full-trigger", map[string]string{
-		"target_event_id":   strconv.FormatInt(masterState.LastEventID, 10),
-		"target_state_hash": masterState.StateHash,
-		// The slave will use the same X-API-Key to call back the master snapshot endpoint.
-		// We pass the master's base URL so the slave knows where to pull from.
+		"payload": strconv.FormatInt(masterState.LastEventID, 10),
+		"auth":    masterState.StateHash,
 	})
 	return err
 }
