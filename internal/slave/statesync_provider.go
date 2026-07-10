@@ -4,33 +4,50 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 
 	"xraytool/internal/domain"
-	"xraytool/internal/vpn"
+	"xraytool/internal/statesync"
 )
 
+// stateSyncProvider implements domain.StateSyncSlaveProvider.
+// It orchestrates the three-phase sync protocol:
+//
+//  1. Ping — check if slave state_hash matches master.
+//  2. Delta — send ordered list of events since slave's last_event_id.
+//  3. Full-sync — trigger paginated snapshot pull when delta is unavailable.
 type stateSyncProvider struct {
 	registry        *Registry
-	engine          domain.Engine
-	domainReg       domain.Registry
+	syncSvc         *statesync.Service
 	realityRotation bool
 	realityKeysPath string
+	log             *slog.Logger
 }
 
-func NewStateSyncProvider(registry *Registry, engine domain.Engine, domainReg domain.Registry, realityRotation bool, realityKeysPath string) domain.StateSyncSlaveProvider {
+func NewStateSyncProvider(
+	registry *Registry,
+	syncSvc *statesync.Service,
+	realityRotation bool,
+	realityKeysPath string,
+	log *slog.Logger,
+) domain.StateSyncSlaveProvider {
+	if log == nil {
+		log = slog.Default()
+	}
 	return &stateSyncProvider{
 		registry:        registry,
-		engine:          engine,
-		domainReg:       domainReg,
+		syncSvc:         syncSvc,
 		realityRotation: realityRotation,
 		realityKeysPath: realityKeysPath,
+		log:             log.With("component", "statesync-provider"),
 	}
 }
 
 func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.SyncResult, error) {
-	// Propagate Reality keys first if rotation is enabled
+	// 0. Propagate Reality keys first if rotation is enabled.
 	if p.realityRotation && p.realityKeysPath != "" && !dryRun {
 		if keysBytes, err := os.ReadFile(p.realityKeysPath); err == nil {
 			p.registry.PropagateAll("sync-keys", map[string]string{
@@ -39,22 +56,10 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 		}
 	}
 
-	subs, err := p.domainReg.Subscriptions().FindAll(ctx)
+	// 1. Get master's current state.
+	masterState, err := p.syncSvc.MasterState(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
-	}
-
-	blockedMap := p.getBlockedEmails(ctx)
-
-	dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
-	for _, sub := range subs {
-		if sub.Email == "" || sub.XrayUUID == "" {
-			continue
-		}
-		if sub.Status != "active" || blockedMap[sub.Email] {
-			continue
-		}
-		dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
+		return nil, fmt.Errorf("failed to get master state: %w", err)
 	}
 
 	servers, err := p.registry.Servers()
@@ -62,76 +67,114 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 		return nil, fmt.Errorf("no slave servers configured")
 	}
 
-	payloadBytes, err := json.Marshal(dbUsers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal users: %w", err)
-	}
-
-	results := make([]domain.SyncResult, len(servers))
-	var wg sync.WaitGroup
+	results := make([]domain.SyncResult, 0, len(servers))
 	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	i := 0
-	for srvName := range servers {
+	for srvName, entry := range servers {
+		srvName, entry := srvName, entry
 		wg.Add(1)
-		go func(name string, index int) {
+		go func() {
 			defer wg.Done()
+
 			var syncErr error
 			if !dryRun {
-				_, syncErr = p.registry.CallOne(name, "sync-users", map[string]string{
-					"payload": string(payloadBytes),
-				})
+				syncErr = p.syncOneSlave(ctx, srvName, entry, masterState)
 			}
+
 			mu.Lock()
-			results[index] = domain.SyncResult{
-				ServerName: name,
+			results = append(results, domain.SyncResult{
+				ServerName: srvName,
 				Success:    syncErr == nil,
 				Error:      syncErr,
-			}
+			})
 			mu.Unlock()
-		}(srvName, i)
-		i++
+		}()
 	}
 	wg.Wait()
 
 	return results, nil
 }
 
-func (p *stateSyncProvider) getBlockedEmails(ctx context.Context) map[string]bool {
-	blockedMap := make(map[string]bool)
-	if p.domainReg == nil {
-		return blockedMap
+// syncOneSlave runs the full 3-phase protocol for a single slave.
+func (p *stateSyncProvider) syncOneSlave(
+	ctx context.Context,
+	name string,
+	entry Entry,
+	masterState domain.SyncState,
+) error {
+	log := p.log.With("slave", name)
+
+	// ── Phase 1: Ping ────────────────────────────────────────────────────────
+	var checkResult domain.SyncCheckResult
+	err := p.registry.client.CallDecode(entry, "sync-ping", map[string]string{
+		"last_event_id": strconv.FormatInt(masterState.LastEventID, 10),
+		"state_hash":    masterState.StateHash,
+	}, &checkResult)
+	if err != nil {
+		return fmt.Errorf("ping failed: %w", err)
 	}
 
-	// Blocked users (admin block)
-	users, err := p.domainReg.Users().FindAll(ctx)
-	if err == nil {
-		blockedUserIDs := make(map[string]bool)
-		for _, u := range users {
-			if u.IsBlocked {
-				blockedUserIDs[u.ID] = true
-			}
-		}
-
-		if len(blockedUserIDs) > 0 {
-			subs, err := p.domainReg.Subscriptions().FindAll(ctx)
-			if err == nil {
-				for _, sub := range subs {
-					if blockedUserIDs[sub.UserID] && sub.Email != "" {
-						blockedMap[sub.Email] = true
-					}
-				}
-			}
-		}
+	if checkResult.Match {
+		// 99% case: slave is in sync.
+		return nil
 	}
 
-	// Active antifraud bans
-	bans, err := p.domainReg.AntifraudBans().FindActive(ctx)
-	if err == nil {
-		for _, b := range bans {
-			blockedMap[b.Email] = true
-		}
+	// Slave is out of sync. Decide: delta or full-sync?
+	slaveID := checkResult.LastEventID
+
+	// Edge case: same event_id but different hash → direct data corruption on slave.
+	// Delta cannot fix this — enforce full-sync.
+	if slaveID == masterState.LastEventID {
+		log.Warn("statesync: slave has same event_id but different hash — forcing full-sync",
+			"event_id", slaveID, "slave_hash", "?", "master_hash", masterState.StateHash)
+		return p.triggerFullSync(ctx, name, entry, masterState)
 	}
 
-	return blockedMap
+	// ── Phase 2: Try delta ────────────────────────────────────────────────────
+	delta, err := p.syncSvc.BuildDelta(ctx, slaveID)
+	if err != nil {
+		return fmt.Errorf("build delta: %w", err)
+	}
+
+	if delta != nil {
+		log.Info("statesync: sending delta to slave",
+			"from_event_id", slaveID, "events", len(delta))
+		return p.sendDelta(entry, delta, masterState)
+	}
+
+	// ── Phase 3: Full-sync fallback ───────────────────────────────────────────
+	log.Warn("statesync: delta unavailable — falling back to full-sync",
+		"slave_event_id", slaveID, "master_event_id", masterState.LastEventID)
+	return p.triggerFullSync(ctx, name, entry, masterState)
+}
+
+// sendDelta transmits an ordered list of events to the slave.
+func (p *stateSyncProvider) sendDelta(entry Entry, delta []domain.SyncDeltaEvent, masterState domain.SyncState) error {
+	eventsJSON, err := json.Marshal(delta)
+	if err != nil {
+		return fmt.Errorf("marshal delta: %w", err)
+	}
+	_, err = p.registry.client.Call(entry, "sync-delta", map[string]string{
+		"events":              string(eventsJSON),
+		"target_event_id":     strconv.FormatInt(masterState.LastEventID, 10),
+		"target_state_hash":   masterState.StateHash,
+	})
+	return err
+}
+
+// triggerFullSync tells the slave to start pulling a paginated snapshot.
+func (p *stateSyncProvider) triggerFullSync(
+	ctx context.Context,
+	name string,
+	entry Entry,
+	masterState domain.SyncState,
+) error {
+	_, err := p.registry.client.Call(entry, "sync-full-trigger", map[string]string{
+		"target_event_id":   strconv.FormatInt(masterState.LastEventID, 10),
+		"target_state_hash": masterState.StateHash,
+		// The slave will use the same X-API-Key to call back the master snapshot endpoint.
+		// We pass the master's base URL so the slave knows where to pull from.
+	})
+	return err
 }

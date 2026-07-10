@@ -9,18 +9,25 @@ import (
 )
 
 // SyncStatesWorker periodically synchronizes state from master to all slaves.
+// On every tick it:
+//  1. Self-heals the master's Xray runtime against the DB.
+//  2. Runs a 3-phase sync for each slave (ping → delta → full).
+//  3. Purges old sync events once per day.
 type SyncStatesWorker struct {
-	syncSvc  *statesync.Service
-	interval time.Duration
-	log      *slog.Logger
+	syncSvc      *statesync.Service
+	interval     time.Duration
+	log          *slog.Logger
+	lastPurge    time.Time
+	purgeInterval time.Duration
 }
 
 // NewSyncStatesWorker creates a new SyncStatesWorker.
 func NewSyncStatesWorker(syncSvc *statesync.Service, interval time.Duration, log *slog.Logger) *SyncStatesWorker {
 	return &SyncStatesWorker{
-		syncSvc:  syncSvc,
-		interval: interval,
-		log:      log.With("component", "syncstates_worker"),
+		syncSvc:       syncSvc,
+		interval:      interval,
+		log:           log.With("component", "syncstates_worker"),
+		purgeInterval: 24 * time.Hour,
 	}
 }
 
@@ -30,7 +37,7 @@ func (w *SyncStatesWorker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
-	// Run once on startup
+	// Run once on startup.
 	w.sync(ctx)
 
 	for {
@@ -45,9 +52,7 @@ func (w *SyncStatesWorker) Run(ctx context.Context) {
 }
 
 func (w *SyncStatesWorker) sync(ctx context.Context) {
-	w.log.Info("Periodic state sync started")
-	
-	// Self-heal Master UUIDs before syncing
+	// Self-heal master UUIDs before syncing slaves.
 	changed, err := w.syncSvc.SelfHealMasterUUIDs(ctx)
 	if err != nil {
 		w.log.Error("Self-healing master UUIDs failed", "err", err)
@@ -61,7 +66,7 @@ func (w *SyncStatesWorker) sync(ctx context.Context) {
 		return
 	}
 	if results == nil {
-		w.log.Info("Periodic state sync skipped: another sync is already running")
+		// nil means another sync is already in progress — skip silently.
 		return
 	}
 
@@ -72,5 +77,10 @@ func (w *SyncStatesWorker) sync(ctx context.Context) {
 			w.log.Error("Slave synchronization failed", "server", res.ServerName, "err", res.Error)
 		}
 	}
-	w.log.Info("Periodic state sync completed")
+
+	// Run retention policy at most once per day.
+	if time.Since(w.lastPurge) >= w.purgeInterval {
+		w.syncSvc.PurgeOldEvents(ctx)
+		w.lastPurge = time.Now()
+	}
 }

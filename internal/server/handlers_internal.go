@@ -31,7 +31,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" && body.Action != "sync-users" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" {
+	if body.Email == "" && body.Action != "sync-users" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" && body.Action != "sync-ping" && body.Action != "sync-delta" && body.Action != "sync-full-trigger" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
@@ -109,6 +109,18 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result) //nolint:errcheck
+		return
+
+	case "sync-ping":
+		r.handleSyncPing(w, req, body)
+		return
+
+	case "sync-delta":
+		r.handleSyncDelta(w, req, body)
+		return
+
+	case "sync-full-trigger":
+		r.handleSyncFullTrigger(w, req, body)
 		return
 
 	case "cli-stats":

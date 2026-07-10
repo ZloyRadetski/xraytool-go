@@ -120,7 +120,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 0}, nil)
 
-		svc := statesync.NewService(regMock, engineMock, nil)
+		svc := statesync.NewService(regMock, engineMock, nil, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
 
 		assert.NoError(t, err)
@@ -158,7 +158,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 0}, nil)
 
-		svc := statesync.NewService(regMock, engineMock, nil)
+		svc := statesync.NewService(regMock, engineMock, nil, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
 
 		assert.NoError(t, err)
@@ -196,7 +196,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 1, Removed: 1}, nil)
 
-		svc := statesync.NewService(regMock, engineMock, nil)
+		svc := statesync.NewService(regMock, engineMock, nil, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
 
 		assert.NoError(t, err)
@@ -234,7 +234,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 1, Removed: 0}, nil)
 
-		svc := statesync.NewService(regMock, engineMock, nil)
+		svc := statesync.NewService(regMock, engineMock, nil, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
 
 		assert.NoError(t, err)
@@ -266,7 +266,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 1}, nil)
 
-		svc := statesync.NewService(regMock, engineMock, nil)
+		svc := statesync.NewService(regMock, engineMock, nil, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
 
 		assert.NoError(t, err)
@@ -306,7 +306,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 1}, nil)
 
-		svc := statesync.NewService(regMock, engineMock, nil)
+		svc := statesync.NewService(regMock, engineMock, nil, nil)
 		changed, err := svc.SelfHealMasterUUIDs(ctx)
 
 		assert.NoError(t, err)

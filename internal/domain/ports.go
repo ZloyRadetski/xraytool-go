@@ -17,6 +17,7 @@ type Registry interface {
 	AntifraudBans() AntifraudBanRepository
 	Devices() DeviceRepository
 	Notifications() SubscriptionNotificationRepository
+	SyncEvents() SyncEventRepository
 
 	// WithTx runs the given function within a database transaction.
 	WithTx(ctx context.Context, fn func(tx Registry) error) error
@@ -193,8 +194,23 @@ type StateSyncSlaveProvider interface {
 	SyncAllSlaves(ctx context.Context, dryRun bool) ([]SyncResult, error)
 }
 
+// SyncResult holds the sync outcome for one slave.
 type SyncResult struct {
 	ServerName string
 	Success    bool
 	Error      error
+}
+
+// SyncEventRepository is the driven port for the append-only sync event log.
+type SyncEventRepository interface {
+	// Append inserts a new event and returns its auto-generated ID.
+	Append(ctx context.Context, action SyncAction, payload string) (int64, error)
+	// GetState returns the current sync position (last_event_id + hash).
+	GetState(ctx context.Context) (SyncState, error)
+	// SaveState upserts the sync_state row (id=1).
+	SaveState(ctx context.Context, state SyncState) error
+	// FindSince returns all events with ID > afterID, ordered ascending.
+	FindSince(ctx context.Context, afterID int64) ([]SyncEvent, error)
+	// PurgeOlderThan deletes events older than the given duration and returns how many were deleted.
+	PurgeOlderThan(ctx context.Context, age time.Duration) (int64, error)
 }

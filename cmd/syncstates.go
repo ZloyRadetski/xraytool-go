@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"xraytool/internal/statesync"
 
 	"github.com/spf13/cobra"
@@ -27,7 +28,7 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			dbReg := deps.Registry
-			svc := statesync.NewService(dbReg, deps.Engine, deps.SlaveProvider)
+			svc := statesync.NewService(dbReg, deps.Engine, deps.SlaveProvider, slog.Default())
 
 			// Self-heal: Sync UUIDs from Database to Master config before building snapshot
 			changed, err := svc.SelfHealMasterUUIDs(context.Background())

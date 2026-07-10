@@ -94,6 +94,8 @@ func autoMigrate(db *gorm.DB) error {
 		&Plan{},
 		&PromoCode{},
 		&AntifraudBan{},
+		&SyncEvent{},
+		&SyncState{},
 	); err != nil {
 		return fmt.Errorf("database: auto-migrate failed: %w", err)
 	}

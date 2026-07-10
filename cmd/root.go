@@ -16,6 +16,7 @@ import (
 	"xraytool/internal/logger"
 	"xraytool/internal/payment"
 	"xraytool/internal/slave"
+	"xraytool/internal/statesync"
 	"xraytool/internal/user"
 	"xraytool/internal/vpn"
 )
@@ -30,6 +31,9 @@ type AppDeps struct {
 	Propagator      domain.EventPropagator
 	ClusterProvider domain.ClusterStatsProvider
 	SlaveProvider   domain.StateSyncSlaveProvider
+	// SyncSvc is the state-sync service created on master nodes.
+	// Passed to both the slave provider and the HTTP router.
+	SyncSvc         *statesync.Service
 	Cleanup         []func()
 }
 
@@ -168,7 +172,18 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
 		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
 		deps.ClusterProvider = slave.NewClusterStatsProvider(slaveReg)
-		deps.SlaveProvider = slave.NewStateSyncProvider(slaveReg, deps.Engine, deps.Registry, cfg.Reality.RotationEnabled, cfg.Reality.KeysFilepath)
+		// syncSvc is created here (Composition Root) so both the slave provider
+		// and the HTTP router can reference the same instance.
+		deps.SyncSvc = statesync.NewService(deps.Registry, deps.Engine, nil, slog.Default())
+		deps.SlaveProvider = slave.NewStateSyncProvider(
+			slaveReg,
+			deps.SyncSvc,
+			cfg.Reality.RotationEnabled,
+			cfg.Reality.KeysFilepath,
+			slog.Default(),
+		)
+		// Wire the provider back into syncSvc so SyncAllSlaves delegates correctly.
+		deps.SyncSvc.SetSlaveProvider(deps.SlaveProvider)
 	}
 
 	return nil

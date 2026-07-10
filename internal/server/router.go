@@ -46,6 +46,7 @@ import (
 	"xraytool/internal/events"
 	"xraytool/internal/mailer"
 	"xraytool/internal/payment"
+	"xraytool/internal/statesync"
 	"xraytool/internal/subscription"
 	usersvc "xraytool/internal/user"
 )
@@ -62,6 +63,10 @@ type Router struct {
 	engine     domain.Engine
 	userSvc    *usersvc.Service
 	paymentSvc *payment.Service
+	// registry is set on slave nodes so that sync handlers can read/write SyncEvents.
+	registry domain.Registry
+	// syncSvc is set on master nodes to serve snapshot/state endpoints.
+	syncSvc *statesync.Service
 	// antifraud hooks — nil when the module is disabled.
 	isBanned    func(email string) bool
 	forceUnban  func(email string)
@@ -191,8 +196,13 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("PUT /api/v1/admin/promocodes/{id}", protected(r.handleAdminEditPromoCode))
 	r.mux.Handle("DELETE /api/v1/admin/promocodes/{id}", protected(r.handleAdminDeletePromoCode))
 
-	// Internal
+	// Internal — existing single-action sync endpoint (kept for backward compat).
 	r.mux.Handle("POST /api/v1/internal/xray/sync", protected(r.handleInternalXraySync))
+
+	// ── New sync endpoints (master serves, slave pulls) ───────────────────────
+	// Master-side: slave calls these to get state info and snapshot chunks.
+	r.mux.Handle("GET /api/v1/internal/xray/sync/snapshot", protected(r.handleSyncSnapshot))
+	r.mux.Handle("GET /api/v1/internal/xray/sync/state", protected(r.handleSyncState))
 
 	// ── Catch-all ─────────────────────────────────────────────────────────────
 	r.mux.HandleFunc("/", r.handleNotFound)

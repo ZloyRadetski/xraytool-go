@@ -216,6 +216,13 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 					logger.Infof("[ANTIFRAUD] Anti-Fraud module DISABLED in config")
 				}
 
+				// Wire sync service: on master, syncSvc is injected later in the
+				// worker block below. On slave nodes we only need registry access
+				// for the ping/delta/full-trigger handlers.
+				if !deps.Cfg.IsMaster() {
+					apiRouter.WithSyncService(nil, deps.Registry)
+				}
+
 				mux.Handle("/", apiRouter)
 				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
 
@@ -230,7 +237,11 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 							logger.Warnf("[WORKER] Invalid worker.sync_states_interval '%s', falling back to 3m", deps.Cfg.Worker.SyncStatesInterval)
 							syncInterval = 3 * time.Minute
 						}
-						syncSvc := statesync.NewService(deps.Registry, vpnEngine, deps.SlaveProvider)
+						syncSvc := deps.SyncSvc
+						if syncSvc == nil {
+							syncSvc = statesync.NewService(deps.Registry, vpnEngine, deps.SlaveProvider, slog.Default())
+						}
+						apiRouter.WithSyncService(syncSvc, deps.Registry)
 						syncWkr := worker.NewSyncStatesWorker(syncSvc, syncInterval, slog.Default())
 						go syncWkr.Run(context.Background())
 						logger.Infof("[WORKER] Background SyncStates Worker started with interval %s", syncInterval)

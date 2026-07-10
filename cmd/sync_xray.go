@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"xraytool/internal/statesync"
 
 	"github.com/spf13/cobra"
@@ -17,7 +18,7 @@ Only modifies existing clients in the engine that match by email.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			requireRoot() //nolint:errcheck
 
-			svc := statesync.NewService(deps.Registry, deps.Engine, nil)
+			svc := statesync.NewService(deps.Registry, deps.Engine, nil, slog.Default())
 			changed, err := svc.SelfHealMasterUUIDs(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("failed to sync UUIDs: %w", err)
