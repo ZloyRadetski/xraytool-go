@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -283,7 +284,19 @@ func pullFullSnapshot(ctx context.Context, masterBaseURL, apiKey string, log *sl
 		Total   int                    `json:"total"`
 	}
 
-	base := strings.TrimRight(masterBaseURL, "/") + "/api/v1/internal/xray/sync/snapshot"
+	masterURL, err := url.Parse(masterBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid master_api.url: %w", err)
+	}
+
+	// Legacy configs set master_api.url to the exact /sync endpoint
+	if strings.HasSuffix(masterURL.Path, "/api/v1/internal/xray/sync") {
+		masterURL.Path += "/snapshot"
+	} else if !strings.HasSuffix(masterURL.Path, "/api/v1/internal/xray/sync/snapshot") {
+		masterURL.Path = strings.TrimRight(masterURL.Path, "/") + "/api/v1/internal/xray/sync/snapshot"
+	}
+	base := masterURL.String()
+
 	var all []domain.VPNUserConfig
 	offset := 0
 	const limit = 1000
