@@ -162,8 +162,14 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		Webhooks:      cfg.Webhooks,
 		WebhookSecret: cfg.WebhookSecret,
 	})
-
 	deps.Propagator = propagator
+
+	// On master, we create syncSvc early and wrap the engine so that all services
+	// (UserSvc, PaymentSvc, etc) automatically log sync events when mutating the engine.
+	if cfg.IsMaster() {
+		deps.SyncSvc = statesync.NewService(deps.Registry, deps.Engine, nil, slog.Default())
+		deps.Engine = statesync.NewEventAwareEngine(deps.Engine, deps.SyncSvc)
+	}
 	deps.UserSvc = user.NewService(deps.Registry, user.Config{IsMaster: cfg.IsMaster(), Domain: cfg.Server.Domain}, deps.Engine, propagator, slog.Default())
 	deps.PaymentSvc = payment.NewService(deps.Registry, deps.Dispatcher, slog.Default())
 
@@ -172,9 +178,7 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
 		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
 		deps.ClusterProvider = slave.NewClusterStatsProvider(slaveReg)
-		// syncSvc is created here (Composition Root) so both the slave provider
-		// and the HTTP router can reference the same instance.
-		deps.SyncSvc = statesync.NewService(deps.Registry, deps.Engine, nil, slog.Default())
+		
 		deps.SlaveProvider = slave.NewStateSyncProvider(
 			slaveReg,
 			deps.SyncSvc,
