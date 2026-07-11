@@ -251,7 +251,7 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 							adapter.OnConfigModified = func() {
 								logger.Infof("[ENGINE] Config modified on master, triggering immediate slave synchronization...")
 								go func() {
-									res, err := syncSvc.SyncAllSlaves(context.Background(), false)
+									res, err := syncSvc.SyncAllSlaves(context.Background(), false, false)
 									if err != nil {
 										logger.Errorf("[ENGINE] Triggered synchronization failed: %v", err)
 									} else if res == nil {

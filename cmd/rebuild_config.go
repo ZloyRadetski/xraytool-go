@@ -60,7 +60,7 @@ If --sync is specified, it will also trigger statesync to rebuild configurations
 
 				fmt.Println("INFO|Propagating config updates and synchronizing all Slaves...")
 				svc := statesync.NewService(deps.Registry, deps.Engine, deps.SlaveProvider, slog.Default())
-				results, err := svc.SyncAllSlaves(ctx, false)
+				results, err := svc.SyncAllSlaves(ctx, false, false)
 				if err != nil {
 					return fmt.Errorf("failed to sync slaves: %w", err)
 				}

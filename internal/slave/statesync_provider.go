@@ -46,7 +46,7 @@ func NewStateSyncProvider(
 	}
 }
 
-func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.SyncResult, error) {
+func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool, forceFull bool) ([]domain.SyncResult, error) {
 	// 0. Propagate Reality keys first if rotation is enabled.
 	if p.realityRotation && p.realityKeysPath != "" && !dryRun {
 		if keysBytes, err := os.ReadFile(p.realityKeysPath); err == nil {
@@ -79,7 +79,7 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool) ([]d
 
 			var syncErr error
 			if !dryRun {
-				syncErr = p.syncOneSlave(ctx, srvName, entry, masterState)
+				syncErr = p.syncOneSlave(ctx, srvName, entry, masterState, forceFull)
 			}
 
 			mu.Lock()
@@ -102,8 +102,14 @@ func (p *stateSyncProvider) syncOneSlave(
 	name string,
 	entry Entry,
 	masterState domain.SyncState,
+	forceFull bool,
 ) error {
 	log := p.log.With("slave", name)
+
+	if forceFull {
+		log.Info("statesync: force full sync requested")
+		return p.triggerFullSync(ctx, name, entry, masterState)
+	}
 
 	// ── Phase 1: Ping ────────────────────────────────────────────────────────
 	var checkResult domain.SyncCheckResult

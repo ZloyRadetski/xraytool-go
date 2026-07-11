@@ -71,7 +71,7 @@ func (s *Service) SetSlaveProvider(p domain.StateSyncSlaveProvider) {
 
 // SyncAllSlaves is the main entry point called by the background worker.
 // It delegates to the slaveProvider which knows how to talk HTTP to each slave.
-func (s *Service) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.SyncResult, error) {
+func (s *Service) SyncAllSlaves(ctx context.Context, dryRun bool, forceFull bool) ([]domain.SyncResult, error) {
 	if s.slaveProvider == nil {
 		return nil, fmt.Errorf("syncstates can only run on master node")
 	}
@@ -80,7 +80,7 @@ func (s *Service) SyncAllSlaves(ctx context.Context, dryRun bool) ([]domain.Sync
 	}
 	defer s.syncMu.Unlock()
 
-	return s.slaveProvider.SyncAllSlaves(ctx, dryRun)
+	return s.slaveProvider.SyncAllSlaves(ctx, dryRun, forceFull)
 }
 
 // SelfHealMasterUUIDs reconciles the master's Xray runtime against the DB.

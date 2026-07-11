@@ -60,7 +60,7 @@ func (w *SyncStatesWorker) sync(ctx context.Context) {
 		w.log.Info("Self-healing master UUIDs completed successfully")
 	}
 
-	results, err := w.syncSvc.SyncAllSlaves(ctx, false)
+	results, err := w.syncSvc.SyncAllSlaves(ctx, false, false)
 	if err != nil {
 		w.log.Error("Failed to sync states to slaves", "err", err)
 		return

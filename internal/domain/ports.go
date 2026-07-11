@@ -191,7 +191,7 @@ type ClusterStatsProvider interface {
 
 // StateSyncSlaveProvider is the driven port for syncing state to slave nodes.
 type StateSyncSlaveProvider interface {
-	SyncAllSlaves(ctx context.Context, dryRun bool) ([]SyncResult, error)
+	SyncAllSlaves(ctx context.Context, dryRun bool, forceFull bool) ([]SyncResult, error)
 }
 
 // SyncResult holds the sync outcome for one slave.

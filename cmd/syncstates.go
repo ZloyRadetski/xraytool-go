@@ -15,6 +15,7 @@ import (
 
 func syncStatesCmd(deps *AppDeps) *cobra.Command {
 	var dryRun bool
+	var forceFull bool
 
 	cmd := &cobra.Command{
 		Use:   "syncstates",
@@ -39,7 +40,7 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 				fmt.Println("INFO|Self-healing complete.")
 			}
 
-			results, err := svc.SyncAllSlaves(context.Background(), dryRun)
+			results, err := svc.SyncAllSlaves(context.Background(), dryRun, forceFull)
 			if err != nil {
 				fmt.Printf("ERROR|%v\n", err)
 				return
@@ -62,5 +63,6 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print changes without applying them")
+	cmd.Flags().BoolVar(&forceFull, "full", false, "Force full synchronization instead of hash-based delta")
 	return cmd
 }

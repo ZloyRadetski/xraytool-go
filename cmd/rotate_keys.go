@@ -54,7 +54,7 @@ func rotateKeysCmd(deps *AppDeps) *cobra.Command {
 			if deps.Cfg.IsMaster() {
 				if deps.SlaveProvider != nil {
 					fmt.Println("INFO|Propagating new keys to all Slaves...")
-					results, err := deps.SlaveProvider.SyncAllSlaves(context.Background(), false)
+					results, err := deps.SlaveProvider.SyncAllSlaves(context.Background(), false, false)
 					if err != nil {
 						fmt.Printf("WARNING|Failed to sync slaves: %v\n", err)
 					} else {
