@@ -168,7 +168,6 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 	if isGzipped {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
-	req.Header.Set("Accept-Encoding", "gzip")
 	applyAuthHeaders(req, entry)
 
 	httpClient := c.http

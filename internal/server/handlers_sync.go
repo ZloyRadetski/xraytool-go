@@ -2,10 +2,8 @@ package server
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"xraytool/internal/domain"
 	"xraytool/internal/statesync"
@@ -309,26 +309,14 @@ func pullFullSnapshot(ctx context.Context, masterBaseURL, apiKey string, log *sl
 			return nil, fmt.Errorf("build request: %w", err)
 		}
 		httpReq.Header.Set("X-API-Key", apiKey)
-		httpReq.Header.Set("Accept-Encoding", "gzip")
+		// http.DefaultClient transparently sets Accept-Encoding: gzip and decodes the response.
 
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
 			return nil, fmt.Errorf("GET %s: %w", url, err)
 		}
 
-		// Decompress response body if gzip-encoded.
-		respBody := resp.Body
-		if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-			gzReader, err := gzip.NewReader(resp.Body)
-			if err != nil {
-				resp.Body.Close()
-				return nil, fmt.Errorf("create gzip reader: %w", err)
-			}
-			defer gzReader.Close()
-			respBody = gzReader
-		}
-
-		body, err := io.ReadAll(io.LimitReader(respBody, 10<<20)) // 10 MB cap per chunk
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap per chunk
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
