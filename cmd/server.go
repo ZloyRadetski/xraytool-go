@@ -132,7 +132,8 @@ func startServerCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			// Sync users from DB to the running xray process (no restart).
-			if deps.Registry != nil && deps.Cfg.Paths.XrayTemplate != "" {
+			// Slaves do not store users in their DB, so running this on a slave would wipe its config.json!
+			if deps.Cfg.IsMaster() && deps.Registry != nil && deps.Cfg.Paths.XrayTemplate != "" {
 				subs, err := deps.Registry.Subscriptions().FindAll(cmd.Context())
 				if err != nil {
 					logger.Warnf("[ENGINE] Failed to load subscriptions for initial sync: %v", err)

@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	loggerService "github.com/xtls/xray-core/app/log/command"
@@ -337,10 +336,6 @@ func (g *GRPCClient) fallbackAddUser(ctx context.Context, payload []TaggedClient
 	defer cancel()
 
 	cmd := exec.CommandContext(callCtx, "xray", "api", "adu", "-s", g.addr, f.Name())
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
@@ -536,10 +531,6 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	defer rmCancel()
 
 	rmCmd := exec.CommandContext(rmCtx, "xray", "api", "rmi", "--server", g.addr, tag)
-	rmCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	rmCmd.Cancel = func() error {
-		return syscall.Kill(-rmCmd.Process.Pid, syscall.SIGKILL)
-	}
 	rmOut, rmErr := rmCmd.CombinedOutput()
 	if rmErr != nil {
 		rmStr := strings.TrimSpace(string(rmOut))
@@ -574,10 +565,6 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 	defer adCancel()
 
 	adCmd := exec.CommandContext(adCtx, "xray", "api", "adi", "--server", g.addr, f.Name())
-	adCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	adCmd.Cancel = func() error {
-		return syscall.Kill(-adCmd.Process.Pid, syscall.SIGKILL)
-	}
 	adOut, adErr := adCmd.CombinedOutput()
 	if adErr != nil {
 		adStr := strings.TrimSpace(string(adOut))
@@ -587,18 +574,10 @@ func (g *GRPCClient) RebuildInbound(ctx context.Context, tag string, inboundJSON
 
 			// Retry rmi
 			rmRetryCmd := exec.CommandContext(rmCtx, "xray", "api", "rmi", "--server", g.addr, tag)
-			rmRetryCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			rmRetryCmd.Cancel = func() error {
-				return syscall.Kill(-rmRetryCmd.Process.Pid, syscall.SIGKILL)
-			}
 			_ = rmRetryCmd.Run()
 
 			// Retry adi
 			adCmdRetry := exec.CommandContext(adCtx, "xray", "api", "adi", "--server", g.addr, f.Name())
-			adCmdRetry.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			adCmdRetry.Cancel = func() error {
-				return syscall.Kill(-adCmdRetry.Process.Pid, syscall.SIGKILL)
-			}
 			adOutRetry, adErrRetry := adCmdRetry.CombinedOutput()
 			if adErrRetry == nil {
 				g.log.Info("xrayapi: inbound rebuilt on retry", "tag", tag)
