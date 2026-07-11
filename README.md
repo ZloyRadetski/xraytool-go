@@ -1,9 +1,10 @@
-# ⚡ xraytool-go
+# xraytool-go
 
-**xraytool-go** — это система управления распределенным кластером VPN-узлов на базе **Xray-core** (VLESS, Hysteria2, VMess, Shadowsocks, Trojan) с архитектурой **Master-Slave** и поддержкой динамической ротации ключей Reality.
+**xraytool-go** — это система управления распределенным кластером VPN-узлов на базе **Xray-core** (VLESS, Hysteria2, VMess, Shadowsocks, Trojan) с архитектурой **Master-Slave** и поддержкой легкого внедрения кастомных ядер.
 
-Проект предназначен для централизованной синхронизации пользователей, автоматического поддержания актуальных ключей безопасности, управления лимитами подключений и предоставления гибкого API подписок.
+Проект предназначен для централизованной синхронизации пользователей, автоматического поддержания актуальных ключей безопасности, управления лимитами подключений и предоставления гибкого API подписок, а также встроенного биллинга и платежных систем. 
 
+[![Docker Build and Publish](https://github.com/ZloyRadetski/xraytool-go/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ZloyRadetski/xraytool-go/actions/workflows/docker-publish.yml)
 ---
 
 ## 🛠️ Инструкция по развертыванию
@@ -33,55 +34,10 @@ go build -o bin/xraytool main.go
 ### 2. Запуск в Docker Compose (Рекомендуемый способ)
 Разверните бэкенд xraytool-go совместно с Xray-core на каждом сервере.
 
-#### Пример `docker-compose.yml`
-```yaml
-version: '3.8'
-
-services:
-  xraytool_backend:
-    image: xraytool_backend:latest
-    container_name: xraytool_backend
-    restart: always
-    volumes:
-      - ./data:/etc/xraytool
-      - ./xray_config:/usr/local/etc/xray
-      - /var/run/docker.sock:/var/run/docker.sock
-    ports:
-      - "8080:8080"
-    environment:
-      - APP_ENV=production
-    depends_on:
-      - xray_core
-
-  xray_core:
-    image: teddysun/xray:latest
-    container_name: xray_core
-    restart: always
-    volumes:
-      - ./xray_config:/usr/local/etc/xray
-      - ./logs:/var/log/xray
-    ports:
-      - "443:443"
-      - "10085:10085" # gRPC API Порт
-```
+#### Пример `docker-compose.yml` можете найти в корне проекта `docker-compose.yml`
 
 ### 3. Настройка конфигурации (`config.yaml`)
-В каталоге `/etc/xraytool/` создайте файл конфигурации `config.yaml`:
-
-```yaml
-# Режим работы текущей ноды: "master" или "slave"
-mode: master
-
-# Настройки Reality-ключей (ротация только на Master)
-reality:
-  rotation_enabled: true
-  keys_filepath: "/etc/xraytool/configs/reality.keys"
-
-# Настройки связи Master -> Slave
-slave_api:
-  connect_timeout: 3s
-  request_timeout: 30s
-  remote_path: "/api/v1/internal/xray/sync"
+В каталоге `./data` создайте файл конфигурации `xraytool_config.yaml`:
 ```
 
 ### 4. Первоначальный запуск и синхронизация
@@ -95,5 +51,5 @@ slave_api:
    ```
 3. Выполните синхронизацию со всеми подчиненными узлами (Slaves):
    ```bash
-   xraytool syncstates
+   xraytool syncstates --full
    ```
