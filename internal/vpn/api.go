@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -75,6 +76,10 @@ func (c *Client) AddUser(ctx context.Context, payload []TaggedClient, configPath
 	defer cancel()
 
 	cmd := exec.CommandContext(callCtx, "xray", "api", "adu", "-s", c.addr, f.Name())
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -112,6 +117,10 @@ func (c *Client) AddUser(ctx context.Context, payload []TaggedClient, configPath
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			singleCmd := exec.CommandContext(ctx, "xray", "api", "adu", "-s", c.addr, sf.Name())
+			singleCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			singleCmd.Cancel = func() error {
+				return syscall.Kill(-singleCmd.Process.Pid, syscall.SIGKILL)
+			}
 			singleOut, err := singleCmd.CombinedOutput()
 
 			if err != nil {
@@ -147,6 +156,10 @@ func (c *Client) RemoveUser(ctx context.Context, email string, tags []string) er
 			defer cancel()
 			cmd := exec.CommandContext(callCtx, "xray", "api", "rmu", "-s", c.addr,
 				fmt.Sprintf("-tag=%s", tag), email)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error {
+				return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				errs = append(errs, fmt.Sprintf("tag=%s: %v (output: %s)", tag, err, strings.TrimSpace(string(out))))
@@ -176,6 +189,10 @@ func (c *Client) QueryStats(ctx context.Context) ([]UserStat, error) {
 	defer cancel()
 	cmd := exec.CommandContext(callCtx, "xray", "api", "statsquery",
 		fmt.Sprintf("--server=%s", c.addr))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("xray api statsquery: %w (output: %s)", err, strings.TrimSpace(string(out)))
