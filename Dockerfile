@@ -43,7 +43,7 @@ RUN echo '#!/bin/sh' > /usr/local/bin/systemctl && \
     echo 'exec nsenter -t 1 -m -u -i -n -p systemctl "$@"' >> /usr/local/bin/systemctl && \
     chmod +x /usr/local/bin/systemctl && \
     echo '#!/bin/sh' > /usr/local/bin/xray && \
-    echo 'exec nsenter -t 1 -m -u -i -n -p timeout 15s xray "$@"' >> /usr/local/bin/xray && \
+    echo 'exec nsenter -t 1 -m -u -i -n xray "$@"' >> /usr/local/bin/xray && \
     chmod +x /usr/local/bin/xray
 
 # Run the binary
