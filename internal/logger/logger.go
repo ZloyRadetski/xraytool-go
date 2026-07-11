@@ -1,8 +1,8 @@
 package logger
 
 import (
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"os"
 	"path/filepath"

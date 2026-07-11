@@ -8,7 +8,8 @@ import "os"
 func getWebUser() (uid, gid int, username string) {
 	return 0, 0, "www-data"
 }
- //nolint:unused
+
+//nolint:unused
 //nolint:unused
 //nolint:unused
 //nolint:unused

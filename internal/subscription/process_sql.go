@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"strings"
 	"time"
 

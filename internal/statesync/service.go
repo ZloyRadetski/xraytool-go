@@ -2,8 +2,8 @@ package statesync
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"sync"
 	"time"
@@ -64,7 +64,8 @@ func NewService(
 
 // SetSlaveProvider allows late-binding of the slave provider after construction.
 // This is needed to break the circular dependency:
-//   statesync.Service → slave.stateSyncProvider → statesync.Service
+//
+//	statesync.Service → slave.stateSyncProvider → statesync.Service
 func (s *Service) SetSlaveProvider(p domain.StateSyncSlaveProvider) {
 	s.slaveProvider = p
 }

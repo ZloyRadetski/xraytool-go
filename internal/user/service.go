@@ -63,7 +63,6 @@ func (s *Service) ProcessSQLSubscription(ctx context.Context, cm *subscription.C
 	return subscription.ProcessSQL(ctx, s.registry, cm, dispatcher, subReq, isBanned)
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // CreateUser
 // ─────────────────────────────────────────────────────────────────────────────

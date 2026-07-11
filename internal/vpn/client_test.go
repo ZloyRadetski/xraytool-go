@@ -2,7 +2,7 @@ package vpn
 
 import (
 	"context"
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"testing"

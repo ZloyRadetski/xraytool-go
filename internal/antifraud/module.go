@@ -62,8 +62,8 @@ type Config struct {
 	SuspiciousIPThreshold int
 	ReportToMaster        bool
 
-	IsMaster          bool
-	APIKey            string
+	IsMaster bool
+	APIKey   string
 }
 
 // Module is the public API for the anti-fraud component.

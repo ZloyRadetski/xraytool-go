@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/glebarez/sqlite v1.11.0
+	github.com/goccy/go-json v0.10.6
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.11.1
 	github.com/xtls/libxray v0.0.0-20260523051618-f6ce61228b56

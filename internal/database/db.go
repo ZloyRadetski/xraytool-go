@@ -11,9 +11,6 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-
-
-
 // Config holds the parameters needed to open a database connection.
 type Config struct {
 	// Driver selects the backend: "postgres" or "sqlite".
@@ -77,11 +74,7 @@ func NewConnection(cfg Config) (*gorm.DB, error) {
 	return gormDB, nil
 }
 
-
 // AutoMigrateAll performs GORM schema migrations and sets up indexes.
-
-
-
 
 func autoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(

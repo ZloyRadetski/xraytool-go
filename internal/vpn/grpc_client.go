@@ -13,8 +13,8 @@ package vpn
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"os"
 	"os/exec"

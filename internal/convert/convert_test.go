@@ -76,7 +76,8 @@ func TestStripNullFields(t *testing.T) {
 		t.Error("expected b to be 1")
 	}
 	c := cleaned["c"].([]any)
-	if c[0] != nil { _ = c[0] // Wait, stripNullFields doesn't remove nil from slice, just recursive map stripping? //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
+	if c[0] != nil {
+		_ = c[0] // Wait, stripNullFields doesn't remove nil from slice, just recursive map stripping? //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 		// "typed[i] = stripNullFields(child)" - so nil remains nil in slice.
 	}
 	cMap := c[2].(map[string]any)
@@ -821,7 +822,7 @@ func TestLoadDictionaryWords(t *testing.T) {
 	// mock dict dir
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "words"), []byte("apple\nbanana\n123bad\n"), 0644) //nolint:errcheck
-	os.MkdirAll(filepath.Join(dir, "subdir"), 0755) //nolint:errcheck
+	os.MkdirAll(filepath.Join(dir, "subdir"), 0755)                                    //nolint:errcheck
 
 	words, err := loadDictionaryWords(dir) //nolint:errcheck
 	if err != nil {

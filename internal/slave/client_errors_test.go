@@ -158,7 +158,8 @@ func TestEntryEndpointEmpty(t *testing.T) {
 
 //nolint:unused
 type errReader struct{}
- //nolint:unused
+
+//nolint:unused
 //nolint:unused
 //nolint:unused
 //nolint:unused

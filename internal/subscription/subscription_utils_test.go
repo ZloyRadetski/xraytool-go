@@ -1,7 +1,7 @@
 package subscription
 
 import (
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +30,8 @@ func TestParseDateToTimestamp(t *testing.T) {
 			if result == 0 {
 				t.Errorf("Expected non-zero timestamp for %q, got 0", tc.input)
 			}
-			if tc.expected != 1893456000 { _ = tc.expected // If not exact matching, just ensure it's >0 //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
+			if tc.expected != 1893456000 {
+				_ = tc.expected // If not exact matching, just ensure it's >0 //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 			}
 		} else {
 			if result != 0 {

@@ -2,8 +2,8 @@ package vpn
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"sync"

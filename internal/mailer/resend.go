@@ -2,8 +2,8 @@ package mailer
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 	"time"

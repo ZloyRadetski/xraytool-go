@@ -268,8 +268,6 @@ func TestHandleEvent_SameIPRepeated_NoBan(t *testing.T) {
 	assert.False(t, bs.isBanned(email), "same IP repeated must not trigger ban")
 }
 
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Module.IngestEvents — unit tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -510,7 +508,6 @@ func BenchmarkHandleEvent_WithDeviceCache(b *testing.B) {
 		an.handleEvent(event{email: "benchhandle@x.com", ip: ips[i%len(ips)]})
 	}
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

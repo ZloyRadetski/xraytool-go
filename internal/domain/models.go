@@ -13,8 +13,8 @@ const (
 
 // SyncEvent is an entry in the append-only changelog of VPN-user mutations.
 type SyncEvent struct {
-	ID        int64
-	Action    SyncAction
+	ID     int64
+	Action SyncAction
 	// Payload is the serialised VPNUserConfig (or just Email for remove).
 	Payload   string
 	CreatedAt time.Time

@@ -3,8 +3,8 @@ package vpn
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"strings"
 
 	"xraytool/internal/domain"

@@ -1,7 +1,7 @@
 package database_test
 
 import (
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"testing"
 
 	"xraytool/internal/database"

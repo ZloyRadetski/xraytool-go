@@ -33,8 +33,8 @@ type AppDeps struct {
 	SlaveProvider   domain.StateSyncSlaveProvider
 	// SyncSvc is the state-sync service created on master nodes.
 	// Passed to both the slave provider and the HTTP router.
-	SyncSvc         *statesync.Service
-	Cleanup         []func()
+	SyncSvc *statesync.Service
+	Cleanup []func()
 }
 
 // RunCleanup executes all registered cleanup functions and clears the slice to prevent double execution.
@@ -178,7 +178,7 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
 		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
 		deps.ClusterProvider = slave.NewClusterStatsProvider(slaveReg)
-		
+
 		deps.SlaveProvider = slave.NewStateSyncProvider(
 			slaveReg,
 			deps.SyncSvc,

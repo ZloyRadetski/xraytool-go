@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 

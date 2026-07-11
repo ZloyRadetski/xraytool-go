@@ -170,7 +170,7 @@ func TestProcessSQL_RealityRotationPlaceholders(t *testing.T) {
 
 	cfg := &appconfig.Config{
 		Paths: appconfig.PathsConf{
-			XrayConfig: "test_xray_config_rr.json",
+			XrayConfig:               "test_xray_config_rr.json",
 			JSONSubscriptionTemplate: "test_configs.txt",
 		},
 		Subscription: appconfig.SubscriptionConf{

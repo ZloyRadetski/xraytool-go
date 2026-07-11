@@ -2,7 +2,7 @@ package slave
 
 import (
 	"context"
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"sync"
 	"time"
@@ -82,7 +82,7 @@ func (r *FraudReporterAdapter) flush() {
 		r.mu.Unlock()
 		return
 	}
-	
+
 	// Chunk size to prevent 413 Request Entity Too Large
 	chunkSize := 1000
 	if len(r.buf) < chunkSize {
@@ -105,7 +105,7 @@ func (r *FraudReporterAdapter) flush() {
 	payload, err := json.Marshal(struct {
 		Events []slaveIPEvent `json:"events"`
 	}{Events: payloadEvents})
-	
+
 	if err != nil {
 		r.log.Error("antifraud slave reporter adapter: failed to marshal batch", slog.String("err", err.Error()))
 		return
@@ -120,10 +120,10 @@ func (r *FraudReporterAdapter) flush() {
 	}
 
 	_, err = r.client.Call(r.entry, "antifraud-events", map[string]string{"payload": string(payload)})
-	
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	if err != nil {
 		r.log.Warn("antifraud slave reporter adapter: failed to reach master", slog.String("err", err.Error()))
 		// Drop the buffer to prevent permanent blockage (e.g. if Nginx returns 413)

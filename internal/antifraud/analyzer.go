@@ -300,8 +300,6 @@ func (a *analyzer) enforce(email, reason string) {
 	)
 }
 
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // unbanCleaner
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,8 +314,8 @@ func (a *analyzer) enforce(email, reason string) {
 //
 // If step 3 finds the user inactive, we simply don't re-add — no zombie/ghost users.
 type unbanCleaner struct {
-	cfg      *Config
-	banStore *banStore
+	cfg        *Config
+	banStore   *banStore
 	registry   domain.Registry
 	banner     domain.SoftBanner
 	propagator domain.EventPropagator

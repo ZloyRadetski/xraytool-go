@@ -15,27 +15,27 @@ import (
 
 // Config is the top-level xraytool configuration.
 type Config struct {
-	Mode          string                 `yaml:"mode"` // "master" or "slave"
-	Engine        EngineConf             `yaml:"engine"`
-	Server        ServerConf             `yaml:"server"`
-	Paths         PathsConf              `yaml:"paths"`
-	Xray          XrayConf               `yaml:"xray"`
-	Stats         StatsConf              `yaml:"stats"`
-	SlaveAPI      SlaveAPIConf           `yaml:"slave_api"`
-	MasterAPI     MasterAPIConf          `yaml:"master_api"`
-	Ports         PortsConf              `yaml:"ports"`
-	Logging       LoggingConf            `yaml:"logging"`
-	Webhooks      []string               `yaml:"webhooks"`
-	Worker        WorkerConf             `yaml:"worker"`
-	Database      DatabaseConf           `yaml:"database"`
-	PlategaSecret string                 `yaml:"platega_secret"`
-	WebhookSecret string                 `yaml:"webhook_secret"`
-	Subscription  SubscriptionConf       `yaml:"subscription"`
-	SlaveServers  map[string]slave.Entry `yaml:"slave_servers"`
-	AntiFraud     AntiFraudConf          `yaml:"anti_fraud"`
-	Mailer        MailerConf             `yaml:"mailer"`
-	Reality       RealityConf            `yaml:"reality"`
-	BlacklistedAdmins []string           `yaml:"blacklisted_admins"`
+	Mode              string                 `yaml:"mode"` // "master" or "slave"
+	Engine            EngineConf             `yaml:"engine"`
+	Server            ServerConf             `yaml:"server"`
+	Paths             PathsConf              `yaml:"paths"`
+	Xray              XrayConf               `yaml:"xray"`
+	Stats             StatsConf              `yaml:"stats"`
+	SlaveAPI          SlaveAPIConf           `yaml:"slave_api"`
+	MasterAPI         MasterAPIConf          `yaml:"master_api"`
+	Ports             PortsConf              `yaml:"ports"`
+	Logging           LoggingConf            `yaml:"logging"`
+	Webhooks          []string               `yaml:"webhooks"`
+	Worker            WorkerConf             `yaml:"worker"`
+	Database          DatabaseConf           `yaml:"database"`
+	PlategaSecret     string                 `yaml:"platega_secret"`
+	WebhookSecret     string                 `yaml:"webhook_secret"`
+	Subscription      SubscriptionConf       `yaml:"subscription"`
+	SlaveServers      map[string]slave.Entry `yaml:"slave_servers"`
+	AntiFraud         AntiFraudConf          `yaml:"anti_fraud"`
+	Mailer            MailerConf             `yaml:"mailer"`
+	Reality           RealityConf            `yaml:"reality"`
+	BlacklistedAdmins []string               `yaml:"blacklisted_admins"`
 }
 
 // EngineConf selects the VPN proxy engine implementation.
@@ -48,10 +48,10 @@ type EngineConf struct {
 
 // WorkerConf holds background worker settings.
 type WorkerConf struct {
-	Enabled            bool     `yaml:"enabled"`             // defaults to true
-	ExpiryInterval     string   `yaml:"expiry_interval"`     // e.g., "5m"
+	Enabled            bool     `yaml:"enabled"`              // defaults to true
+	ExpiryInterval     string   `yaml:"expiry_interval"`      // e.g., "5m"
 	SyncStatesInterval string   `yaml:"sync_states_interval"` // e.g., "3m"
-	ExpirationWarnings []string `yaml:"expiration_warnings"` // e.g., ["72h", "24h", "3h", "1h"]
+	ExpirationWarnings []string `yaml:"expiration_warnings"`  // e.g., ["72h", "24h", "3h", "1h"]
 }
 
 // DummyConfigsConf holds custom text arrays for error dummy profiles.

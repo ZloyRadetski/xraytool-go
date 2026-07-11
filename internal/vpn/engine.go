@@ -17,8 +17,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -607,7 +607,7 @@ func (a *Adapter) ListUsers(_ context.Context) ([]domain.VPNUserConfig, error) {
 func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
- //nolint:ineffassign
+	//nolint:ineffassign
 	_ = context.WithoutCancel(ctx) //nolint:ineffassign //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 	var found bool
 	err := Modify(a.configPath, func(cfg RawConfig) error {
@@ -633,7 +633,7 @@ func (a *Adapter) SetExpire(ctx context.Context, email, expire string) error {
 func (a *Adapter) SetLimit(ctx context.Context, email string, limit float64) error {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
- //nolint:ineffassign
+	//nolint:ineffassign
 	_ = context.WithoutCancel(ctx) //nolint:ineffassign //nolint:staticcheck //nolint:staticcheck //nolint:staticcheck
 	var found bool
 	err := Modify(a.configPath, func(cfg RawConfig) error {
@@ -1061,7 +1061,7 @@ func (a *Adapter) SyncRealityKeys(ctx context.Context, keysBytes []byte) error {
 
 func (a *Adapter) syncRealityKeysLocked(ctx context.Context, keysBytes []byte) error {
 	_ = context.WithoutCancel(ctx)
-	
+
 	// 1. Unmarshal keys
 	var keys RealityKeys
 	if err := json.Unmarshal(keysBytes, &keys); err != nil {

@@ -7,9 +7,9 @@ package server
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"sort"

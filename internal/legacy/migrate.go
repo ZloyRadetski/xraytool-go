@@ -1,8 +1,8 @@
 package legacy
 
 import (
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"strings"
 	"time"
 

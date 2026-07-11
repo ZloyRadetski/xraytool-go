@@ -117,7 +117,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return([]domain.Subscription{}, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		
+
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 0}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil, nil)
@@ -155,7 +155,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		
+
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 0}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil, nil)
@@ -193,7 +193,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		
+
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 1, Removed: 1}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil, nil)
@@ -231,7 +231,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		
+
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{expectedUser}, true).Return(&domain.EngineSyncResult{Added: 1, Removed: 0}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil, nil)
@@ -263,7 +263,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return([]domain.User{}, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		
+
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 1}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil, nil)
@@ -303,7 +303,7 @@ func TestService_SelfHealMasterUUIDs(t *testing.T) {
 		subRepoMock.On("FindAll", ctx).Return(subs, nil)
 		userRepoMock.On("FindAll", ctx).Return(dbUsers, nil)
 		banRepoMock.On("FindActive", ctx).Return([]domain.AntifraudBan{}, nil)
-		
+
 		engineMock.On("SyncUsers", ctx, []domain.VPNUserConfig{}, true).Return(&domain.EngineSyncResult{Added: 0, Removed: 1}, nil)
 
 		svc := statesync.NewService(regMock, engineMock, nil, nil)

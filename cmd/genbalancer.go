@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"

@@ -14,10 +14,10 @@ import (
 //  2. Runs a 3-phase sync for each slave (ping → delta → full).
 //  3. Purges old sync events once per day.
 type SyncStatesWorker struct {
-	syncSvc      *statesync.Service
-	interval     time.Duration
-	log          *slog.Logger
-	lastPurge    time.Time
+	syncSvc       *statesync.Service
+	interval      time.Duration
+	log           *slog.Logger
+	lastPurge     time.Time
 	purgeInterval time.Duration
 }
 

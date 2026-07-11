@@ -1,7 +1,7 @@
 package slave
 
 import (
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"strings"
 
 	"xraytool/internal/domain"

@@ -6,8 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -933,7 +933,7 @@ func parseHeaderMetadata(headerText string) HeaderMeta {
 		case "#max-devices-count": //nolint:errcheck
 			fmt.Sscanf(val, "%d", &meta.MaxDevicesCount) //nolint:errcheck
 		case "#is-user-blocked":
-			var blocked int //nolint:errcheck
+			var blocked int                 //nolint:errcheck
 			fmt.Sscanf(val, "%d", &blocked) //nolint:errcheck
 			meta.IsUserBlocked = blocked == 1
 		case "#profile-title":
@@ -954,7 +954,8 @@ func parseHeaderMetadata(headerText string) HeaderMeta {
 	}
 	return meta
 }
- //nolint:unused
+
+//nolint:unused
 //nolint:unused
 //nolint:unused
 //nolint:unused

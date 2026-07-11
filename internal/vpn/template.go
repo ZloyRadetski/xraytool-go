@@ -1,8 +1,8 @@
 package vpn
 
 import (
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 
 	"xraytool/internal/domain"

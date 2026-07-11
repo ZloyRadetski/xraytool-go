@@ -1,7 +1,7 @@
 package server_test
 
 import (
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"net/http"
 	"testing"
 

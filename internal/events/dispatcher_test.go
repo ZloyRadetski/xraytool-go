@@ -1,7 +1,7 @@
 package events
 
 import (
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/http/httptest"

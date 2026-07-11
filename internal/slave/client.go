@@ -4,9 +4,10 @@ package slave
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"net"
 	"net/http"
@@ -93,15 +94,25 @@ func NewClient(connectTimeout, requestTimeout time.Duration, remotePath string) 
 	transport := &http.Transport{
 		ResponseHeaderTimeout: requestTimeout,
 		DialContext: (&net.Dialer{
-			Timeout: connectTimeout,
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
 		}).DialContext,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
 	}
 	transportInsecure := &http.Transport{
 		ResponseHeaderTimeout: requestTimeout,
 		DialContext: (&net.Dialer{
-			Timeout: connectTimeout,
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 	}
 	return &Client{
 		http:         &http.Client{Transport: transport, Timeout: requestTimeout},
@@ -131,11 +142,33 @@ func (c *Client) Call(entry Entry, cmd string, params map[string]string) (string
 		return "", fmt.Errorf("marshaling params: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	// Compress request body with gzip when it exceeds 1 KB.
+	// The server-side gzipMiddleware will transparently decompress it.
+	var reqBody io.Reader = bytes.NewReader(payload)
+	isGzipped := false
+	if len(payload) > 1024 {
+		var buf bytes.Buffer
+		gzw, gzErr := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+		if gzErr == nil {
+			if _, wErr := gzw.Write(payload); wErr == nil {
+				if cErr := gzw.Close(); cErr == nil {
+					reqBody = &buf
+					isGzipped = true
+				}
+			}
+		}
+		// If compression fails for any reason, fall back to uncompressed.
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, reqBody)
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if isGzipped {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
 	applyAuthHeaders(req, entry)
 
 	httpClient := c.http

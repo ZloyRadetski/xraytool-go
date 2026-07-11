@@ -30,8 +30,10 @@
 package server
 
 import (
+	"compress/gzip"
 	"crypto/subtle"
-	"encoding/json"
+	json "github.com/goccy/go-json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -142,7 +144,12 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("GET /api/v2/sub", http.HandlerFunc(r.handleSubscriptionV2))
 
 	// ── Protected routes ─────────────────────────────────────────────────────
-	protected := r.authMiddleware
+	// All protected routes are gzip-aware:
+	//   - responses are compressed when the client sends Accept-Encoding: gzip
+	//   - request bodies are transparently decompressed when Content-Encoding: gzip
+	protected := func(h http.HandlerFunc) http.Handler {
+		return r.gzipMiddleware(r.authMiddleware(h))
+	}
 
 	// Files & Webhooks
 	r.mux.Handle("POST /api/rest/update-links", protected(r.handleUpdateLinks))
@@ -211,6 +218,71 @@ func (r *Router) registerRoutes() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Middleware
 // ─────────────────────────────────────────────────────────────────────────────
+
+// gzipResponseWriter wraps http.ResponseWriter to transparently compress
+// response bodies using gzip. WriteHeader is forwarded as-is so that
+// status codes (including 204/304) are still sent correctly.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	writer *gzip.Writer
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.writer.Write(b)
+}
+
+// gzipReadCloser wraps a gzip.Reader together with the original body so that
+// both are properly closed when the request body is drained.
+type gzipReadCloser struct {
+	*gzip.Reader
+	underlying io.Closer
+}
+
+func (g *gzipReadCloser) Close() error {
+	if err := g.Reader.Close(); err != nil {
+		_ = g.underlying.Close()
+		return err
+	}
+	return g.underlying.Close()
+}
+
+// gzipMiddleware adds bidirectional gzip support:
+//   - Decompresses request bodies when Content-Encoding: gzip is present.
+//   - Compresses response bodies when the client advertises Accept-Encoding: gzip.
+func (r *Router) gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// ── 1. Decompress incoming request body ───────────────────────────────
+		if strings.Contains(req.Header.Get("Content-Encoding"), "gzip") {
+			gzReader, err := gzip.NewReader(req.Body)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "failed to decode gzip request body")
+				return
+			}
+			req.Body = &gzipReadCloser{Reader: gzReader, underlying: req.Body}
+			req.Header.Del("Content-Encoding")
+		}
+
+		// ── 2. Compress response if client supports it ────────────────────────
+		if !strings.Contains(req.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, req)
+			return
+		}
+
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+
+		gzWriter, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		if err != nil {
+			// Fallback: serve uncompressed if gzip writer fails to init.
+			w.Header().Del("Content-Encoding")
+			next.ServeHTTP(w, req)
+			return
+		}
+		defer gzWriter.Close()
+
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, writer: gzWriter}, req)
+	})
+}
 
 // authMiddleware rejects requests that don't carry a valid X-API-Key header.
 func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {

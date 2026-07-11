@@ -2,7 +2,7 @@ package logger
 
 import (
 	"bytes"
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"strings"

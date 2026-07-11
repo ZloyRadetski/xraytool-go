@@ -156,9 +156,9 @@ func (t *tailer) run(ctx context.Context) {
 	defer t.log.Info("antifraud tailer: stopped")
 
 	var (
-		f      *os.File
-		reader *bufio.Scanner
-		offset int64
+		f          *os.File
+		reader     *bufio.Scanner
+		offset     int64
 		isFirstRun = true
 	)
 
@@ -173,7 +173,7 @@ func (t *tailer) run(ctx context.Context) {
 			reader = nil
 			return
 		}
-		
+
 		if isFirstRun {
 			// On very first startup, skip old logs to avoid mass false-positives
 			// because they would all be assigned time.Now().

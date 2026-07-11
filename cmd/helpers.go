@@ -94,7 +94,7 @@ func validEmail(email string) bool {
 // ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
- //nolint:unused
+//nolint:unused
 // defaultExpireDate returns a date 30 days from now in DD-MM-YYYY format.
 //nolint:unused
 func defaultExpireDate() string {
@@ -104,7 +104,7 @@ func defaultExpireDate() string {
 // ---------------------------------------------------------------------------
 // Slave propagation
 // ---------------------------------------------------------------------------
- //nolint:unused
+//nolint:unused
 // propagate sends a command to all slave servers in parallel and prints results.
 // In batch mode, errors are silently swallowed (callers log separately).
 //nolint:unused

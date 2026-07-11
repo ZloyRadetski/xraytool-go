@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"math/big"
 	"net/url"
@@ -599,9 +599,8 @@ func NormalizeJSONInput(input string) (string, bool, error) {
 		return "", false, nil
 	}
 
-	var raw json.RawMessage
-	if err := json.Unmarshal([]byte(candidate), &raw); err != nil {
-		return "", false, fmt.Errorf("invalid JSON input: %w", err)
+	if !json.Valid([]byte(candidate)) {
+		return "", false, fmt.Errorf("invalid JSON input")
 	}
 
 	return candidate, true, nil
