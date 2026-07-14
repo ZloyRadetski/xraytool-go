@@ -27,6 +27,32 @@ func TestCreatePayment_Success(t *testing.T) {
 	}
 }
 
+func TestCreatePayment_WebEmail_Success(t *testing.T) {
+	r := newTestRouter(t)
+	// 1. Request code for email (which automatically registers the web user)
+	doAuth(r, "POST", "/api/v1/users/request_code", `{"platform":"web","email":"guest_user@example.com"}`)
+
+	// 2. Create payment using email instead of telegram_id
+	w := doAuth(r, "POST", "/api/v1/payments/create", `{"email":"guest_user@example.com","amount":159,"payment_type":"subscription","method":"platega"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d. body: %s", w.Code, w.Body.String())
+	}
+
+	pid := int(jsonBody(t, w)["payment_id"].(float64))
+	if pid <= 0 {
+		t.Errorf("expected valid payment_id")
+	}
+}
+
+func TestCreatePayment_MissingTelegramIdAndEmail(t *testing.T) {
+	r := newTestRouter(t)
+	w := doAuth(r, "POST", "/api/v1/payments/create", `{"amount":159,"payment_type":"subscription","method":"platega"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d", w.Code)
+	}
+}
+
+
 func TestUpdatePaymentStatus_Atomic_Success(t *testing.T) {
 	r := newTestRouter(t)
 	doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":2002,"username":"K"}`)

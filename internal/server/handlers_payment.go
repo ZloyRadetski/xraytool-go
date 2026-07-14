@@ -55,6 +55,7 @@ func buildPaymentResponse(p *domain.Payment) map[string]interface{} {
 func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		TelegramID  int64  `json:"telegram_id"`
+		Email       string `json:"email"`
 		Amount      int    `json:"amount"`
 		PaymentType string `json:"payment_type"`
 		Method      string `json:"method"`
@@ -68,6 +69,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	}
 	reqPayload := payment.CreatePaymentRequest{
 		TelegramID:  body.TelegramID,
+		Email:       body.Email,
 		Amount:      body.Amount,
 		PaymentType: body.PaymentType,
 		Method:      body.Method,

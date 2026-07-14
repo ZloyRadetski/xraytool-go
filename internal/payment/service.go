@@ -34,6 +34,7 @@ func NewService(registry domain.Registry, dispatcher *events.Dispatcher, log *sl
 
 type CreatePaymentRequest struct {
 	TelegramID  int64
+	Email       string
 	Amount      int
 	PaymentType string
 	Method      string
@@ -158,8 +159,8 @@ func (s *Service) CountPaymentsByPromoAndUser(ctx context.Context, promoID int64
 }
 
 func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (*domain.Payment, error) {
-	if req.TelegramID == 0 {
-		return nil, fmt.Errorf("telegram_id is required")
+	if req.TelegramID == 0 && req.Email == "" {
+		return nil, fmt.Errorf("telegram_id or email is required")
 	}
 	if req.PlanID == nil && req.Amount <= 0 {
 		return nil, fmt.Errorf("amount must be positive if plan_id is missing")
@@ -168,8 +169,14 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 		return nil, fmt.Errorf("payment_type is required")
 	}
 
-	tgIDStr := strconv.FormatInt(req.TelegramID, 10)
-	user, err := s.registry.Users().FindByPlatformID(ctx, "telegram", tgIDStr)
+	var user *domain.User
+	var err error
+	if req.TelegramID != 0 {
+		tgIDStr := strconv.FormatInt(req.TelegramID, 10)
+		user, err = s.registry.Users().FindByPlatformID(ctx, "telegram", tgIDStr)
+	} else {
+		user, err = s.registry.Users().FindByPlatformID(ctx, "web", req.Email)
+	}
 	if err != nil {
 		return nil, ErrUserNotFound
 	}
