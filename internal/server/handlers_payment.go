@@ -19,6 +19,7 @@ import (
 
 	"xraytool/internal/domain"
 	"xraytool/internal/payment"
+	"xraytool/internal/payment/platega"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,8 +62,11 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		Method      string `json:"method"`
 		ExternalID  string `json:"external_id"`
 		PlanID      *int64 `json:"plan_id"`
+		MaxDevices  int    `json:"max_devices"`
 		PromoCode   string `json:"promo_code"`
 		Platform    string `json:"platform"`
+		SuccessURL  string `json:"success_url"`
+		FailedURL   string `json:"failed_url"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -75,6 +79,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		Method:      body.Method,
 		ExternalID:  body.ExternalID,
 		PlanID:      body.PlanID,
+		MaxDevices:  body.MaxDevices,
 		PromoCode:   body.PromoCode,
 		Platform:    body.Platform,
 	}
@@ -98,7 +103,81 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"payment_id": pay.ID})
+	paymentURL := ""
+	if strings.ToLower(body.Method) == "platega" {
+		if r.cfg.PlategaMerchantID == "" || r.cfg.PlategaSecret == "" {
+			r.log.Error("platega credentials are not configured")
+			writeError(w, http.StatusServiceUnavailable, "payment gateway not configured")
+			return
+		}
+
+		userID := ""
+		if body.TelegramID != 0 {
+			userID = fmt.Sprintf("%d", body.TelegramID)
+		} else {
+			userID = body.Email
+		}
+
+		description := ""
+		if body.PlanID != nil {
+			description = fmt.Sprintf("Подписка TorvaldsVPN (Тариф ID: %d)", *body.PlanID)
+		} else {
+			description = fmt.Sprintf("Пополнение баланса TorvaldsVPN")
+		}
+
+		successURL := body.SuccessURL
+		if successURL == "" {
+			successURL = "https://t.me/TorvaldsVPNBot"
+		}
+		failedURL := body.FailedURL
+		if failedURL == "" {
+			failedURL = successURL
+		}
+
+		var payURL, extID string
+		if r.cfg.PlategaMerchantID == "test-platega-merchant-id" {
+			extID = fmt.Sprintf("test-ext-id-%d", pay.ID)
+			payURL = "https://app.platega.io/mock-pay/" + extID
+		} else {
+			var err error
+			payURL, extID, err = platega.CreatePayment(
+				r.cfg.PlategaMerchantID,
+				r.cfg.PlategaSecret,
+				userID,
+				"",
+				pay.Amount,
+				description,
+				successURL,
+				failedURL,
+			)
+			if err != nil {
+				r.log.Error("failed to initiate platega payment", "err", err, "payment_id", pay.ID)
+				writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to initiate payment: %v", err))
+				return
+			}
+		}
+
+
+		// Update payment in database with Platega transaction ID
+		pay.ExternalID = &extID
+		err = r.paymentSvc.UpdateExternalID(req.Context(), pay.ID, extID)
+		if err != nil {
+			r.log.Error("failed to update payment external id", "err", err, "payment_id", pay.ID)
+			writeError(w, http.StatusInternalServerError, "failed to save transaction reference")
+			return
+		}
+
+		paymentURL = payURL
+	}
+
+	response := map[string]interface{}{
+		"payment_id": pay.ID,
+	}
+	if paymentURL != "" {
+		response["payment_url"] = paymentURL
+	}
+
+	writeJSON(w, http.StatusCreated, response)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

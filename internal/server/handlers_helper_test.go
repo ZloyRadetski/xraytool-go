@@ -45,7 +45,8 @@ func newTestRouter(t *testing.T) *server.Router {
 	cfg := &appconfig.Config{
 		Server:        appconfig.ServerConf{Domain: "test.example.com"},
 		Webhooks:      []string{}, // no webhooks in tests
-		PlategaSecret: "test-platega-secret",
+		PlategaMerchantID: "test-platega-merchant-id",
+		PlategaSecret:     "test-platega-secret",
 		Paths: appconfig.PathsConf{
 			XrayConfig: f.Name(),
 		},

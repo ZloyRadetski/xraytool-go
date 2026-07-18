@@ -28,6 +28,7 @@ type Config struct {
 	Webhooks          []string               `yaml:"webhooks"`
 	Worker            WorkerConf             `yaml:"worker"`
 	Database          DatabaseConf           `yaml:"database"`
+	PlategaMerchantID string                 `yaml:"platega_merchant_id"`
 	PlategaSecret     string                 `yaml:"platega_secret"`
 	WebhookSecret     string                 `yaml:"webhook_secret"`
 	Subscription      SubscriptionConf       `yaml:"subscription"`
@@ -328,6 +329,7 @@ engine:
   type: "xray"
 
 # Secret used to verify Platega webhooks and API calls between backend and bot
+platega_merchant_id: "your_merchant_id_here"
 platega_secret: "your_secret_here"
 
 # Secret used to sign outgoing webhooks sent to clients-tg-go

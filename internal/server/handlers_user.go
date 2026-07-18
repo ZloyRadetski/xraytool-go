@@ -11,6 +11,7 @@ import (
 	"fmt"
 	json "github.com/goccy/go-json"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -644,6 +645,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		NewEndsAt      string `json:"new_ends_at"`
 		MaxDevices     int    `json:"max_devices"`
 		PlanID         *int64 `json:"plan_id"`
+		PromoCode      string `json:"promo_code"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -679,7 +681,83 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var newEndsAtPtr *time.Time
-	if body.NewEndsAt != "" {
+
+	if body.PlanID != nil {
+		plans, err := r.paymentSvc.FindActivePlans(context.Background())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get plans")
+			return
+		}
+		var plan *domain.Plan
+		for _, p := range plans {
+			if p.ID == *body.PlanID {
+				planCopy := p
+				plan = &planCopy
+				break
+			}
+		}
+		if plan == nil {
+			writeError(w, http.StatusBadRequest, "invalid plan_id")
+			return
+		}
+		
+		extraDevicesCost := 0
+		if body.MaxDevices > 3 {
+			extraDevicesCost = (body.MaxDevices - 3) * 40 * plan.Months
+		}
+		
+		sub, subErr := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+		if subErr == nil && sub.EndsAt != nil && sub.EndsAt.After(time.Now()) && body.MaxDevices > sub.MaxDevices {
+			remainingDuration := sub.EndsAt.Sub(time.Now())
+			remainingDays := float64(remainingDuration.Hours() / 24.0)
+			if remainingDays > 7 {
+				upgradeMonths := int(math.Ceil(remainingDays / 30.0))
+				currentDevices := sub.MaxDevices
+				if currentDevices < 3 {
+					currentDevices = 3
+				}
+				newExtraDevices := body.MaxDevices - currentDevices
+				if newExtraDevices > 0 {
+					extraDevicesCost += newExtraDevices * 40 * upgradeMonths
+				}
+			}
+		}
+		
+		baseAmount := plan.BasePrice + extraDevicesCost
+		globalPrice := baseAmount
+		if plan.GlobalDiscountPercent > 0 {
+			globalPrice = baseAmount - (baseAmount * plan.GlobalDiscountPercent / 100)
+		}
+		
+		promoPrice := baseAmount
+		if body.PromoCode != "" {
+			code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
+			promo, err := r.paymentSvc.FindPromoCodeByCode(context.Background(), code)
+			if err == nil {
+				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
+					// We only check if it applies to platform
+					if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
+						promoPrice = baseAmount - (baseAmount * promo.DiscountPercent / 100)
+					}
+				}
+			}
+		}
+		
+		finalAmount := globalPrice
+		if promoPrice < globalPrice {
+			finalAmount = promoPrice
+		}
+		
+		body.PlanTotalPrice = finalAmount
+
+		// Also calculate the date since plan is specified
+		baseTime := time.Now()
+		if subErr == nil && sub.EndsAt != nil && sub.EndsAt.After(time.Now()) {
+			baseTime = *sub.EndsAt
+		}
+		newEnds := baseTime.AddDate(0, plan.Months, 0)
+		newEndsAtPtr = &newEnds
+	} else if body.NewEndsAt != "" {
 		t, err := time.Parse(time.RFC3339, body.NewEndsAt)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid new_ends_at format")

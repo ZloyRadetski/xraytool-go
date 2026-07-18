@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ type CreatePaymentRequest struct {
 	Method      string
 	ExternalID  string
 	PlanID      *int64
+	MaxDevices  int
 	PromoCode   string
 	Platform    string
 }
@@ -80,7 +82,14 @@ func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, statu
 		s.log.Info("auto-updated payment status", "payment_id", payment.ID, "status", mappedStatus)
 
 		if mappedStatus == "completed" {
-			s.extendSubscriptionForPayment(ctx, tx, payment)
+			if payment.PlanID != nil {
+				s.extendSubscriptionForPayment(ctx, tx, payment)
+			} else if payment.Method != "balance" {
+				if err := tx.Users().AdjustBalance(ctx, payment.UserID, payment.Amount); err != nil {
+					s.log.Error("failed to credit user balance after payment completed", "payment_id", payment.ID, "err", err)
+					return err
+				}
+			}
 			if err := s.applyReferralRewardForPayment(ctx, tx, payment); err != nil {
 				s.log.Error("failed to apply referral reward on platega callback", "err", err)
 			}
@@ -195,12 +204,36 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 			return nil, ErrInvalidPlanID
 		}
 
-		globalPrice := plan.BasePrice
-		if plan.GlobalDiscountPercent > 0 {
-			globalPrice = plan.BasePrice - (plan.BasePrice * plan.GlobalDiscountPercent / 100)
+		var extraDevicesCost int
+		if req.MaxDevices > 3 {
+			extraDevicesCost = (req.MaxDevices - 3) * 40 * plan.Months
 		}
 
-		promoPrice := plan.BasePrice
+		sub, subErr := s.registry.Subscriptions().FindLatestByUserID(ctx, user.ID)
+		if subErr == nil && sub != nil && sub.EndsAt != nil && sub.EndsAt.After(time.Now()) && req.MaxDevices > sub.MaxDevices {
+			remainingDuration := sub.EndsAt.Sub(time.Now())
+			remainingDays := float64(remainingDuration.Hours() / 24.0)
+			if remainingDays > 7 {
+				upgradeMonths := int(math.Ceil(remainingDays / 30.0))
+				currentDevices := sub.MaxDevices
+				if currentDevices < 3 {
+					currentDevices = 3
+				}
+				newExtraDevices := req.MaxDevices - currentDevices
+				if newExtraDevices > 0 {
+					extraDevicesCost += newExtraDevices * 40 * upgradeMonths
+				}
+			}
+		}
+
+		baseAmount := plan.BasePrice + extraDevicesCost
+
+		globalPrice := baseAmount
+		if plan.GlobalDiscountPercent > 0 {
+			globalPrice = baseAmount - (baseAmount * plan.GlobalDiscountPercent / 100)
+		}
+
+		promoPrice := baseAmount
 		if req.PromoCode != "" {
 			code := strings.ToUpper(strings.TrimSpace(req.PromoCode))
 			promo, err := s.registry.Promos().FindByCode(ctx, code)
@@ -208,7 +241,7 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
 					platform := strings.ToLower(strings.TrimSpace(req.Platform))
 					if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
-						promoPrice = plan.BasePrice - (plan.BasePrice * promo.DiscountPercent / 100)
+						promoPrice = baseAmount - (baseAmount * promo.DiscountPercent / 100)
 						promoCodeID = &promo.ID
 					}
 				}
@@ -234,6 +267,16 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 		}
 	}
 
+	customData := domain.Metadata{
+		"telegram_id": req.TelegramID,
+	}
+	if req.Platform != "" {
+		customData["platform"] = req.Platform
+	}
+	if req.MaxDevices > 0 {
+		customData["max_devices"] = req.MaxDevices
+	}
+
 	payment := domain.Payment{
 		UserID:      user.ID,
 		Amount:      finalAmount,
@@ -243,9 +286,7 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 		ExternalID:  externalIDPtr,
 		PlanID:      req.PlanID,
 		PromoCodeID: promoCodeID,
-		CustomData: domain.Metadata{
-			"telegram_id": req.TelegramID,
-		},
+		CustomData:  customData,
 	}
 
 	txErr := s.registry.WithTx(ctx, func(tx domain.Registry) error {
@@ -302,6 +343,18 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 	return &payment, nil
 }
 
+// UpdateExternalID updates the external reference ID for a payment.
+func (s *Service) UpdateExternalID(ctx context.Context, paymentID int64, extID string) error {
+	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		p, err := tx.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
+		if err != nil {
+			return err
+		}
+		p.ExternalID = &extID
+		return tx.Payments().Update(ctx, p)
+	})
+}
+
 // FindPaymentByID returns a single payment by ID.
 func (s *Service) FindPaymentByID(ctx context.Context, idStr string) (*domain.Payment, error) {
 	return s.registry.Payments().FindByID(ctx, idStr)
@@ -331,7 +384,14 @@ func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, stat
 		if status == "completed" {
 			payment, err := tx.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
 			if err == nil {
-				s.extendSubscriptionForPayment(ctx, tx, payment)
+				if payment.PlanID != nil {
+					s.extendSubscriptionForPayment(ctx, tx, payment)
+				} else if payment.Method != "balance" {
+					if err := tx.Users().AdjustBalance(ctx, payment.UserID, payment.Amount); err != nil {
+						s.log.Error("failed to credit user balance after payment status update", "payment_id", payment.ID, "err", err)
+						return err
+					}
+				}
 				if err := s.applyReferralRewardForPayment(ctx, tx, payment); err != nil {
 					s.log.Error("failed to apply referral reward", "err", err)
 				}
@@ -369,6 +429,21 @@ func (s *Service) extendSubscriptionForPayment(ctx context.Context, registry dom
 	if currentSub, subErr := registry.Subscriptions().FindLatestByUserID(ctx, payment.UserID); subErr == nil && currentSub != nil {
 		maxDevices = currentSub.MaxDevices
 	}
+	
+	if payment.CustomData != nil {
+		if md, ok := payment.CustomData["max_devices"]; ok {
+			if floatVal, ok := md.(float64); ok {
+				maxDevices = int(floatVal)
+			} else if intVal, ok := md.(int); ok {
+				maxDevices = intVal
+			}
+		}
+	}
+
+	if maxDevices < 3 {
+		maxDevices = 3
+	}
+
 	if err := registry.Subscriptions().AutoRenewSubscription(ctx, payment.UserID, payment.PlanID, 0, nil, maxDevices); err != nil {
 		s.log.Error("failed to extend subscription after payment completed", "payment_id", payment.ID, "err", err)
 	}
