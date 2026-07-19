@@ -83,7 +83,6 @@ type Device struct {
 	DeviceModel    string
 	DeviceOS       string
 	UserAgent      string
-	LastSeen       time.Time
 }
 
 // Payment records a financial transaction for a user.

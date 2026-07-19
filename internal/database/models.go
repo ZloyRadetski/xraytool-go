@@ -69,7 +69,6 @@ type Device struct {
 	DeviceModel string `gorm:"type:text"`
 	DeviceOS    string `gorm:"type:text"`
 	UserAgent   string `gorm:"type:text"`
-	LastSeen    time.Time
 }
 
 // Payment records a financial transaction for a user.

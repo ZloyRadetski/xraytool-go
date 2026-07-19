@@ -943,7 +943,6 @@ func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, de
 				DeviceModel:    deviceModel,
 				DeviceOS:       deviceOs,
 				UserAgent:      userAgent,
-				LastSeen:       time.Now(),
 			}
 			return tx.Create(&newDevice).Error
 		} else {
@@ -951,7 +950,6 @@ func (r *gormDeviceRepo) TrackDevice(ctx context.Context, subID string, hwid, de
 				"device_model": deviceModel,
 				"device_os":    deviceOs,
 				"user_agent":   userAgent,
-				"last_seen":    time.Now(),
 			}).Error
 		}
 	})
@@ -980,7 +978,7 @@ func (r *gormDeviceRepo) CountBySubscriptions(ctx context.Context, subIDs []stri
 
 func (r *gormDeviceRepo) FindOldestBySubscription(ctx context.Context, subID string, limit int) ([]domain.Device, error) {
 	var devices []Device
-	err := r.db.WithContext(ctx).Where("subscription_id = ?", subID).Order("last_seen asc").Limit(limit).Find(&devices).Error
+	err := r.db.WithContext(ctx).Where("subscription_id = ?", subID).Order("id asc").Limit(limit).Find(&devices).Error
 	if err != nil {
 		return nil, wrapError(err)
 	}
