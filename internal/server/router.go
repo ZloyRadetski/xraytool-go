@@ -160,6 +160,8 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("POST /api/v1/users/register", protected(r.handleRegisterUser))
 	r.mux.Handle("POST /api/v1/users/request_code", protected(r.handleRequestCode))
 	r.mux.Handle("POST /api/v1/users/verify_code", protected(r.handleVerifyCode))
+	r.mux.Handle("POST /api/v1/users/link_session", protected(r.handleLinkSession))
+	r.mux.Handle("POST /api/v1/users/verify_session", protected(r.handleVerifySession))
 	r.mux.Handle("GET /api/v1/users", protected(r.handleListUsers))
 	r.mux.Handle("GET /api/v1/users/admins", protected(r.handleListAdmins))
 	r.mux.Handle("GET /api/v1/users/{platform}/{id}", protected(r.handleGetUserByPlatform))

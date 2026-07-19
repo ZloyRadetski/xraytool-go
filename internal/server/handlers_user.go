@@ -461,7 +461,7 @@ func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
 		identifier = strconv.FormatInt(body.TelegramID, 10)
 	}
 
-	ok, err := verifyOTP(identifier, body.Code)
+	ok, _, err := verifyOTP(identifier, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
 			r.log.Warn("verify_code: brute force detected", "identifier", identifier, "ip", getClientIP(req))
@@ -477,6 +477,106 @@ func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/users/link_session
+// Body: {"session_id": "uuid...", "telegram_id": 123456}
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (r *Router) handleLinkSession(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		SessionID  string `json:"session_id"`
+		TelegramID int64  `json:"telegram_id"`
+	}
+	if !readBody(w, req, &body) {
+		return
+	}
+	if body.SessionID == "" || body.TelegramID == 0 {
+		writeError(w, http.StatusBadRequest, "session_id and telegram_id are required")
+		return
+	}
+	if len(body.SessionID) != 36 || body.SessionID[8] != '-' || body.SessionID[13] != '-' || body.SessionID[18] != '-' || body.SessionID[23] != '-' {
+		writeError(w, http.StatusBadRequest, "invalid session_id format")
+		return
+	}
+
+	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
+	
+	// Rate limit: max 2 requests per 30 seconds per telegram_id to prevent DoS
+	_, rateLimitErr := requestOTP("tg_ratelimit_"+tgIDStr, 30*time.Second)
+	if errors.Is(rateLimitErr, ErrMaxRequestsReached) {
+		writeError(w, http.StatusTooManyRequests, "too many requests, please wait")
+		return
+	}
+
+	code, err := requestOTPWithPayload(body.SessionID, tgIDStr, 5*time.Minute)
+	if err != nil {
+		if errors.Is(err, ErrMaxRequestsReached) {
+			writeError(w, http.StatusTooManyRequests, "too many requests")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to generate otp")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":   true,
+		"code": code,
+	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/users/verify_session
+// Body: {"session_id": "uuid...", "code": "123456"}
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (r *Router) handleVerifySession(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		SessionID string `json:"session_id"`
+		Code      string `json:"code"`
+	}
+	if !readBody(w, req, &body) {
+		return
+	}
+	if body.SessionID == "" || body.Code == "" {
+		writeError(w, http.StatusBadRequest, "session_id and code are required")
+		return
+	}
+
+	ok, payload, err := verifyOTP(body.SessionID, body.Code)
+	if err != nil {
+		if errors.Is(err, ErrMaxAttemptsReached) {
+			writeError(w, http.StatusForbidden, "too many failed attempts")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+
+	tgIDStr := payload
+	if tgIDStr == "" {
+		writeError(w, http.StatusUnauthorized, "invalid session payload")
+		return
+	}
+
+	user, err := r.userSvc.FindUserByPlatformID(context.Background(), "telegram", tgIDStr)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	tgIDInt, _ := strconv.ParseInt(tgIDStr, 10, 64)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":          true,
+		"telegram_id": tgIDInt,
+		"is_admin":    user.IsAdmin,
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

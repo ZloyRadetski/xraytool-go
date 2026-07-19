@@ -20,6 +20,7 @@ var (
 type otpEntry struct {
 	mu           sync.Mutex
 	identifier   string
+	payload      string
 	code         string
 	expiresAt    time.Time
 	attempts     int
@@ -152,6 +153,10 @@ func generateOTPCode() string {
 // Rate limits:
 //   - at most 2 code requests per TTL window (ErrMaxRequestsReached on violation).
 func requestOTP(identifier string, ttl time.Duration) (string, error) {
+	return requestOTPWithPayload(identifier, "", ttl)
+}
+
+func requestOTPWithPayload(identifier, payload string, ttl time.Duration) (string, error) {
 	entry := otpCache.getOrCreate(identifier)
 
 	entry.mu.Lock()
@@ -168,6 +173,7 @@ func requestOTP(identifier string, ttl time.Duration) (string, error) {
 		return "", ErrMaxRequestsReached
 	}
 
+	entry.payload = payload
 	entry.code = generateOTPCode()
 	entry.expiresAt = now.Add(ttl)
 	entry.requestCount++
@@ -182,32 +188,37 @@ func requestOTP(identifier string, ttl time.Duration) (string, error) {
 //   - (false, nil) — wrong code; attempts counter incremented.
 //   - (false, ErrMaxAttemptsReached) — 3rd wrong attempt; entry deleted.
 //   - (false, nil) — identifier not found or code expired.
-func verifyOTP(identifier, code string) (bool, error) {
+func verifyOTP(identifier, code string) (bool, string, error) {
 	entry := otpCache.get(identifier)
 	if entry == nil {
-		return false, nil
+		return false, "", nil
 	}
 
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
 
 	if time.Now().After(entry.expiresAt) {
+		entry.mu.Unlock()
 		otpCache.delete(identifier)
-		return false, nil
+		return false, "", nil
 	}
 
 	if entry.code == code {
+		payload := entry.payload
+		entry.mu.Unlock()
 		otpCache.delete(identifier)
-		return true, nil
+		return true, payload, nil
 	}
 
 	entry.attempts++
-	if entry.attempts >= 3 {
+	attempts := entry.attempts
+	entry.mu.Unlock()
+
+	if attempts >= 3 {
 		otpCache.delete(identifier)
-		return false, ErrMaxAttemptsReached
+		return false, "", ErrMaxAttemptsReached
 	}
 
-	return false, nil
+	return false, "", nil
 }
 
 func init() {

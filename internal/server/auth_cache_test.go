@@ -71,7 +71,7 @@ func TestVerifyOTP_BruteForce(t *testing.T) {
 	code, _ := requestOTP(id, 5*time.Minute)
 
 	for i, wrong := range []string{"000000", "000001", "000002"} {
-		ok, err := verifyOTP(id, wrong)
+		ok, _, err := verifyOTP(id, wrong)
 		if ok {
 			t.Fatalf("attempt %d: expected ok=false", i+1)
 		}
@@ -84,7 +84,7 @@ func TestVerifyOTP_BruteForce(t *testing.T) {
 	}
 
 	// Entry must be deleted — correct code no longer works
-	ok, err := verifyOTP(id, code)
+	ok, _, err := verifyOTP(id, code)
 	if ok || err != nil {
 		t.Fatalf("expected false,nil after deletion; got %v,%v", ok, err)
 	}
@@ -96,7 +96,7 @@ func TestVerifyOTP_Success_TelegramID(t *testing.T) {
 
 	code, _ := requestOTP(id, 5*time.Minute)
 
-	ok, err := verifyOTP(id, code)
+	ok, _, err := verifyOTP(id, code)
 	if !ok || err != nil {
 		t.Fatalf("expected true,nil; got %v,%v", ok, err)
 	}
@@ -114,7 +114,7 @@ func TestVerifyOTP_Success_Email(t *testing.T) {
 
 	code, _ := requestOTP(id, 5*time.Minute)
 
-	ok, err := verifyOTP(id, code)
+	ok, _, err := verifyOTP(id, code)
 	if !ok || err != nil {
 		t.Fatalf("expected true,nil; got %v,%v", ok, err)
 	}
@@ -132,7 +132,7 @@ func TestVerifyOTP_Expired(t *testing.T) {
 	code, _ := requestOTP(id, 1*time.Millisecond)
 	time.Sleep(10 * time.Millisecond)
 
-	ok, err := verifyOTP(id, code)
+	ok, _, err := verifyOTP(id, code)
 	if ok || err != nil {
 		t.Fatalf("expected false,nil for expired code; got %v,%v", ok, err)
 	}
@@ -142,7 +142,7 @@ func TestVerifyOTP_NotFound(t *testing.T) {
 	id := "ghost@example.com"
 	otpCache.delete(id) // ensure not present
 
-	ok, err := verifyOTP(id, "123456")
+	ok, _, err := verifyOTP(id, "123456")
 	if ok || err != nil {
 		t.Fatalf("expected false,nil for unknown identifier; got %v,%v", ok, err)
 	}

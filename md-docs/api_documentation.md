@@ -140,6 +140,55 @@ X-API-Key: secret
 ```
 *(В случае неверного или просроченного кода вернется 401 Unauthorized)*
 
+### 3.3. `POST /api/v1/users/link_session`
+Привязка временной сессии Telegram Deep Link к Telegram ID пользователя. Бэкенд генерирует 6-значный код и сохраняет его во временном кэше (на 5 минут), привязывая `telegram_id` в качестве payload к `session_id`.
+
+**Пример запроса:**
+```http
+POST /api/v1/users/link_session HTTP/1.1
+Content-Type: application/json
+X-API-Key: secret
+
+{
+  "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
+  "telegram_id": 123456789
+}
+```
+
+**Пример ответа (200 OK):**
+```json
+{
+  "ok": true,
+  "code": "843912"
+}
+```
+*(В случае превышения лимитов запросов вернется 429 Too Many Requests. Если session_id имеет неверный формат UUID, вернется 400 Bad Request.)*
+
+### 3.4. `POST /api/v1/users/verify_session`
+Проверка введенного кода подтверждения для сессии Telegram Deep Link. Если код верный, возвращается `telegram_id` пользователя и признак `is_admin` для авторизации на сайте.
+
+**Пример запроса:**
+```http
+POST /api/v1/users/verify_session HTTP/1.1
+Content-Type: application/json
+X-API-Key: secret
+
+{
+  "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
+  "code": "843912"
+}
+```
+
+**Пример ответа (200 OK):**
+```json
+{
+  "ok": true,
+  "telegram_id": 123456789,
+  "is_admin": false
+}
+```
+*(В случае неверного или просроченного кода вернется 401 Unauthorized. После 3 неудачных попыток ввода кода вернется 403 Forbidden.)*
+
 ### 4. `GET /api/v1/users`
 Получение списка всех пользователей.
 
