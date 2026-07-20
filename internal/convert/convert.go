@@ -336,6 +336,7 @@ func normalizeXrayJSONForShareLinks(xrayJSON string) (string, error) {
 		}
 	}
 
+	root = stripNullFields(root)
 	encoded, err := json.Marshal(root)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode Xray JSON after share-link normalization: %w", err)
