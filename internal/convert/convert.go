@@ -33,6 +33,9 @@ func XrayJSONToShareText(xrayJSON string) (string, error) {
 		return "", fmt.Errorf("failed to parse Xray JSON: %w", err)
 	}
 
+	// Clean up empty/null fields so they don't pollute the share link URL
+	root = stripNullFields(root)
+
 	// Case 1: JSON array
 	if array, ok := root.([]any); ok && len(array) > 0 {
 		first := array[0]
@@ -441,8 +444,12 @@ func isEmptyXHTTPValue(v any) bool {
 	}
 	switch val := v.(type) {
 	case string:
-		return val == "" || val == "0"
+		return val == "" || val == "0" || val == "false" || val == "none"
 	case float64:
+		return val == 0
+	case int:
+		return val == 0
+	case int64:
 		return val == 0
 	case bool:
 		return val == false
