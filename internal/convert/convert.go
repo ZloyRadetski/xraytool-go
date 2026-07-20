@@ -388,6 +388,15 @@ func stripNullFields(value any) any {
 				delete(typed, key)
 				continue
 			}
+			if key == "xhttpSettings" || key == "splithttpSettings" {
+				cleaned := stripEmptyXHTTPFields(child)
+				if cleaned == nil {
+					delete(typed, key)
+				} else {
+					typed[key] = cleaned
+				}
+				continue
+			}
 			typed[key] = stripNullFields(child)
 		}
 		return typed
@@ -399,6 +408,50 @@ func stripNullFields(value any) any {
 	default:
 		return value
 	}
+}
+
+func stripEmptyXHTTPFields(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			cleaned := stripEmptyXHTTPFields(child)
+			if isEmptyXHTTPValue(cleaned) {
+				delete(typed, key)
+			} else {
+				typed[key] = cleaned
+			}
+		}
+		if len(typed) == 0 {
+			return nil
+		}
+		return typed
+	case []any:
+		for i, child := range typed {
+			typed[i] = stripEmptyXHTTPFields(child)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+func isEmptyXHTTPValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch val := v.(type) {
+	case string:
+		return val == "" || val == "0"
+	case float64:
+		return val == 0
+	case bool:
+		return val == false
+	case map[string]any:
+		return len(val) == 0
+	case []any:
+		return len(val) == 0
+	}
+	return false
 }
 
 func randomTwoWordTag() (string, error) {
