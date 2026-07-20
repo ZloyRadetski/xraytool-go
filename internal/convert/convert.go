@@ -135,7 +135,67 @@ func convertSingleConfigToShareLinks(xrayJSON string, remarksOverride string) (s
 		links = strings.Join(lines, "\n")
 	}
 
+	links = injectXHTTPSettingsIntoShareLink(links, normalizedJSON)
+
 	return links, nil
+}
+
+func injectXHTTPSettingsIntoShareLink(links string, jsonStr string) string {
+	var root any
+	if err := json.Unmarshal([]byte(jsonStr), &root); err != nil {
+		return links
+	}
+	rootObj, ok := root.(map[string]any)
+	if !ok { return links }
+	outbounds, ok := rootObj["outbounds"].([]any)
+	if !ok || len(outbounds) == 0 { return links }
+	
+	outbound, ok := outbounds[0].(map[string]any)
+	if !ok { return links }
+	streamSettings, ok := outbound["streamSettings"].(map[string]any)
+	if !ok { return links }
+	
+	var targetSettings map[string]any
+	if x, ok := streamSettings["xhttpSettings"].(map[string]any); ok {
+		targetSettings = x
+	} else if s, ok := streamSettings["splithttpSettings"].(map[string]any); ok {
+		targetSettings = s
+	} else {
+		return links
+	}
+
+	lines := strings.Split(links, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" { continue }
+		u, err := url.Parse(line)
+		if err != nil { continue }
+		
+		q := u.Query()
+		fields := []string{"xPaddingMethod", "xPaddingKey", "xPaddingObfsMode", "uplinkHTTPMethod", "xPaddingPlacement", "xPaddingHeader"}
+		modified := false
+		for _, f := range fields {
+			if val, ok := targetSettings[f]; ok && val != nil && val != "" {
+				if f == "xPaddingObfsMode" {
+					if b, ok := val.(bool); ok && b {
+						q.Set(strings.ToLower(f), "true")
+						modified = true
+					}
+				} else {
+					if s, ok := val.(string); ok && s != "" {
+						q.Set(strings.ToLower(f), s)
+						modified = true
+					}
+				}
+			}
+		}
+		
+		if modified {
+			u.RawQuery = q.Encode()
+			lines[i] = u.String()
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ShareLinkToXrayJSON converts a share link (VLESS, VMESS, etc.) to an Xray JSON config
@@ -169,7 +229,66 @@ func ShareLinkToXrayJSONData(shareLink string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return stripJSONNullFields(data)
+	cleaned, err := stripJSONNullFields(data)
+	if err != nil {
+		return nil, err
+	}
+	return injectXHTTPSettingsFromShareLink(cleaned, shareLink), nil
+}
+
+func injectXHTTPSettingsFromShareLink(data json.RawMessage, link string) json.RawMessage {
+	u, err := url.Parse(link)
+	if err != nil || (u.Scheme != "vless" && u.Scheme != "vmess" && u.Scheme != "trojan") {
+		return data
+	}
+	q := u.Query()
+	if q.Get("type") != "xhttp" && q.Get("type") != "splithttp" {
+		return data
+	}
+	
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return data
+	}
+	
+	rootObj, ok := root.(map[string]any)
+	if !ok { return data }
+	outbounds, ok := rootObj["outbounds"].([]any)
+	if !ok { return data }
+	
+	for _, rawOutbound := range outbounds {
+		outbound, ok := rawOutbound.(map[string]any)
+		if !ok { continue }
+		streamSettings, ok := outbound["streamSettings"].(map[string]any)
+		if !ok { continue }
+		
+		var targetSettings map[string]any
+		if x, ok := streamSettings["xhttpSettings"].(map[string]any); ok {
+			targetSettings = x
+		} else if s, ok := streamSettings["splithttpSettings"].(map[string]any); ok {
+			targetSettings = s
+		} else {
+			continue
+		}
+		
+		fields := []string{"xPaddingMethod", "xPaddingKey", "xPaddingObfsMode", "uplinkHTTPMethod", "xPaddingPlacement", "xPaddingHeader"}
+		for _, f := range fields {
+			lowerF := strings.ToLower(f)
+			if val := q.Get(lowerF); val != "" {
+				if lowerF == "xpaddingobfsmode" {
+					targetSettings[f] = val == "true"
+				} else {
+					targetSettings[f] = val
+				}
+			}
+		}
+	}
+	
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return data
+	}
+	return encoded
 }
 
 func normalizeXrayJSONForShareLinks(xrayJSON string) (string, error) {
