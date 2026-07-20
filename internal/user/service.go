@@ -854,3 +854,103 @@ func (s *Service) RegisterTelegramUser(ctx context.Context, req RegisterTelegram
 
 	return newUser, nil
 }
+
+// LinkTelegramAccount links a Telegram account to a Web account.
+// It enforces strict requirements on the TG account: empty balance, no active subscriptions, no payments, no referrals.
+func (s *Service) LinkTelegramAccount(ctx context.Context, webUserID string, tgUserID string) error {
+	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		webUser, err := tx.Users().FindByID(ctx, webUserID)
+		if err != nil {
+			return fmt.Errorf("web user not found: %w", err)
+		}
+
+		tgUser, err := tx.Users().FindByID(ctx, tgUserID)
+		if err != nil {
+			return fmt.Errorf("tg user not found: %w", err)
+		}
+
+		if webUser.ID == tgUser.ID {
+			return fmt.Errorf("попытка привязать аккаунт сам к себе")
+		}
+
+		if webUser.Metadata != nil {
+			if _, ok := webUser.Metadata["telegram_id"]; ok {
+				return fmt.Errorf("к этому веб-аккаунту уже привязан Telegram")
+			}
+		}
+
+		if tgUser.Metadata != nil {
+			if _, hasEmail := tgUser.Metadata["email"]; hasEmail {
+				return fmt.Errorf("Telegram-аккаунт уже привязан к другому веб-аккаунту")
+			}
+		}
+
+		// 1. Check balance
+		if tgUser.Balance != 0 {
+			return fmt.Errorf("Telegram-аккаунт имеет баланс, привязка невозможна")
+		}
+
+		// 2. Check if tgUser was referred
+		if tgUser.ReferredBy != nil && *tgUser.ReferredBy != "" {
+			return fmt.Errorf("Telegram-аккаунт был приглашен по реферальному коду, привязка невозможна")
+		}
+
+		// 3. Check if tgUser referred anyone
+		countRefs, err := tx.Users().CountReferrals(ctx, tgUser.ID)
+		if err != nil {
+			return fmt.Errorf("ошибка проверки рефералов: %w", err)
+		}
+		if countRefs > 0 {
+			return fmt.Errorf("Telegram-аккаунт имеет приглашенных рефералов, привязка невозможна")
+		}
+
+		// 4. Check subscriptions
+		subs, err := tx.Subscriptions().FindByUserID(ctx, tgUser.ID)
+		if err != nil {
+			return fmt.Errorf("ошибка проверки подписок: %w", err)
+		}
+		for _, sub := range subs {
+			if sub.Status != "inactive" || sub.EndsAt != nil {
+				return fmt.Errorf("Telegram-аккаунт имеет или имел подписку, привязка невозможна")
+			}
+		}
+
+		// 5. Check payments
+		payments, err := tx.Payments().FindByUserID(ctx, tgUser.ID)
+		if err != nil {
+			return fmt.Errorf("ошибка проверки платежей: %w", err)
+		}
+		if len(payments) > 0 {
+			return fmt.Errorf("Telegram-аккаунт имеет историю платежей, привязка невозможна")
+		}
+
+		// All checks passed. 
+		var tgIDVal interface{}
+		var ok bool
+		if tgUser.Metadata != nil {
+			tgIDVal, ok = tgUser.Metadata["telegram_id"]
+		}
+		if !ok || tgIDVal == nil {
+			return fmt.Errorf("Telegram-аккаунт не содержит telegram_id")
+		}
+
+		if webUser.Metadata == nil {
+			webUser.Metadata = make(domain.Metadata)
+		}
+		webUser.Metadata["telegram_id"] = tgIDVal
+
+		if usernameVal, ok := tgUser.Metadata["telegram_username"]; ok && usernameVal != nil {
+			webUser.Metadata["telegram_username"] = usernameVal
+		}
+
+		if err := tx.Users().Update(ctx, webUser); err != nil {
+			return fmt.Errorf("failed to update web user metadata: %w", err)
+		}
+
+		if err := tx.Users().DeleteUserAndData(ctx, tgUser.ID); err != nil {
+			return fmt.Errorf("failed to delete tg user: %w", err)
+		}
+
+		return nil
+	})
+}

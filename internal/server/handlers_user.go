@@ -1431,3 +1431,66 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 	r.log.Warn("admin action", "action", "delete-user", "id", idStr, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "success", "ok": true, "message": "User permanently deleted"})
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/users/link_telegram
+// Body: {"session_id": "uuid...", "code": "123456", "email": "user email"}
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (r *Router) handleLinkTelegram(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		SessionID string `json:"session_id"`
+		Code      string `json:"code"`
+		Email     string `json:"email"`
+	}
+	if !readBody(w, req, &body) {
+		return
+	}
+	if body.SessionID == "" || body.Code == "" || body.Email == "" {
+		writeError(w, http.StatusBadRequest, "session_id, code and email are required")
+		return
+	}
+
+	ok, payload, err := verifyOTP(body.SessionID, body.Code)
+	if err != nil {
+		if errors.Is(err, ErrMaxAttemptsReached) {
+			writeError(w, http.StatusForbidden, "too many failed attempts")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+
+	tgIDStr := payload
+	if tgIDStr == "" {
+		writeError(w, http.StatusUnauthorized, "invalid session payload")
+		return
+	}
+
+	// Find the tg user to get tgUserID
+	tgUser, err := r.userSvc.FindUserByPlatformID(req.Context(), "telegram", tgIDStr)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "telegram user not found")
+		return
+	}
+
+	// Find the web user to link to
+	webUser, err := r.userSvc.FindUserByPlatformID(req.Context(), "web", body.Email)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "web user not found")
+		return
+	}
+
+	if err := r.userSvc.LinkTelegramAccount(req.Context(), webUser.ID, tgUser.ID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok": true,
+	})
+}

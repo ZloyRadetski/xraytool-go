@@ -278,6 +278,20 @@ func (r *gormUserRepo) ListUsers(ctx context.Context, page, limit int, search st
 
 func (r *gormUserRepo) DeleteUserAndData(ctx context.Context, userID string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var subIDs []string
+		if err := tx.Model(&Subscription{}).Where("user_id = ?", userID).Pluck("id", &subIDs).Error; err != nil {
+			return wrapError(err)
+		}
+
+		if len(subIDs) > 0 {
+			if err := tx.Where("subscription_id IN ?", subIDs).Delete(&Device{}).Error; err != nil {
+				return wrapError(err)
+			}
+			if err := tx.Where("subscription_id IN ?", subIDs).Delete(&SubscriptionNotification{}).Error; err != nil {
+				return wrapError(err)
+			}
+		}
+
 		if err := tx.Where("user_id = ?", userID).Delete(&Subscription{}).Error; err != nil {
 			return wrapError(err)
 		}
