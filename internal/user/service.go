@@ -923,8 +923,10 @@ func (s *Service) LinkTelegramAccount(ctx context.Context, webUserID string, tgU
 		if err != nil {
 			return fmt.Errorf("ошибка проверки платежей: %w", err)
 		}
-		if len(payments) > 0 {
-			return fmt.Errorf("Telegram-аккаунт имеет историю платежей, привязка невозможна")
+		for _, p := range payments {
+			if p.Status == "completed" || p.Status == "success" || p.Status == "paid" {
+				return fmt.Errorf("Telegram-аккаунт имеет историю платежей, привязка невозможна")
+			}
 		}
 
 		// All checks passed. 
@@ -1025,8 +1027,10 @@ func (s *Service) LinkEmailAccount(ctx context.Context, tgUserID string, email s
 			if err != nil {
 				return fmt.Errorf("ошибка проверки платежей: %w", err)
 			}
-			if len(payments) > 0 {
-				return fmt.Errorf("Веб-аккаунт с этим email имеет историю платежей, привязка невозможна")
+			for _, p := range payments {
+				if p.Status == "completed" || p.Status == "success" || p.Status == "paid" {
+					return fmt.Errorf("Веб-аккаунт с этим email имеет историю платежей, привязка невозможна")
+				}
 			}
 
 			// All checks passed. Delete bare webUser
