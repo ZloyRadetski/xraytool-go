@@ -2,12 +2,15 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"strconv"
 	"sync"
 	"time"
+
+	"gorm.io/gorm"
 
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
@@ -954,3 +957,94 @@ func (s *Service) LinkTelegramAccount(ctx context.Context, webUserID string, tgU
 		return nil
 	})
 }
+
+// LinkEmailAccount links a Web email address to a Telegram account.
+// If a web account with this email exists, it enforces strict requirements: empty balance, no active/ended subscriptions, no payments, no referrals.
+func (s *Service) LinkEmailAccount(ctx context.Context, tgUserID string, email string) error {
+	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		tgUser, err := tx.Users().FindByID(ctx, tgUserID)
+		if err != nil {
+			return fmt.Errorf("tg user not found: %w", err)
+		}
+
+		if tgUser.Metadata != nil {
+			if _, hasEmail := tgUser.Metadata["email"]; hasEmail {
+				return fmt.Errorf("к этому Telegram-аккаунту уже привязан Email")
+			}
+		}
+
+		webUser, err := tx.Users().FindByPlatformID(ctx, "web", email)
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) && err.Error() != "record not found" {
+				return fmt.Errorf("ошибка проверки веб-аккаунта: %w", err)
+			}
+			// User not found - clean state, proceed to link!
+		} else if webUser != nil {
+			if webUser.ID == tgUser.ID {
+				return fmt.Errorf("попытка привязать аккаунт сам к себе")
+			}
+
+			if webUser.Metadata != nil {
+				if _, hasTg := webUser.Metadata["telegram_id"]; hasTg {
+					return fmt.Errorf("Этот Email уже привязан к другому Telegram-аккаунту")
+				}
+			}
+
+			// 1. Check balance
+			if webUser.Balance != 0 {
+				return fmt.Errorf("Веб-аккаунт с этим email имеет баланс, привязка невозможна")
+			}
+
+			// 2. Check if webUser was referred
+			if webUser.ReferredBy != nil && *webUser.ReferredBy != "" {
+				return fmt.Errorf("Веб-аккаунт с этим email был приглашен по реферальному коду, привязка невозможна")
+			}
+
+			// 3. Check if webUser referred anyone
+			countRefs, err := tx.Users().CountReferrals(ctx, webUser.ID)
+			if err != nil {
+				return fmt.Errorf("ошибка проверки рефералов: %w", err)
+			}
+			if countRefs > 0 {
+				return fmt.Errorf("Веб-аккаунт с этим email имеет приглашенных рефералов, привязка невозможна")
+			}
+
+			// 4. Check subscriptions
+			subs, err := tx.Subscriptions().FindByUserID(ctx, webUser.ID)
+			if err != nil {
+				return fmt.Errorf("ошибка проверки подписок: %w", err)
+			}
+			for _, sub := range subs {
+				if sub.Status != "inactive" || sub.EndsAt != nil {
+					return fmt.Errorf("Веб-аккаунт с этим email имеет или имел подписку, привязка невозможна")
+				}
+			}
+
+			// 5. Check payments
+			payments, err := tx.Payments().FindByUserID(ctx, webUser.ID)
+			if err != nil {
+				return fmt.Errorf("ошибка проверки платежей: %w", err)
+			}
+			if len(payments) > 0 {
+				return fmt.Errorf("Веб-аккаунт с этим email имеет историю платежей, привязка невозможна")
+			}
+
+			// All checks passed. Delete bare webUser
+			if err := tx.Users().DeleteUserAndData(ctx, webUser.ID); err != nil {
+				return fmt.Errorf("failed to delete bare web user: %w", err)
+			}
+		}
+
+		if tgUser.Metadata == nil {
+			tgUser.Metadata = make(domain.Metadata)
+		}
+		tgUser.Metadata["email"] = email
+
+		if err := tx.Users().Update(ctx, tgUser); err != nil {
+			return fmt.Errorf("failed to update tg user metadata: %w", err)
+		}
+
+		return nil
+	})
+}
+

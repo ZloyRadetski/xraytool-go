@@ -389,3 +389,38 @@ func TestDeviceManagement(t *testing.T) {
 		t.Fatalf("expected 0 devices, got %d", count)
 	}
 }
+
+func TestLinkEmail_Success(t *testing.T) {
+	r := newTestRouter(t)
+
+	// 1. Register TG user
+	wReg := doAuth(r, "POST", "/api/v1/users/register", `{"telegram_id":888111,"username":"TgUser"}`)
+	if wReg.Code != http.StatusCreated {
+		t.Fatalf("failed to register tg user: %d", wReg.Code)
+	}
+
+	// 2. Request OTP code for web email
+	wReq := doAuth(r, "POST", "/api/v1/users/request_code", `{"platform":"web","email":"testlink@example.com"}`)
+	if wReq.Code != http.StatusOK {
+		t.Fatalf("failed to request code: %d", wReq.Code)
+	}
+
+	// 3. Test link with invalid code -> 401
+	wLinkBad := doAuth(r, "POST", "/api/v1/users/link/email", `{"telegram_id":888111,"email":"testlink@example.com","code":"000000"}`)
+	if wLinkBad.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for bad code, got %d", wLinkBad.Code)
+	}
+
+	// 4. Test link with missing params -> 400
+	wLinkMissing := doAuth(r, "POST", "/api/v1/users/link/email", `{"telegram_id":888111,"email":"","code":"123456"}`)
+	if wLinkMissing.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing email, got %d", wLinkMissing.Code)
+	}
+
+	// 5. Test link for non-existent tg user -> 404 (with dummy code format)
+	wLinkNoUser := doAuth(r, "POST", "/api/v1/users/link/email", `{"telegram_id":9999999,"email":"testlink@example.com","code":"123456"}`)
+	if wLinkNoUser.Code != http.StatusUnauthorized && wLinkNoUser.Code != http.StatusNotFound {
+		t.Errorf("expected 401 or 404 for unverified code/nonexistent user, got %d", wLinkNoUser.Code)
+	}
+}
+

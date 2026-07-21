@@ -1433,7 +1433,7 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/users/link_telegram
+// POST /api/v1/users/link/telegram
 // Body: {"session_id": "uuid...", "code": "123456", "email": "user email"}
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1494,3 +1494,59 @@ func (r *Router) handleLinkTelegram(w http.ResponseWriter, req *http.Request) {
 		"ok": true,
 	})
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/users/link/email
+// Body: {"telegram_id": 123456, "email": "user@example.com", "code": "123456"}
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (r *Router) handleLinkEmail(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		TelegramID int64  `json:"telegram_id"`
+		Email      string `json:"email"`
+		Code       string `json:"code"`
+	}
+	if !readBody(w, req, &body) {
+		return
+	}
+	email := normalizeEmail(body.Email)
+	if body.TelegramID == 0 || email == "" || body.Code == "" {
+		writeError(w, http.StatusBadRequest, "telegram_id, email and code are required")
+		return
+	}
+	if !emailRe.MatchString(email) {
+		writeError(w, http.StatusBadRequest, "invalid email address")
+		return
+	}
+
+	ok, _, err := verifyOTP(email, body.Code)
+	if err != nil {
+		if errors.Is(err, ErrMaxAttemptsReached) {
+			writeError(w, http.StatusForbidden, "too many failed attempts")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+
+	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
+	tgUser, err := r.userSvc.FindUserByPlatformID(req.Context(), "telegram", tgIDStr)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "telegram user not found")
+		return
+	}
+
+	if err := r.userSvc.LinkEmailAccount(req.Context(), tgUser.ID, email); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok": true,
+	})
+}
+
