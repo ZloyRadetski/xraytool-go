@@ -621,6 +621,10 @@ func (s *Service) CountReferrals(ctx context.Context, userID string) (int64, err
 	return s.registry.Users().CountReferrals(ctx, userID)
 }
 
+func (s *Service) CountReferralRewards(ctx context.Context, userID string) (int64, error) {
+	return s.registry.Users().CountReferralRewards(ctx, userID)
+}
+
 func (s *Service) SumReferralRewards(ctx context.Context, userID string) (int64, error) {
 	return s.registry.Users().SumReferralRewards(ctx, userID)
 }

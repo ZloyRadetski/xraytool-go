@@ -199,6 +199,12 @@ func (r *gormUserRepo) CountReferrals(ctx context.Context, referrerID string) (i
 	return count, wrapError(err)
 }
 
+func (r *gormUserRepo) CountReferralRewards(ctx context.Context, referrerID string) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&ReferralReward{}).Where("referrer_id = ?", referrerID).Count(&count).Error
+	return count, wrapError(err)
+}
+
 func (r *gormUserRepo) SumReferralRewards(ctx context.Context, referrerID string) (int64, error) {
 	var total int64
 	err := r.db.WithContext(ctx).Model(&ReferralReward{}).Where("referrer_id = ?", referrerID).Select("COALESCE(SUM(amount),0)").Scan(&total).Error

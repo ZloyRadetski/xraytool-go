@@ -43,6 +43,9 @@ func (r *Router) buildUserResponse(user *domain.User) map[string]interface{} {
 	// Count referral rows where this user is the referrer.
 	referralCount, _ := r.userSvc.CountReferrals(context.Background(), user.ID)
 
+	// Count total purchases made by referrals.
+	referralPurchases, _ := r.userSvc.CountReferralRewards(context.Background(), user.ID)
+
 	// Sum referral rewards earned by this user.
 	referralEarned, _ := r.userSvc.SumReferralRewards(context.Background(), user.ID)
 
@@ -88,9 +91,10 @@ func (r *Router) buildUserResponse(user *domain.User) map[string]interface{} {
 		"sub_status":             sub.Status,
 		"ends_at":                fmtTime(sub.EndsAt),
 		"starts_at":              fmtTime(sub.StartsAt),
-		"auto_renew":             sub.AutoRenew,
-		"referral_count":         referralCount,
-		"referral_earned_amount": referralEarned,
+		"auto_renew":               sub.AutoRenew,
+		"referral_count":           referralCount,
+		"referral_purchases_count": referralPurchases,
+		"referral_earned_amount":   referralEarned,
 		"email":                  email,
 		"link":                   link,
 		"metadata":               user.Metadata,

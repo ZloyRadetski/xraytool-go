@@ -40,6 +40,7 @@ type UserRepository interface {
 	FindByPlatformID(ctx context.Context, platform, id string) (*User, error)
 	AddReferralReward(ctx context.Context, referrerID string, referredID string, paymentID int64, reward int) error
 	CountReferrals(ctx context.Context, referrerID string) (int64, error)
+	CountReferralRewards(ctx context.Context, referrerID string) (int64, error)
 	SumReferralRewards(ctx context.Context, referrerID string) (int64, error)
 	GetReferralStats(ctx context.Context, referrerIDs []string) ([]ReferralStats, error)
 	CountByRefCode(ctx context.Context, code string) (int64, error)
