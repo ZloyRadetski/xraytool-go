@@ -195,7 +195,7 @@ func (r *gormUserRepo) AddReferralReward(ctx context.Context, referrerID string,
 
 func (r *gormUserRepo) CountReferrals(ctx context.Context, referrerID string) (int64, error) {
 	var count int64
-	err := r.db.WithContext(ctx).Model(&ReferralReward{}).Where("referrer_id = ?", referrerID).Count(&count).Error
+	err := r.db.WithContext(ctx).Model(&User{}).Where("referred_by = ?", referrerID).Count(&count).Error
 	return count, wrapError(err)
 }
 
@@ -206,13 +206,61 @@ func (r *gormUserRepo) SumReferralRewards(ctx context.Context, referrerID string
 }
 
 func (r *gormUserRepo) GetReferralStats(ctx context.Context, referrerIDs []string) ([]ReferralStats, error) {
-	var stats []ReferralStats
-	err := r.db.WithContext(ctx).Model(&ReferralReward{}).
+	if len(referrerIDs) == 0 {
+		return nil, nil
+	}
+	type userCount struct {
+		ReferrerID string `gorm:"column:referrer_id"`
+		Count      int64  `gorm:"column:count"`
+	}
+	var uCounts []userCount
+	if err := r.db.WithContext(ctx).Model(&User{}).
+		Where("referred_by IN ?", referrerIDs).
+		Select("referred_by as referrer_id, count(*) as count").
+		Group("referred_by").
+		Scan(&uCounts).Error; err != nil {
+		return nil, wrapError(err)
+	}
+
+	type rewardSum struct {
+		ReferrerID string `gorm:"column:referrer_id"`
+		Total      int64  `gorm:"column:total"`
+	}
+	var rSums []rewardSum
+	if err := r.db.WithContext(ctx).Model(&ReferralReward{}).
 		Where("referrer_id IN ?", referrerIDs).
-		Select("referrer_id, count(*) as count, coalesce(sum(amount),0) as total").
+		Select("referrer_id, coalesce(sum(amount),0) as total").
 		Group("referrer_id").
-		Scan(&stats).Error
-	return stats, err
+		Scan(&rSums).Error; err != nil {
+		return nil, wrapError(err)
+	}
+
+	statsMap := make(map[string]*ReferralStats)
+	for _, uc := range uCounts {
+		statsMap[uc.ReferrerID] = &ReferralStats{
+			ReferrerID: uc.ReferrerID,
+			Count:      uc.Count,
+			Total:      0,
+		}
+	}
+	for _, rs := range rSums {
+		s, ok := statsMap[rs.ReferrerID]
+		if !ok {
+			statsMap[rs.ReferrerID] = &ReferralStats{
+				ReferrerID: rs.ReferrerID,
+				Count:      0,
+				Total:      rs.Total,
+			}
+		} else {
+			s.Total = rs.Total
+		}
+	}
+
+	res := make([]ReferralStats, 0, len(statsMap))
+	for _, s := range statsMap {
+		res = append(res, *s)
+	}
+	return res, nil
 }
 
 func (r *gormUserRepo) CountByRefCode(ctx context.Context, code string) (int64, error) {

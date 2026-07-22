@@ -304,42 +304,28 @@ func normalizeEmail(raw string) string {
 }
 
 func extractTelegramID(metadata domain.Metadata) int64 {
-	if metadata == nil {
-		return 0
-	}
-	switch v := metadata["telegram_id"].(type) {
-	case float64:
-		return int64(v)
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case string:
-		parsed, _ := strconv.ParseInt(v, 10, 64)
-		return parsed
-	default:
-		return 0
-	}
+	return domain.ExtractTelegramID(metadata)
 }
 
 // findOrCreateWebUser looks up a user by email. If the user does not exist, it
 // creates a new User + Subscription record inside a single DB transaction.
 // This implements the "open registration" flow (Variant A).
-func (r *Router) findOrCreateWebUser(email string) (*domain.User, error) {
-	return r.userSvc.FindOrCreateWebUser(context.Background(), email)
+func (r *Router) findOrCreateWebUser(email string, refCode ...string) (*domain.User, error) {
+	return r.userSvc.FindOrCreateWebUser(context.Background(), email, refCode...)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/users/request_code
 // Body (Telegram bot):  {"telegram_id": 123}
-// Body (Web / email):   {"platform": "web", "email": "user@example.com"}
+// Body (Web / email):   {"platform": "web", "email": "user@example.com", "referred_by_code": "ref_xxx"}
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	var body struct {
-		Platform   string `json:"platform"`
-		TelegramID int64  `json:"telegram_id"` // kept for bot backwards-compatibility
-		Email      string `json:"email"`
+		Platform       string `json:"platform"`
+		TelegramID     int64  `json:"telegram_id"` // kept for bot backwards-compatibility
+		Email          string `json:"email"`
+		ReferredByCode string `json:"referred_by_code"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -354,7 +340,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		}
 
 		// Find or auto-create the user account.
-		_, err := r.findOrCreateWebUser(email)
+		_, err := r.findOrCreateWebUser(email, body.ReferredByCode)
 		if err != nil {
 			r.log.Error("request_code: findOrCreateWebUser", "email", email, "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to process user")
@@ -601,18 +587,18 @@ func (r *Router) handleGetUserByPlatform(w http.ResponseWriter, req *http.Reques
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *Router) handleGetUserByRef(w http.ResponseWriter, req *http.Request) {
-	code := req.PathValue("code")
+	code := user.SanitizeRefCode(req.PathValue("code"))
 	if code == "" {
-		writeError(w, http.StatusBadRequest, "ref code is required")
+		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	user, err := r.userSvc.FindUserByRefCode(context.Background(), code)
+	u, err := r.userSvc.FindUserByRefCode(context.Background(), code)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, r.buildUserResponse(user))
+	writeJSON(w, http.StatusOK, r.buildUserResponse(u))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

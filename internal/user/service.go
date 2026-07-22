@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,7 @@ type Service struct {
 	propagator domain.EventPropagator
 	log        *slog.Logger
 	wg         sync.WaitGroup
+	mu         sync.Mutex
 }
 
 // Wait blocks until all async propagations have finished.
@@ -710,6 +713,21 @@ func (s *Service) DeleteUserAndData(ctx context.Context, userID string) error {
 	return s.registry.Users().DeleteUserAndData(ctx, userID)
 }
 
+var refCodeRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-]+$`)
+
+// SanitizeRefCode validates and cleans a referral code.
+// It trims whitespace, verifies length (1-64 chars), and ensures valid characters.
+func SanitizeRefCode(code string) string {
+	code = strings.TrimSpace(code)
+	if len(code) == 0 || len(code) > 64 {
+		return ""
+	}
+	if !refCodeRegex.MatchString(code) {
+		return ""
+	}
+	return code
+}
+
 func (s *Service) GenerateRefCode(ctx context.Context) string {
 	for {
 		code := "ref_" + generate.Secret(8)
@@ -720,31 +738,65 @@ func (s *Service) GenerateRefCode(ctx context.Context) string {
 	}
 }
 
-func (s *Service) FindOrCreateWebUser(ctx context.Context, email string) (*domain.User, error) {
+func (s *Service) FindOrCreateWebUser(ctx context.Context, email string, refCode ...string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	user, err := s.registry.Users().FindByPlatformID(ctx, "web", email)
-	if err == nil {
+	if err == nil && user != nil {
 		return user, nil
+	}
+
+	cleanRefCode := ""
+	if len(refCode) > 0 {
+		cleanRefCode = SanitizeRefCode(refCode[0])
+	}
+
+	var referredByID *string
+	if cleanRefCode != "" {
+		referrer, err := s.registry.Users().FindByRefCode(ctx, cleanRefCode)
+		if err == nil && referrer != nil {
+			// Self-referral check: prevent setting self as referrer
+			isSelfReferral := strings.EqualFold(referrer.Username, email)
+			if referrer.Metadata != nil {
+				if refEmail, ok := referrer.Metadata["email"].(string); ok && strings.EqualFold(refEmail, email) {
+					isSelfReferral = true
+				}
+			}
+			if isSelfReferral {
+				s.log.Warn("findOrCreateWebUser: self-referral attempted, ignoring ref code", "email", email, "code", cleanRefCode)
+			} else {
+				referredByID = &referrer.ID
+			}
+		} else {
+			logCode := cleanRefCode
+			if len(logCode) > 32 {
+				logCode = logCode[:32] + "..."
+			}
+			s.log.Warn("findOrCreateWebUser: invalid ref code provided", "code", logCode)
+		}
 	}
 
 	var newUser *domain.User
 	txErr := s.registry.WithTx(ctx, func(tx domain.Registry) error {
 		userID, _ := generate.UUID()
 
-		var refCode string
+		var newRefCode string
 		for {
-			refCode = "ref_" + generate.Secret(8)
-			count, _ := tx.Users().CountByRefCode(ctx, refCode)
+			newRefCode = "ref_" + generate.Secret(8)
+			count, _ := tx.Users().CountByRefCode(ctx, newRefCode)
 			if count == 0 {
 				break
 			}
 		}
 
 		u := domain.User{
-			ID:       userID,
-			Username: email,
-			Balance:  0,
-			IsAdmin:  false,
-			RefCode:  refCode,
+			ID:         userID,
+			Username:   email,
+			Balance:    0,
+			IsAdmin:    false,
+			RefCode:    newRefCode,
+			ReferredBy: referredByID,
 			Metadata: domain.Metadata{
 				"email":  email,
 				"source": "website",
@@ -775,6 +827,10 @@ func (s *Service) FindOrCreateWebUser(ctx context.Context, email string) (*domai
 		return nil
 	})
 	if txErr != nil {
+		// Fallback check in case a concurrent request created the web user first
+		if existing, findErr := s.registry.Users().FindByPlatformID(ctx, "web", email); findErr == nil && existing != nil {
+			return existing, nil
+		}
 		return nil, txErr
 	}
 	s.log.Info("web auto-registration", "email", email, "user_id", newUser.ID)
@@ -789,6 +845,9 @@ type RegisterTelegramUserRequest struct {
 }
 
 func (s *Service) RegisterTelegramUser(ctx context.Context, req RegisterTelegramUserRequest) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	tgIDStr := fmt.Sprintf("%d", req.TelegramID)
 	existing, err := s.registry.Users().FindByPlatformID(ctx, "telegram", tgIDStr)
 	if err == nil && existing != nil {
@@ -798,13 +857,33 @@ func (s *Service) RegisterTelegramUser(ctx context.Context, req RegisterTelegram
 	userID, _ := generate.UUID()
 	refCode := s.GenerateRefCode(ctx)
 
+	cleanRefCode := SanitizeRefCode(req.ReferredByCode)
+
 	var referredByID *string
-	if req.ReferredByCode != "" {
-		referrer, err := s.registry.Users().FindByRefCode(ctx, req.ReferredByCode)
-		if err == nil {
-			referredByID = &referrer.ID
+	if cleanRefCode != "" {
+		referrer, err := s.registry.Users().FindByRefCode(ctx, cleanRefCode)
+		if err == nil && referrer != nil {
+			// Self-referral check
+			isSelfReferral := false
+			if referrer.Metadata != nil {
+				if refTgID := domain.ExtractTelegramID(referrer.Metadata); refTgID != 0 && refTgID == req.TelegramID {
+					isSelfReferral = true
+				}
+			}
+			if req.Username != "" && strings.EqualFold(referrer.Username, req.Username) {
+				isSelfReferral = true
+			}
+			if isSelfReferral {
+				s.log.Warn("register user: self-referral attempted, ignoring ref code", "telegram_id", req.TelegramID, "code", cleanRefCode)
+			} else {
+				referredByID = &referrer.ID
+			}
 		} else {
-			s.log.Warn("register user: invalid ref code provided", "code", req.ReferredByCode)
+			logCode := cleanRefCode
+			if len(logCode) > 32 {
+				logCode = logCode[:32] + "..."
+			}
+			s.log.Warn("register user: invalid ref code provided", "code", logCode)
 		}
 	}
 
@@ -852,6 +931,10 @@ func (s *Service) RegisterTelegramUser(ctx context.Context, req RegisterTelegram
 		return nil
 	})
 	if err != nil {
+		// Fallback check in case a concurrent request created the TG user first
+		if existing, findErr := s.registry.Users().FindByPlatformID(ctx, "telegram", tgIDStr); findErr == nil && existing != nil {
+			return existing, nil
+		}
 		return nil, err
 	}
 

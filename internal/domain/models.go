@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // SyncAction describes the type of change in a SyncEvent.
 type SyncAction string
@@ -45,6 +48,26 @@ type SyncDeltaEvent struct {
 
 // Metadata is a flexible JSON field for platform-specific user/subscription data.
 type Metadata map[string]interface{}
+
+// ExtractTelegramID extracts the numeric telegram_id from Metadata if present.
+func ExtractTelegramID(metadata Metadata) int64 {
+	if metadata == nil {
+		return 0
+	}
+	switch v := metadata["telegram_id"].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case string:
+		parsed, _ := strconv.ParseInt(v, 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
 
 // User represents an xraytool end-user, originating from any platform.
 type User struct {

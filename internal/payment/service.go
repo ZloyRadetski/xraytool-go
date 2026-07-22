@@ -467,6 +467,9 @@ func (s *Service) applyReferralRewardForPayment(ctx context.Context, registry do
 	}
 
 	referrerID := *user.ReferredBy
+	if referrerID == user.ID {
+		return nil
+	}
 
 	txErr := registry.Users().AddReferralReward(ctx, referrerID, user.ID, payment.ID, reward)
 
