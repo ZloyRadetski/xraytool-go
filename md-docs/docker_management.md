@@ -65,7 +65,7 @@ docker compose pull backend && docker compose up -d
    ```
 2. Запустите миграцию, указывая пути **внутри контейнера** (`/etc/xraytool/...`):
    ```bash
-   xraytool db-migrate --from /etc/xraytool/bot.db --devices /etc/xraytool/devices_state.json
+   xraytool db-migrate --from /etc/xraytool/bot.db
    ```
 
 ---
@@ -84,20 +84,28 @@ docker compose pull backend && docker compose up -d
    mkdir -p ~/xraytool/data
    cd ~/xraytool
    ```
-3. Скопируйте 3 файла с Master-сервера:
+3. Скопируйте с Master-сервера:
    * `docker-compose.yml` ➡️ в папку `~/xraytool/`
-   * `data/config.yaml` ➡️ в папку `~/xraytool/data/` (Измените в нем `mode: master` на `mode: slave`)
-   * `data/xray_api_config.json` ➡️ в папку `~/xraytool/data/` (В нем **обязан** быть тот же `api_key`, что и на мастере!).
+   * `data/config.yaml` ➡️ в папку `~/xraytool/data/` (измените `mode: master` на `mode: slave`,
+     заполните секцию `master_api` и укажите собственный `server.api_key`)
+   * шаблоны `data/xray_template.json` и `data/configs.txt`
 4. Запустите:
    ```bash
    docker compose up -d
    ```
-5. Вернитесь на Master-сервер и добавьте IP нового слейва в файл `~/xraytool/data/servers.json`:
-   ```json
-   {
-     "servers": [
-       "http://IP_НОВОГО_СЛЕЙВА:8080"
-     ]
-   }
+5. Вернитесь на Master-сервер и добавьте новую ноду в секцию `slave_servers` файла
+   `~/xraytool/data/config.yaml`:
+   ```yaml
+   slave_servers:
+     slave-de:
+       url: "http://IP_НОВОГО_СЛЕЙВА:8080/api/v1/internal/xray/sync"
+       api_key: "ключ_этого_слейва"
    ```
-   *(Master сам начнет синхронизировать юзеров с этой нодой).*
+   Затем перезапустите бэкенд и выполните первую синхронизацию:
+   ```bash
+   docker compose restart backend
+   xraytool syncstates --full
+   ```
+
+Подробности протокола и диагностика — [cluster_sync.md](cluster_sync.md), полный сценарий
+развертывания — [deployment.md](deployment.md).

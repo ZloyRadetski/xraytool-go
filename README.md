@@ -7,6 +7,27 @@
 [![Docker Build and Publish](https://github.com/ZloyRadetski/xraytool-go/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ZloyRadetski/xraytool-go/actions/workflows/docker-publish.yml)
 ---
 
+## 📚 Документация
+
+Полный набор документации — в каталоге [`md-docs/`](md-docs/README.md).
+
+| Документ | О чём |
+| --- | --- |
+| [Архитектура](md-docs/architecture.md) | Слои, пакеты, потоки данных, роли Master/Slave |
+| [Развертывание](md-docs/deployment.md) | Docker, бинарник, systemd, настройка Master и Slave |
+| [Конфигурация](md-docs/configuration.md) | Полный справочник по `config.yaml` |
+| [CLI](md-docs/cli_reference.md) | Все команды и флаги с примерами |
+| [REST API](md-docs/api_documentation.md) | Эндпоинты с примерами запросов и ответов |
+| [Синхронизация кластера](md-docs/cluster_sync.md) | Протокол ping / delta / full-sync, ротация Reality-ключей |
+| [Подписки](md-docs/subscriptions.md) | Конвейер выдачи, HWID, лимиты устройств, шаблоны |
+| [Антифрод](md-docs/antifraud.md) | Детект раздачи подписки и временные баны |
+| [Схема БД](md-docs/database_schema.md) | Таблицы, связи, миграции, бэкапы |
+| [Вебхуки](md-docs/webhooks.md) | Формат событий, HMAC-подпись, ретраи |
+| [Разработка](md-docs/development.md) | Сборка, тесты, соглашения, CI |
+| [Диагностика](md-docs/troubleshooting.md) | Типовые проблемы и их решения |
+
+---
+
 ## 🛠️ Инструкция по развертыванию
 
 ### ⚠️ Важное системное требование (Синхронизация времени)
@@ -37,7 +58,9 @@ go build -o bin/xraytool main.go
 #### Пример `docker-compose.yml` можете найти в корне проекта `docker-compose.yml`
 
 ### 3. Настройка конфигурации (`config.yaml`)
-В каталоге `./data` создайте файл конфигурации `xraytool_config.yaml` на основе ваших требований.
+Каталог `./data` пробрасывается в контейнер как `/etc/xraytool`, поэтому конфигурация лежит в `./data/config.yaml`.
+При первом запуске файл создаётся автоматически с закомментированными примерами всех параметров.
+Полный справочник по секциям — [md-docs/configuration.md](md-docs/configuration.md).
 
 ### 4. Первоначальный запуск и синхронизация
 1. Сгенерируйте локальный конфигурационный файл `config.json` для Xray-core на основе шаблона и базы данных:
@@ -52,3 +75,5 @@ go build -o bin/xraytool main.go
    ```bash
    xraytool syncstates --full
    ```
+
+Подробная пошаговая инструкция (включая systemd, reverse-proxy и настройку Slave-нод) — в [md-docs/deployment.md](md-docs/deployment.md).
