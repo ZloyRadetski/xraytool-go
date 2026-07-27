@@ -47,6 +47,40 @@ Content-Type: text/plain; charset=utf-8
 vless://uuid@server:443?security=tls&encryption=none&type=tcp#bot_client_123
 ```
 
+**Параметр `format`:**
+
+| Значение | Content-Type | Описание |
+|---|---|---|
+| (не указан) | `application/json` | Xray JSON конфигурация |
+| `vless` | `text/plain` | Share-ссылки (vless/vmess/trojan/ss/hy2) |
+| `clash` | `text/yaml` | Подписка в формате Clash/Mihomo (`proxies`, `proxy-groups`, `rules`) |
+
+```http
+GET /api/v2/sub?id=123e4567-e89b-12d3-a456-426614174000&format=clash HTTP/1.1
+Host: api.example.com
+```
+
+```yaml
+proxies:
+    - name: VLESS-Reality
+      type: vless
+      server: 1.2.3.4
+      port: 443
+      uuid: 123e4567-e89b-12d3-a456-426614174000
+      flow: xtls-rprx-vision
+      tls: true
+      servername: www.google.com
+      reality-opts:
+        public-key: PBK
+        short-id: ab12
+proxy-groups:
+    - name: PROXY
+      type: select
+      proxies: [AUTO, VLESS-Reality]
+rules:
+    - MATCH,PROXY
+```
+
 ---
 
 ## 👥 Пользователи (Users)

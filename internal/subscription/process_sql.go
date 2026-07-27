@@ -321,7 +321,9 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		uploadBytes, downloadBytes, _ = getTrafficBytes(cfg.Paths.StatsState, email)
 	}
 
-	isVlessFormat := req.Query["format"] == "vless"
+	requestedFormat := strings.ToLower(strings.TrimSpace(req.Query["format"]))
+	isVlessFormat := requestedFormat == "vless"
+	isClashFormat := requestedFormat == "clash"
 
 	// 6. Generate Response
 	res := &Response{
@@ -366,8 +368,8 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		return res
 	}
 
-	// Prepare VLESS output
-	if isVlessFormat {
+	// Prepare plain-text (share links / clash yaml) output
+	if isVlessFormat || isClashFormat {
 		res.Headers["Content-Disposition"] = `attachment; filename="configs.txt"`
 		res.Headers["Profile-Title"] = "Torvalds VPN"
 		res.Headers["Subscription-Userinfo"] = fmt.Sprintf("upload=%d; download=%d; total=107374182400000; expire=%d", uploadBytes, downloadBytes, expireTs)
@@ -457,6 +459,21 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		res.Headers["Pragma"] = "no-cache"
 		res.StatusCode = 200
 		res.Body = shareLinks
+		return res
+	}
+
+	if isClashFormat {
+		clashYAML, err := convert.XrayJSONToClashYAML(jsonPayload)
+		if err != nil {
+			return failResponse(404, "Clash subscription conversion failed: "+err.Error())
+		}
+
+		res.Headers["Content-Disposition"] = `attachment; filename="config.yaml"`
+		res.Headers["Content-Type"] = "text/yaml; charset=utf-8"
+		res.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+		res.Headers["Pragma"] = "no-cache"
+		res.StatusCode = 200
+		res.Body = clashYAML
 		return res
 	}
 
