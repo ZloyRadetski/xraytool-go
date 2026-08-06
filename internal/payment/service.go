@@ -365,6 +365,19 @@ func (s *Service) FindPaymentByExternalID(ctx context.Context, extID string) (*d
 	return s.registry.Payments().FindByExternalID(ctx, extID)
 }
 
+// ApplyReferralReward applies the existing referral-reward rule for a single
+// payment. It is exposed for the core plugin so a payment provider can request
+// the operation through the core boundary without direct repository writes.
+func (s *Service) ApplyReferralReward(ctx context.Context, paymentID int64) error {
+	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
+		payment, err := tx.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
+		if err != nil {
+			return err
+		}
+		return s.applyReferralRewardForPayment(ctx, tx, payment)
+	})
+}
+
 // UpdatePaymentStatus updates the status of a payment.
 func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, status string, expectedStatuses []string) (bool, error) {
 	var updated bool
@@ -429,7 +442,7 @@ func (s *Service) extendSubscriptionForPayment(ctx context.Context, registry dom
 	if currentSub, subErr := registry.Subscriptions().FindLatestByUserID(ctx, payment.UserID); subErr == nil && currentSub != nil {
 		maxDevices = currentSub.MaxDevices
 	}
-	
+
 	if payment.CustomData != nil {
 		if md, ok := payment.CustomData["max_devices"]; ok {
 			if floatVal, ok := md.(float64); ok {

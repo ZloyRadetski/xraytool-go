@@ -92,6 +92,7 @@ func NewRootCmd() *cobra.Command {
 		genBalancerCmd(deps),
 		antiFraudStateCmd(deps),
 		startServerCmd(deps),
+		startServerKernelCmd(deps), // Phase 1: Plugin Host composition root
 		convertCmd(deps),
 		migrateLegacyDBCmd(deps),
 		syncXrayCmd(deps),
@@ -120,7 +121,13 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 	}
 
 	isServerOrMigrate := false
+	isKernelServer := false
 	for _, arg := range os.Args {
+		if arg == "start-server-v2" {
+			isKernelServer = true
+			isServerOrMigrate = true
+			break
+		}
 		if arg == "start-server" || arg == "migrate" || arg == "db-migrate" {
 			isServerOrMigrate = true
 			break
@@ -157,11 +164,14 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
 		propagator = slave.NewEventPropagatorAdapter(slaveReg)
 	}
-	// Dispatcher
-	deps.Dispatcher = events.NewDispatcher(&events.Config{
-		Webhooks:      cfg.Webhooks,
-		WebhookSecret: cfg.WebhookSecret,
-	})
+	// The legacy composition root owns this dispatcher. The kernel path creates
+	// it inside the core plugin so events have one owner.
+	if !isKernelServer {
+		deps.Dispatcher = events.NewDispatcher(&events.Config{
+			Webhooks:      cfg.Webhooks,
+			WebhookSecret: cfg.WebhookSecret,
+		})
+	}
 	deps.Propagator = propagator
 
 	// On master, we create syncSvc early and wrap the engine so that all services
@@ -170,8 +180,10 @@ func loadDependencies(deps *AppDeps, configPath string) error {
 		deps.SyncSvc = statesync.NewService(deps.Registry, deps.Engine, nil, slog.Default())
 		deps.Engine = statesync.NewEventAwareEngine(deps.Engine, deps.SyncSvc)
 	}
-	deps.UserSvc = user.NewService(deps.Registry, user.Config{IsMaster: cfg.IsMaster(), Domain: cfg.Server.Domain}, deps.Engine, propagator, slog.Default())
-	deps.PaymentSvc = payment.NewService(deps.Registry, deps.Dispatcher, slog.Default())
+	if !isKernelServer {
+		deps.UserSvc = user.NewService(deps.Registry, user.Config{IsMaster: cfg.IsMaster(), Domain: cfg.Server.Domain}, deps.Engine, propagator, slog.Default())
+		deps.PaymentSvc = payment.NewService(deps.Registry, deps.Dispatcher, slog.Default())
+	}
 
 	// Providers
 	if cfg.IsMaster() {
