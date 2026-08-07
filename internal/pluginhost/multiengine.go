@@ -559,7 +559,16 @@ func (m *MultiEngine) SyncUsers(
 			// Engine providers are independent plugins. Give each one its own
 			// slice so a provider that normalises its input cannot race with
 			// another provider or mutate the next provider's view.
-			usersForEngine := append([]pluginapi.VPNUserConfig(nil), users...)
+			usersForEngine := make([]pluginapi.VPNUserConfig, len(users))
+			for j, u := range users {
+				usersForEngine[j] = u
+				if u.PlanEngineIDs != nil {
+					usersForEngine[j].PlanEngineIDs = append([]string(nil), u.PlanEngineIDs...)
+				}
+				if u.SubscriptionEngineIDs != nil {
+					usersForEngine[j].SubscriptionEngineIDs = append([]string(nil), u.SubscriptionEngineIDs...)
+				}
+			}
 			engineResult, err := provider.SyncUsers(ctx, usersForEngine, removeOrphans)
 			ch <- syncResult{index: index, result: engineResult, err: err}
 		}(i, ref.provider, users)

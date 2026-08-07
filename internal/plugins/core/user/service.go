@@ -459,7 +459,9 @@ func (s *Service) UpdateLimit(ctx context.Context, req UpdateLimitRequest) error
 	}
 
 	if s.cfg.IsMaster {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if s.propagator != nil {
 				s.propagator.PropagateAll("setlimit", map[string]string{
 					"email": email,

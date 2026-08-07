@@ -565,24 +565,27 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 		return errors.New("external plugin Restart context must not be nil")
 	}
 	p.opMu.Lock()
-	defer p.opMu.Unlock()
-
+	
 	p.mu.Lock()
 	if p.stopping {
 		p.mu.Unlock()
+		p.opMu.Unlock()
 		return fmt.Errorf("external plugin %q is stopping and cannot be restarted", p.name)
 	}
 	if p.restarting {
 		p.mu.Unlock()
+		p.opMu.Unlock()
 		return fmt.Errorf("external plugin %q restart is already in progress", p.name)
 	}
 	if p.entry.RestartPolicy.MaxRestarts == 0 {
 		p.mu.Unlock()
+		p.opMu.Unlock()
 		return fmt.Errorf("external plugin %q restart is disabled by restart_policy.max_restarts=0", p.name)
 	}
 	if p.restarts >= p.entry.RestartPolicy.MaxRestarts {
 		limit := p.entry.RestartPolicy.MaxRestarts
 		p.mu.Unlock()
+		p.opMu.Unlock()
 		return fmt.Errorf("external plugin %q restart limit exhausted (%d)", p.name, limit)
 	}
 	p.restarting = true
@@ -602,6 +605,11 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 	p.remote = nil
 	p.prepared = false
 	p.mu.Unlock()
+	
+	// Release the outer opMu during the backoff sleep so that Shutdown (which
+	// takes opMu to Stop the plugin) doesn't deadlock.
+	p.opMu.Unlock()
+
 	defer func() {
 		p.mu.Lock()
 		p.restarting = false
@@ -617,6 +625,11 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 			return fmt.Errorf("external plugin %q restart backoff: %w", p.name, ctx.Err())
 		}
 	}
+	
+	// Re-acquire opMu before continuing the restart process.
+	p.opMu.Lock()
+	defer p.opMu.Unlock()
+
 	p.log.Warn("[pluginhost] restarting external plugin", "attempt", attempt, "max_restarts", p.entry.RestartPolicy.MaxRestarts)
 	if err := stopExternalConnection(ctx, p.name, remote, client); err != nil {
 		p.log.Warn("[pluginhost] external plugin stop during restart failed", "error", err)

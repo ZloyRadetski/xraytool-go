@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"xraytool/internal/appconfig"
@@ -274,6 +275,8 @@ func (p *Plugin) Start(ctx context.Context) error {
 	p.cancel = cancel
 	p.workersDone = make(chan struct{})
 
+	var wg sync.WaitGroup
+
 	if p.cfg.Worker.Enabled {
 		// ExpiryWorker: periodically expires overdue subscriptions and
 		// enforces device limits. Lives inside the core plugin because
@@ -286,18 +289,30 @@ func (p *Plugin) Start(ctx context.Context) error {
 			slog.Default(),
 			p.runtime.Propagator,
 		)
-		go wkr.Run(runCtx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			wkr.Run(runCtx)
+		}()
 		slog.Info("[core] Expiry Worker started", "interval", p.cfg.Worker.ExpiryInterval)
 
 		// ScrubberWorker: erases old payment external IDs to protect user
 		// privacy. Lives here because payment scrubbing is a core plugin
 		// concern.
 		scrubber := worker.NewScrubberWorker(p.paymentSvc, slog.Default())
-		go scrubber.Run(runCtx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scrubber.Run(runCtx)
+		}()
 		slog.Info("[core] Privacy Scrubber started")
 	}
 
-	close(p.workersDone)
+	go func() {
+		wg.Wait()
+		close(p.workersDone)
+	}()
+
 	<-runCtx.Done()
 	return nil
 }
