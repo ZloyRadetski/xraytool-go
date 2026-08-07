@@ -24,6 +24,7 @@ func (p *Plugin) handleAdminListConversations() http.HandlerFunc {
 			return
 		}
 
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"conversations": convs})
 	}
@@ -53,6 +54,7 @@ func (p *Plugin) handleAdminListMessages() http.HandlerFunc {
 			return
 		}
 
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"messages": msgs})
 	}
