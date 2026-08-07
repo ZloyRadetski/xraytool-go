@@ -43,11 +43,14 @@ func (s *Store) CreateConversation(ctx context.Context, userID, subject string) 
 
 // GetConversation retrieves a conversation by ID.
 func (s *Store) GetConversation(ctx context.Context, id string) (*Conversation, error) {
-	var conv Conversation
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&conv).Error; err != nil {
+	var convs []Conversation
+	if err := s.db.WithContext(ctx).Where("id = ?", id).Limit(1).Find(&convs).Error; err != nil {
 		return nil, err
 	}
-	return &conv, nil
+	if len(convs) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &convs[0], nil
 }
 
 // ListConversations lists conversations with optional filters.
