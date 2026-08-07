@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+xraytool
 xraytool.exe
 xraytool_very_old
 build/
