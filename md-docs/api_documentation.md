@@ -840,3 +840,260 @@ X-API-Key: secret
 Трансляция проверенного вебхука платежного провайдера. Для Platega имя
 события — `platega.callback`.
 * **Data:** `{"external_id": "...", "status": "completed", ...}`
+
+---
+
+## 💬 Техподдержка (Support Chat Plugin)
+
+Плагин `support_chat` предоставляет E2EE (сквозное шифрование) чат между пользователем и администраторами. Все сообщения хранятся в зашифрованном виде на диске.
+
+### Клиентские методы (Client API)
+
+Для клиентских методов необходимо передавать заголовок `X-API-Key` (или токен авторизации) для идентификации пользователя. Идентификатор пользователя берется сервером из контекста авторизации.
+
+#### 1. Создать тикет
+`POST /api/v1/support/conversations`
+
+**Тело запроса (JSON):**
+```json
+{
+  "subject": "Проблема с оплатой",
+  "message": "Здравствуйте, оплатил подписку по СБП, но она не пришла."
+}
+```
+
+**Ответ (200 OK):**
+```json
+{
+  "conversation_id": "conv-12345-uuid",
+  "created_at": "2026-08-07T21:46:56Z",
+  "message": {
+    "id": "msg-9876-uuid",
+    "conversation_id": "conv-12345-uuid",
+    "sender_role": "client",
+    "text": "Здравствуйте, оплатил подписку по СБП, но она не пришла.",
+    "created_at": "2026-08-07T21:46:56Z",
+    "read_at": null
+  }
+}
+```
+
+#### 2. Получить список своих тикетов
+`GET /api/v1/support/conversations`
+
+**Ответ (200 OK):**
+```json
+{
+  "conversations": [
+    {
+      "id": "conv-12345-uuid",
+      "user_id": "user-telegram-id",
+      "subject": "Проблема с оплатой",
+      "status": "open",
+      "created_at": "2026-08-07T21:46:56Z",
+      "updated_at": "2026-08-07T21:46:56Z"
+    }
+  ]
+}
+```
+
+#### 3. Получить информацию о конкретном тикете
+`GET /api/v1/support/conversations/{id}`
+
+**Ответ (200 OK):**
+```json
+{
+  "id": "conv-12345-uuid",
+  "user_id": "user-telegram-id",
+  "subject": "Проблема с оплатой",
+  "status": "open",
+  "created_at": "2026-08-07T21:46:56Z",
+  "updated_at": "2026-08-07T21:46:56Z"
+}
+```
+
+#### 4. Получить историю сообщений (и пометить прочитанными)
+`GET /api/v1/support/conversations/{id}/messages`
+
+При вызове этого эндпоинта все сообщения от администратора в этом тикете автоматически помечаются как прочитанные клиентом.
+
+**Ответ (200 OK):**
+```json
+{
+  "messages": [
+    {
+      "id": "msg-9876-uuid",
+      "conversation_id": "conv-12345-uuid",
+      "sender_role": "client",
+      "text": "Здравствуйте, оплатил подписку по СБП, но она не пришла.",
+      "created_at": "2026-08-07T21:46:56Z",
+      "read_at": "2026-08-07T21:50:00Z"
+    },
+    {
+      "id": "msg-9999-uuid",
+      "conversation_id": "conv-12345-uuid",
+      "sender_role": "admin",
+      "text": "Подписка выдана, извините за задержку.",
+      "created_at": "2026-08-07T21:48:00Z",
+      "read_at": "2026-08-07T21:51:00Z"
+    }
+  ]
+}
+```
+
+#### 5. Отправить сообщение в тикет
+`POST /api/v1/support/conversations/{id}/messages`
+
+**Тело запроса (JSON):**
+```json
+{
+  "text": "Спасибо, всё заработало!"
+}
+```
+
+**Ответ (200 OK):**
+```json
+{
+  "id": "msg-1010-uuid",
+  "conversation_id": "conv-12345-uuid",
+  "sender_role": "client",
+  "text": "Спасибо, всё заработало!",
+  "created_at": "2026-08-07T21:55:00Z",
+  "read_at": null
+}
+```
+
+#### 6. Клиентский WebSocket (Real-time)
+`GET /api/v1/support/conversations/{id}/ws`
+Требуется передавать авторизационный токен.
+
+**Формат входящих сообщений по WS:**
+Событие нового сообщения от админа:
+```json
+{
+  "type": "new_message",
+  "payload": {
+    "id": "msg-9999-uuid",
+    "conversation_id": "conv-12345-uuid",
+    "sender_role": "admin",
+    "text": "Подписка выдана, извините за задержку.",
+    "created_at": "2026-08-07T21:48:00Z",
+    "read_at": null
+  }
+}
+```
+
+Событие изменения статуса тикета (например, админ закрыл):
+```json
+{
+  "type": "status_changed",
+  "payload": {
+    "conversation_id": "conv-12345-uuid",
+    "status": "closed"
+  }
+}
+```
+
+---
+
+### Администраторские методы (Admin API)
+
+Админские методы требуют повышенных привилегий.
+
+#### 1. Получить список всех тикетов (с фильтрацией)
+`GET /api/v1/admin/support/conversations`
+
+**Query-параметры (опционально):**
+- `?status=open` (или `closed`, `resolved`)
+- `?user_id=123456789`
+
+**Ответ (200 OK):**
+```json
+{
+  "conversations": [
+    {
+      "id": "conv-12345-uuid",
+      "user_id": "user-telegram-id",
+      "subject": "Проблема с оплатой",
+      "status": "open",
+      "created_at": "2026-08-07T21:46:56Z",
+      "updated_at": "2026-08-07T21:46:56Z"
+    }
+  ]
+}
+```
+
+#### 2. Получить историю сообщений тикета
+`GET /api/v1/admin/support/conversations/{id}/messages`
+
+**Ответ (200 OK):**
+```json
+{
+  "messages": [
+    {
+      "id": "msg-9876-uuid",
+      "conversation_id": "conv-12345-uuid",
+      "sender_role": "client",
+      "text": "Здравствуйте, оплатил подписку по СБП, но она не пришла.",
+      "created_at": "2026-08-07T21:46:56Z",
+      "read_at": "2026-08-07T21:50:00Z"
+    }
+  ]
+}
+```
+
+#### 3. Отправить сообщение клиенту
+`POST /api/v1/admin/support/conversations/{id}/messages`
+
+**Тело запроса (JSON):**
+```json
+{
+  "text": "Подписка выдана, извините за задержку."
+}
+```
+
+**Ответ (200 OK):** Возвращает созданный объект сообщения.
+
+#### 4. Изменить статус тикета
+`PATCH /api/v1/admin/support/conversations/{id}/status`
+
+**Тело запроса (JSON):**
+```json
+{
+  "status": "closed" 
+}
+```
+
+**Ответ (200 OK):** Пустое тело (статус код 200).
+
+#### 5. Администраторский WebSocket (Real-time)
+`GET /api/v1/admin/support/ws`
+
+Администратор может подписаться на глобальный поток событий.
+**Событие создания нового тикета клиентом:**
+```json
+{
+  "type": "new_conversation",
+  "payload": {
+    "conversation_id": "conv-12345-uuid",
+    "user_id": "123456789",
+    "subject": "Проблема с оплатой",
+    "created_at": "2026-08-07T21:46:56Z"
+  }
+}
+```
+
+**Событие нового сообщения от любого клиента:**
+```json
+{
+  "type": "new_message",
+  "payload": {
+    "id": "msg-...",
+    "conversation_id": "conv-12345-uuid",
+    "sender_role": "client",
+    "text": "А почему не работает?",
+    "created_at": "...",
+    "read_at": null
+  }
+}
+```
