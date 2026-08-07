@@ -6,13 +6,13 @@ import (
 
 // Conversation represents a support chat between a user and admins.
 type Conversation struct {
-	ID        string    `gorm:"primaryKey;type:varchar(36)"`
-	UserID    string    `gorm:"index;type:varchar(36);not null"`
-	Subject   string    `gorm:"type:text"`
-	Status    string    `gorm:"index;type:varchar(20);not null;default:'open'"`
-	CreatedAt time.Time `gorm:"autoCreateTime;not null"`
-	UpdatedAt time.Time `gorm:"autoUpdateTime;not null"`
-	ClosedAt  *time.Time
+	ID        string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	UserID    string    `gorm:"index;type:varchar(36);not null" json:"user_id"`
+	Subject   string    `gorm:"type:text" json:"subject"`
+	Status    string    `gorm:"index;type:varchar(20);not null;default:'open'" json:"status"`
+	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
 }
 
 // Message represents an encrypted message in a conversation.
