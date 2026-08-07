@@ -19,6 +19,7 @@ import (
 	mailerPlugin "xraytool/internal/plugins/mailer_resend"
 	plategaPlugin "xraytool/internal/plugins/payment_platega"
 	pricingPlugin "xraytool/internal/plugins/pricing_default"
+	supportChatPlugin "xraytool/internal/plugins/support_chat"
 )
 
 // BuiltinRegistry возвращает карту name → factory для всех compiled-in плагинов.
@@ -56,6 +57,9 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 		
 		// Pricing logic
 		"pricing_default": func() pluginapi.Plugin { return pricingPlugin.New() },
+		
+		// Support chat
+		"support_chat": func() pluginapi.Plugin { return supportChatPlugin.New() },
 		// ── Phase 1.5+: Engine plugins (TBD) ────────────────────────────────
 		// "engine_xray": func() pluginapi.Plugin { return engine_xray.New(cfg) },
 	}

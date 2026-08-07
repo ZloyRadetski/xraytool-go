@@ -202,6 +202,14 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	// ── Step 9: HTTP server ───────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	mux.Handle("/", core.HTTPHandler())
+
+	// Mount HTTP routes from any plugin that implements HTTPContributor
+	for _, meta := range host.Loaded() {
+		if c, ok := host.PluginByName(meta.Name).(pluginapi.HTTPContributor); ok {
+			c.RegisterRoutes(mux)
+			slog.Info("[KERNEL] Mounted HTTP routes for plugin", "name", meta.Name)
+		}
+	}
 	mux.HandleFunc("/undefined", func(w http.ResponseWriter, r *http.Request) {
 		logIntruder(r, "Hit catch-all undefined route")
 		http.NotFound(w, r)

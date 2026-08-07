@@ -1,0 +1,11 @@
+name: support_chat
+kind: support
+version: 1.0.0
+api_version: "1"
+description: "Encrypted support chat between authenticated users and admins."
+type: internal
+mandatory: false
+publishes:
+  - name: support_chat_provider
+requires:
+  - name: user_repository

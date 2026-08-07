@@ -134,6 +134,16 @@ type ServiceProvider interface {
 	PublishedServices() map[string]any
 }
 
+// HTTPContributor is implemented by plugins that need to register custom HTTP
+// routes (e.g. for webhooks or plugin-specific APIs). The core plugin's router
+// will call RegisterRoutes during its initialization.
+type HTTPContributor interface {
+	Plugin
+
+	// RegisterRoutes allows the plugin to mount its handlers on the provided mux.
+	RegisterRoutes(mux *http.ServeMux)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ServiceResolver — the narrow interface the host passes to each plugin's Init()
 // ─────────────────────────────────────────────────────────────────────────────
