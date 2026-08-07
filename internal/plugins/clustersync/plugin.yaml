@@ -1,0 +1,11 @@
+name: cluster_sync
+kind: cluster_sync
+version: 1.0.0
+api_version: "1"
+description: Cluster state synchronization and command propagation for slave nodes.
+type: internal
+config_schema: ../../pluginmanifest/schemas/cluster_sync.schema.json
+publishes:
+  - cluster_sync_provider
+requires:
+  - subscription_repository

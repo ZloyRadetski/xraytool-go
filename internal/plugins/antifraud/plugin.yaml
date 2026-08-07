@@ -1,0 +1,11 @@
+name: antifraud
+kind: antifraud
+version: 1.0.0
+api_version: "1"
+description: "Multi-IP anti-fraud: log tailing, IP tracking, soft-ban management."
+type: internal
+config_schema: ../../pluginmanifest/schemas/antifraud.schema.json
+publishes:
+  - antifraud_provider
+requires:
+  - domain_registry

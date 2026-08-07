@@ -1,0 +1,9 @@
+name: eventsink_webhook
+kind: event_sink
+version: 1.0.0
+api_version: "1"
+description: HTTP webhook delivery for domain events with HMAC signing and retry.
+type: internal
+config_schema: ../../pluginmanifest/schemas/eventsink_webhook.schema.json
+publishes: []
+requires: []

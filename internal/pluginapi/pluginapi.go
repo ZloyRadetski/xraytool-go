@@ -15,6 +15,7 @@ package pluginapi
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 	"time"
 )
@@ -27,6 +28,13 @@ import (
 // decoded as a generic map. Each plugin is responsible for unmarshalling
 // it into its own typed config struct inside Init().
 type RawConfig map[string]any
+
+// Stable Service Registry names shared by kernel code and plugins. Keeping
+// them in pluginapi prevents the composition root from importing an optional
+// plugin package merely to obtain a string constant.
+const (
+	ServiceClusterSyncProvider = "cluster_sync_provider"
+)
 
 // ServiceRef declares a named service dependency or publication.
 type ServiceRef struct {
@@ -154,6 +162,36 @@ type PluginDBHandle interface {
 	// RunMigrations applies all pending migrations from the given filesystem path.
 	// The host calls this automatically for enabled plugins before Init().
 	RunMigrations(ctx context.Context, migrationsPath string) error
+}
+
+// MigrationSet describes migration files compiled into an internal plugin.
+//
+// Internal plugins use an embedded filesystem rather than a path relative to
+// the process working directory: production binaries are normally installed
+// without the repository tree. The Dir must contain versioned *.up.sql files
+// (for example, 000001_initial.up.sql). The host runs this set before Init for
+// an enabled plugin when its database handle supports EmbeddedMigrationRunner.
+//
+// External plugins can keep using PluginDBHandle.RunMigrations with a local
+// filesystem path under their own deployment directory.
+type MigrationSet struct {
+	FS  fs.FS
+	Dir string
+}
+
+// MigrationProvider is an optional plugin capability. Built-in plugins that
+// own persistent state expose their embedded migration directory through this
+// interface; stateless plugins may expose a marker migration as well, which
+// gives every enabled plugin an independent version namespace.
+type MigrationProvider interface {
+	PluginMigrations() MigrationSet
+}
+
+// EmbeddedMigrationRunner is implemented by database handles that can run an
+// embedded MigrationSet. It remains separate from PluginDBHandle so existing
+// external handles that only support filesystem paths stay source-compatible.
+type EmbeddedMigrationRunner interface {
+	RunEmbeddedMigrations(ctx context.Context, migrations MigrationSet) error
 }
 
 // ServiceResolver is the limited view of ServiceRegistry that the host exposes
@@ -404,13 +442,45 @@ type PaymentProvider interface {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // PricingRequest carries the inputs for a price calculation.
+//
+// The value objects are snapshots supplied by the core before it calls a
+// PricingEngine. Keeping the request self-contained deliberately prevents a
+// dependency cycle: the mandatory core plugin can require a pricing engine,
+// while a pricing plugin does not need to resolve core repositories just to
+// calculate a price. It also makes the contract usable by an external plugin
+// without giving it database access.
 type PricingRequest struct {
-	UserID        string
+	// UserID is the buyer whose current subscription is represented below.
+	UserID string
+	// PlanID and the fields below it are retained for callers built against the
+	// first version of this contract. New implementations should use Plan,
+	// CurrentSubscription, MaxDevices, Platform and Amount.
 	PlanID        int64
 	PromoCode     string
 	ExtraDevices  int
 	IsUpgrade     bool
 	CurrentPlanID *int64
+
+	// Amount is the requested amount for a payment without a subscription
+	// plan (for example, a balance top-up).
+	Amount int
+	// Plan is the selected subscription plan. It is nil for a non-plan
+	// payment. Pricing engines must not mutate it.
+	Plan *Plan
+	// CurrentSubscription is the buyer's latest subscription, if any. It is
+	// used by the default engine to prorate additional device slots.
+	CurrentSubscription *Subscription
+	// MaxDevices is the requested device limit for the new/renewed plan.
+	MaxDevices int
+	// Platform is the normalized-or-raw purchase channel ("bot", "web", ...)
+	// used to decide whether a promo is applicable.
+	Platform string
+	// Promo is the promo snapshot resolved by core for PromoCode. It is nil
+	// when the code was not found. Engines must treat a nil promo as ineligible.
+	Promo *PromoCode
+	// Now gives a deterministic clock value for expiration and upgrade
+	// calculations. A zero value means the engine may use time.Now().
+	Now time.Time
 }
 
 // PricingResult is the output of CalculatePrice.
@@ -418,7 +488,10 @@ type PricingResult struct {
 	FinalPrice      int    // in minor units
 	DiscountPercent int    // 0–100
 	AppliedPromo    string // promo code that was applied, if any
-	Description     string
+	// AppliedPromoID is the core persistence identifier for AppliedPromo. It
+	// is nil when a global discount won or no promo applies.
+	AppliedPromoID *int64
+	Description    string
 }
 
 // PricingEngine is the extension point for subscription price calculation.
@@ -432,8 +505,8 @@ type PricingResult struct {
 //
 // Required services (Metadata.Requires):
 //
-//	"plan_repository"   (from core, optional:false)
-//	"user_repository"   (from core, optional:false)
+// Pricing engines receive immutable plan/promo/subscription snapshots in
+// PricingRequest, so they normally have no repository dependency.
 type PricingEngine interface {
 	Plugin
 
@@ -553,6 +626,38 @@ type ClusterSyncProvider interface {
 	CollectSlaveTotals() ([]SlaveUserTotal, SlaveReport)
 }
 
+// SyncState is the transport-neutral position of a node in the cluster sync
+// log. It mirrors the state persisted by the built-in cluster plugin without
+// exposing a statesync implementation to HTTP consumers.
+type SyncState struct {
+	LastEventID int64
+	StateHash   string
+	UpdatedAt   time.Time
+}
+
+// ClusterSyncHTTPProvider is an optional capability of a ClusterSyncProvider.
+// The kernel gives it to the HTTP router so slave nodes can request a snapshot
+// and the current master position without importing internal/statesync.
+//
+// Keeping this separate from ClusterSyncProvider preserves compatibility with
+// providers that only implement scheduled replication and traffic collection.
+type ClusterSyncHTTPProvider interface {
+	ClusterSyncProvider
+
+	BuildSnapshot(ctx context.Context) ([]VPNUserConfig, error)
+	MasterState(ctx context.Context) (SyncState, error)
+}
+
+// ClusterCommandPropagator is the optional cluster capability used by admin
+// user handlers to broadcast legacy newuser/rmuser commands. The core HTTP
+// package never constructs slave clients directly; a loaded cluster plugin
+// owns the transport and may decline the operation when it is unavailable.
+type ClusterCommandPropagator interface {
+	ClusterSyncProvider
+
+	PropagateCommand(ctx context.Context, command string, params map[string]string) error
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Extension Point 7 — EngineProvider + ClientConfigContributor
 // ─────────────────────────────────────────────────────────────────────────────
@@ -569,6 +674,13 @@ type VPNUserConfig struct {
 	MaxDevices int
 	Flow       string
 	Cipher     string
+	// PlanEngineIDs is the engine set selected by the subscription plan for
+	// the by-plan routing mode. Empty means that no plan-specific routing was
+	// supplied and the router's safe broadcast fallback applies.
+	PlanEngineIDs []string
+	// SubscriptionEngineIDs is the explicit per-subscription override. It is
+	// normally sourced from Subscription.Metadata["engine_ids"].
+	SubscriptionEngineIDs []string
 }
 
 // TrafficStat holds per-user bandwidth counters for one engine.
@@ -681,13 +793,12 @@ type User struct {
 }
 
 // Subscription mirrors domain.Subscription.
-// Note: XrayUUID is renamed to UUID here (plan section 2.6.6) — the database
-// column rename is a separate migration step in Phase 1.5.
+// UUID is an engine-agnostic client identifier shared with domain.Subscription.
 type Subscription struct {
 	ID         string
 	UserID     string
 	Email      string
-	UUID       string // was XrayUUID in domain.Subscription — engine-agnostic name
+	UUID       string
 	Status     string
 	MaxDevices int
 	StartsAt   *time.Time
@@ -714,9 +825,28 @@ type Plan struct {
 	Months                int
 	BasePrice             int
 	GlobalDiscountPercent int
-	IsActive              bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// EngineIDs restricts this plan to these engine IDs in by-plan mode.
+	// A nil/empty slice is deliberately backwards compatible and broadcasts.
+	EngineIDs []string
+	IsActive  bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// PromoCode is the immutable pricing view of a promo code. It mirrors the
+// fields pricing rules are allowed to inspect, without exposing mutable
+// persistence operations to a plugin.
+type PromoCode struct {
+	ID              int64
+	Code            string
+	DiscountPercent int
+	MaxUses         int
+	UsesCount       int
+	TargetPlatform  string
+	ExpiresAt       *time.Time
+	IsActive        bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // ReferralStats holds referral aggregation data for one referrer.

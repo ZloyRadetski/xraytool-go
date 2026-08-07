@@ -1,0 +1,20 @@
+name: core
+kind: core
+version: 1.0.0
+api_version: "1"
+description: "Mandatory core plugin: user/subscription/device/plan/payment domain."
+type: internal
+config_schema: ../../pluginmanifest/schemas/core.schema.json
+mandatory: true
+publishes:
+  - user_repository
+  - subscription_repository
+  - device_repository
+  - plan_repository
+  - payment_recorder
+  - subscription_lifecycle
+  - user_service
+  - payment_service
+  - event_dispatcher
+  - domain_registry
+requires: []

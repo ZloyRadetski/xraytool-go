@@ -308,7 +308,7 @@ func fromDomainSubscription(sub *domain.Subscription) *pluginapi.Subscription {
 		return nil
 	}
 	return &pluginapi.Subscription{
-		ID: sub.ID, UserID: sub.UserID, Email: sub.Email, UUID: sub.XrayUUID, Status: sub.Status,
+		ID: sub.ID, UserID: sub.UserID, Email: sub.Email, UUID: sub.UUID, Status: sub.Status,
 		MaxDevices: sub.MaxDevices, StartsAt: sub.StartsAt, EndsAt: sub.EndsAt, AutoRenew: sub.AutoRenew,
 		Metadata: map[string]any(sub.Metadata), CreatedAt: sub.CreatedAt, UpdatedAt: sub.UpdatedAt,
 	}
@@ -319,7 +319,7 @@ func toDomainSubscription(sub *pluginapi.Subscription) *domain.Subscription {
 		return nil
 	}
 	return &domain.Subscription{
-		ID: sub.ID, UserID: sub.UserID, Email: sub.Email, XrayUUID: sub.UUID, Status: sub.Status,
+		ID: sub.ID, UserID: sub.UserID, Email: sub.Email, UUID: sub.UUID, Status: sub.Status,
 		MaxDevices: sub.MaxDevices, StartsAt: sub.StartsAt, EndsAt: sub.EndsAt, AutoRenew: sub.AutoRenew,
 		Metadata: domain.Metadata(sub.Metadata), CreatedAt: sub.CreatedAt, UpdatedAt: sub.UpdatedAt,
 	}
@@ -357,7 +357,7 @@ func fromDomainPlan(plan *domain.Plan) *pluginapi.Plan {
 	}
 	return &pluginapi.Plan{
 		ID: plan.ID, Months: plan.Months, BasePrice: plan.BasePrice,
-		GlobalDiscountPercent: plan.GlobalDiscountPercent, IsActive: plan.IsActive,
+		GlobalDiscountPercent: plan.GlobalDiscountPercent, EngineIDs: append([]string(nil), plan.EngineIDs...), IsActive: plan.IsActive,
 		CreatedAt: plan.CreatedAt, UpdatedAt: plan.UpdatedAt,
 	}
 }
@@ -368,7 +368,7 @@ func toDomainPlan(plan *pluginapi.Plan) *domain.Plan {
 	}
 	return &domain.Plan{
 		ID: plan.ID, Months: plan.Months, BasePrice: plan.BasePrice,
-		GlobalDiscountPercent: plan.GlobalDiscountPercent, IsActive: plan.IsActive,
+		GlobalDiscountPercent: plan.GlobalDiscountPercent, EngineIDs: append([]string(nil), plan.EngineIDs...), IsActive: plan.IsActive,
 		CreatedAt: plan.CreatedAt, UpdatedAt: plan.UpdatedAt,
 	}
 }

@@ -87,7 +87,7 @@ type Subscription struct {
 	ID         string
 	UserID     string
 	Email      string
-	XrayUUID   string
+	UUID       string
 	Status     string
 	MaxDevices int
 	StartsAt   *time.Time
@@ -129,9 +129,12 @@ type Plan struct {
 	Months                int
 	BasePrice             int
 	GlobalDiscountPercent int
-	IsActive              bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// EngineIDs optionally pins subscriptions purchased under this plan to a
+	// subset of enabled engines when engines.routing_mode is by-plan.
+	EngineIDs []string
+	IsActive  bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // PromoCode represents a discount code that can be used by users.

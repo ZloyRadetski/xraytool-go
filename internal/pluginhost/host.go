@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"xraytool/internal/pluginapi"
 )
@@ -46,8 +47,26 @@ type PluginEntry struct {
 	// Future: "external" will use go-plugin/gRPC (Phase 4).
 	Source string `yaml:"source"`
 
+	// Exec and Args are required for source:"external". Exec is passed to
+	// exec.Command without a shell.
+	Exec string   `yaml:"exec"`
+	Args []string `yaml:"args"`
+	// LogPath optionally overrides the persistent external process log file.
+	// Empty uses ExternalLogPath(name).
+	LogPath string `yaml:"log_path"`
+
+	// RestartPolicy limits restarts of an external plugin process. A zero
+	// MaxRestarts disables restarts for this entry.
+	RestartPolicy RestartPolicy `yaml:"restart_policy"`
+
 	// Config is the raw configuration map passed to Plugin.Init() as RawConfig.
 	Config pluginapi.RawConfig `yaml:"config"`
+}
+
+// RestartPolicy controls recovery of an external plugin process.
+type RestartPolicy struct {
+	MaxRestarts int           `yaml:"max_restarts"`
+	Backoff     time.Duration `yaml:"backoff"`
 }
 
 // PluginsConfig is the top-level plugins: map from xraytool.yml.
@@ -84,7 +103,7 @@ func newServiceRegistry() *ServiceRegistry {
 
 // Publish registers a service under name. Returns an error if name is already taken.
 func (r *ServiceRegistry) Publish(name string, svc any) error {
-	if name == "" {
+	if strings.TrimSpace(name) == "" {
 		return errors.New("service name must not be empty")
 	}
 	if isNilService(svc) {
@@ -92,10 +111,49 @@ func (r *ServiceRegistry) Publish(name string, svc any) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.services == nil {
+		r.services = make(map[string]any)
+	}
 	if _, exists := r.services[name]; exists {
 		return fmt.Errorf("service %q is already published", name)
 	}
 	r.services[name] = svc
+	return nil
+}
+
+// publishBatch atomically makes a fully validated group of services visible.
+// It is deliberately internal: publication is owned by Host and must happen
+// only after a plugin's Init completed successfully.
+func (r *ServiceRegistry) publishBatch(services map[string]any) error {
+	if len(services) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(services))
+	for name, service := range services {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("service name must not be empty")
+		}
+		if isNilService(service) {
+			return fmt.Errorf("service %q must not be nil", name)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.services == nil {
+		r.services = make(map[string]any)
+	}
+	for _, name := range names {
+		if _, exists := r.services[name]; exists {
+			return fmt.Errorf("service %q is already published", name)
+		}
+	}
+	for _, name := range names {
+		r.services[name] = services[name]
+	}
 	return nil
 }
 
@@ -134,151 +192,137 @@ func (r *ServiceRegistry) resolve(name string) (any, error) {
 // The core plugin (Mandatory:true) is always placed first regardless of
 // declaration order.
 func Graph(plugins []pluginapi.Metadata, enabled map[string]bool) ([]string, error) {
-	// Build the set of services that will be published once all enabled plugins load.
-	published := make(map[string]string) // serviceName → pluginName
-	seenPlugins := make(map[string]struct{}, len(plugins))
-	mandatoryCount := 0
-	for _, m := range plugins {
-		if !enabled[m.Name] {
-			continue
+	// Config maps are inherently unordered. Sort a copy up front so both the
+	// resulting order and validation errors remain stable across process runs.
+	metas := make([]pluginapi.Metadata, 0, len(plugins))
+	for _, metadata := range plugins {
+		if enabled[metadata.Name] {
+			metas = append(metas, metadata)
 		}
-		if m.Name == "" {
+	}
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].Name < metas[j].Name
+	})
+
+	published := make(map[string]string, len(metas)) // service name -> plugin name
+	byName := make(map[string]pluginapi.Metadata, len(metas))
+	mandatoryName := ""
+
+	for _, metadata := range metas {
+		if strings.TrimSpace(metadata.Name) == "" {
 			return nil, errors.New("enabled plugin has an empty metadata name")
 		}
-		if _, exists := seenPlugins[m.Name]; exists {
-			return nil, fmt.Errorf("plugin metadata contains duplicate name %q", m.Name)
+		if _, exists := byName[metadata.Name]; exists {
+			return nil, fmt.Errorf("plugin metadata contains duplicate name %q", metadata.Name)
 		}
-		seenPlugins[m.Name] = struct{}{}
-		if m.Mandatory {
-			mandatoryCount++
-		}
-		for _, pub := range m.Publishes {
-			if pub.Name == "" {
-				return nil, fmt.Errorf("plugin %q declares an empty published service name", m.Name)
+		byName[metadata.Name] = metadata
+
+		if metadata.Mandatory {
+			if mandatoryName != "" {
+				return nil, errors.New("plugin dependency graph contains more than one mandatory plugin")
 			}
-			if owner, exists := published[pub.Name]; exists {
+			if len(metadata.Requires) > 0 {
+				return nil, fmt.Errorf("mandatory plugin %q must not require services", metadata.Name)
+			}
+			mandatoryName = metadata.Name
+		}
+
+		declaredPublications := make(map[string]struct{}, len(metadata.Publishes))
+		for _, publication := range metadata.Publishes {
+			if strings.TrimSpace(publication.Name) == "" {
+				return nil, fmt.Errorf("plugin %q declares an empty published service name", metadata.Name)
+			}
+			if _, exists := declaredPublications[publication.Name]; exists {
+				return nil, fmt.Errorf("plugin %q declares published service %q more than once", metadata.Name, publication.Name)
+			}
+			declaredPublications[publication.Name] = struct{}{}
+			if owner, exists := published[publication.Name]; exists {
 				return nil, fmt.Errorf(
 					"service %q is published by both plugins %q and %q",
-					pub.Name, owner, m.Name,
+					publication.Name, owner, metadata.Name,
 				)
 			}
-			published[pub.Name] = m.Name
+			published[publication.Name] = metadata.Name
 		}
-	}
-	if mandatoryCount > 1 {
-		return nil, errors.New("plugin dependency graph contains more than one mandatory plugin")
 	}
 
-	// Check that every non-optional required service is satisfiable.
-	for _, m := range plugins {
-		if !enabled[m.Name] {
-			continue
-		}
-		for _, req := range m.Requires {
-			if req.Optional {
-				continue
+	// Kahn's algorithm. Edges point from a publisher to a consumer so the
+	// consumer's in-degree is exactly the number of services it must wait for.
+	inDegree := make(map[string]int, len(metas))
+	reverseEdges := make(map[string][]string, len(metas))
+	for _, metadata := range metas {
+		inDegree[metadata.Name] = 0
+		declaredRequirements := make(map[string]struct{}, len(metadata.Requires))
+		for _, requirement := range metadata.Requires {
+			if strings.TrimSpace(requirement.Name) == "" {
+				return nil, fmt.Errorf("plugin %q declares an empty required service name", metadata.Name)
 			}
-			if _, ok := published[req.Name]; !ok {
+			if _, exists := declaredRequirements[requirement.Name]; exists {
+				return nil, fmt.Errorf("plugin %q declares required service %q more than once", metadata.Name, requirement.Name)
+			}
+			declaredRequirements[requirement.Name] = struct{}{}
+
+			publisher, exists := published[requirement.Name]
+			if !exists {
+				if requirement.Optional {
+					continue
+				}
 				return nil, fmt.Errorf(
 					"plugin %q requires service %q which is not published by any enabled plugin "+
 						"(either the publishing plugin is disabled or missing)",
-					m.Name, req.Name,
+					metadata.Name, requirement.Name,
 				)
 			}
-		}
-	}
-
-	// Topological sort using Kahn's algorithm.
-	// Build adjacency: for each plugin, edges to plugins that require its published services.
-	nameToMeta := make(map[string]pluginapi.Metadata, len(plugins))
-	inDegree := make(map[string]int, len(plugins))
-	deps := make(map[string][]string) // plugin → slice of plugins it depends on (must come before)
-
-	for _, m := range plugins {
-		if !enabled[m.Name] {
-			continue
-		}
-		nameToMeta[m.Name] = m
-		if _, ok := inDegree[m.Name]; !ok {
-			inDegree[m.Name] = 0
-		}
-	}
-
-	for _, m := range plugins {
-		if !enabled[m.Name] {
-			continue
-		}
-		for _, req := range m.Requires {
-			publisher, ok := published[req.Name]
-			if !ok {
-				continue // optional and unsatisfied — skip
+			if publisher == metadata.Name {
+				return nil, fmt.Errorf("plugin %q cannot require its own published service %q", metadata.Name, requirement.Name)
 			}
-			if publisher == m.Name {
-				continue // self-publish is allowed but not a dep edge
-			}
-			// m depends on publisher → publisher must come first
-			deps[m.Name] = append(deps[m.Name], publisher)
-			inDegree[publisher] = inDegree[publisher] // ensure entry exists
+			reverseEdges[publisher] = append(reverseEdges[publisher], metadata.Name)
+			inDegree[metadata.Name]++
 		}
 	}
 
-	// Compute in-degree per node based on who depends on whom.
-	// (in-degree = number of plugins that must be loaded BEFORE this one)
-	inDegreeCalc := make(map[string]int, len(nameToMeta))
-	reverseEdges := make(map[string][]string) // publisher → consumers that depend on it
-	for consumer, publishers := range deps {
-		for _, pub := range publishers {
-			reverseEdges[pub] = append(reverseEdges[pub], consumer)
-			inDegreeCalc[consumer]++
-		}
+	for publisher := range reverseEdges {
+		sort.Strings(reverseEdges[publisher])
 	}
 
-	// Kahn's BFS
-	queue := make([]string, 0, len(nameToMeta))
-	names := make([]string, 0, len(nameToMeta))
-	for name := range nameToMeta {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	// Always seed with mandatory plugins first (core).
-	for _, name := range names {
-		m := nameToMeta[name]
-		if m.Mandatory {
-			queue = append(queue, name)
+	ready := make([]string, 0, len(metas))
+	for _, metadata := range metas {
+		if inDegree[metadata.Name] == 0 {
+			ready = append(ready, metadata.Name)
 		}
 	}
-	for _, name := range names {
-		if inDegreeCalc[name] == 0 && !nameToMeta[name].Mandatory {
-			queue = append(queue, name)
-		}
-	}
-
-	order := make([]string, 0, len(nameToMeta))
-	visited := make(map[string]bool, len(nameToMeta))
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if visited[cur] {
-			continue
-		}
-		visited[cur] = true
-		order = append(order, cur)
-
-		consumers := reverseEdges[cur]
-		sort.Strings(consumers)
-		for _, consumer := range consumers {
-			inDegreeCalc[consumer]--
-			if inDegreeCalc[consumer] == 0 {
-				queue = append(queue, consumer)
+	sort.Strings(ready)
+	if mandatoryName != "" {
+		// A mandatory plugin has no dependencies (validated above), so it is
+		// always ready and must be selected first regardless of its name.
+		for i, name := range ready {
+			if name == mandatoryName {
+				ready = append([]string{mandatoryName}, append(ready[:i], ready[i+1:]...)...)
+				break
 			}
 		}
 	}
 
-	if len(order) != len(nameToMeta) {
+	order := make([]string, 0, len(metas))
+	for len(ready) > 0 {
+		current := ready[0]
+		ready = ready[1:]
+		order = append(order, current)
+
+		for _, consumer := range reverseEdges[current] {
+			inDegree[consumer]--
+			if inDegree[consumer] == 0 {
+				ready = append(ready, consumer)
+			}
+		}
+		// Keep a total order among all currently runnable plugins, not only the
+		// initial queue. That makes the output deterministic for diamonds too.
+		sort.Strings(ready)
+	}
+
+	if len(order) != len(metas) {
 		return nil, errors.New("plugin dependency graph contains a cycle — cannot determine load order")
 	}
-
 	return order, nil
 }
 
@@ -288,11 +332,11 @@ func apiVersionSupported(version string) bool {
 	}
 	major, _, _ := strings.Cut(version, ".")
 	wanted, err := strconv.Atoi(major)
-	if err != nil {
+	if err != nil || wanted < 1 {
 		return false
 	}
 	supported, err := strconv.Atoi(pluginapi.CurrentAPIVersion)
-	return err == nil && wanted <= supported
+	return err == nil && supported >= 1 && wanted <= supported
 }
 
 func publishDeclaredServices(
@@ -303,28 +347,41 @@ func publishDeclaredServices(
 ) error {
 	provider, ok := plugin.(pluginapi.ServiceProvider)
 	if !ok {
-		// The in-progress Phase 1 wrappers still use two-phase initialisation.
-		// Keep them loadable while they are migrated to ServiceProvider; they
-		// cannot, however, satisfy a runtime Resolve until that migration lands.
-		return nil
+		if len(meta.Publishes) == 0 {
+			return nil
+		}
+		return fmt.Errorf(
+			"plugin %q declares published services but does not implement pluginapi.ServiceProvider",
+			pluginName,
+		)
 	}
 
 	services := provider.PublishedServices()
-	declared := make(map[string]struct{}, len(meta.Publishes))
+	declared := make(map[string]any, len(meta.Publishes))
 	for _, publication := range meta.Publishes {
-		declared[publication.Name] = struct{}{}
+		declared[publication.Name] = nil
 		service, ok := services[publication.Name]
 		if !ok {
 			return fmt.Errorf("plugin %q did not provide declared service %q", pluginName, publication.Name)
 		}
-		if err := registry.Publish(publication.Name, service); err != nil {
-			return fmt.Errorf("plugin %q publish service %q: %w", pluginName, publication.Name, err)
+		if isNilService(service) {
+			return fmt.Errorf("plugin %q provided nil for declared service %q", pluginName, publication.Name)
 		}
+		declared[publication.Name] = service
 	}
+
+	providedNames := make([]string, 0, len(services))
 	for name := range services {
+		providedNames = append(providedNames, name)
+	}
+	sort.Strings(providedNames)
+	for _, name := range providedNames {
 		if _, ok := declared[name]; !ok {
 			return fmt.Errorf("plugin %q provided undeclared service %q", pluginName, name)
 		}
+	}
+	if err := registry.publishBatch(declared); err != nil {
+		return fmt.Errorf("plugin %q publish declared services: %w", pluginName, err)
 	}
 	return nil
 }
@@ -340,9 +397,18 @@ type scopedResolver struct {
 	db         pluginapi.PluginDBHandle
 	log        pluginapi.Logger
 	emitFn     func(eventType string, data map[string]any, userMeta map[string]any)
+
+	mu     sync.RWMutex
+	active bool
 }
 
 func (s *scopedResolver) Resolve(name string) (any, error) {
+	s.mu.RLock()
+	active := s.active
+	s.mu.RUnlock()
+	if !active {
+		return nil, fmt.Errorf("plugin %q tried to resolve %q after Init() completed", s.pluginName, name)
+	}
 	if !s.declared[name] {
 		return nil, fmt.Errorf(
 			"plugin %q tried to resolve %q which is not declared in its Metadata().Requires; "+
@@ -351,6 +417,15 @@ func (s *scopedResolver) Resolve(name string) (any, error) {
 		)
 	}
 	return s.registry.resolve(name)
+}
+
+// closeResolveWindow makes the resolver unusable for dependency resolution once
+// Init returns. Keeping a resolver reference must not turn it into a runtime
+// service locator and thereby bypass the graph validated by Host.Load.
+func (s *scopedResolver) closeResolveWindow() {
+	s.mu.Lock()
+	s.active = false
+	s.mu.Unlock()
 }
 
 func (s *scopedResolver) Logger() pluginapi.Logger { return s.log }
@@ -386,11 +461,18 @@ type loadedPlugin struct {
 	plugin pluginapi.Plugin
 }
 
+type hostState uint8
+
+const (
+	hostNew hostState = iota
+	hostLoading
+	hostRunning
+	hostStopping
+	hostStopped
+)
+
 // Host is the Plugin Host. It owns the Service Registry, loads plugins in
 // dependency order, runs their goroutines, and shuts them down gracefully.
-//
-// Phase 0.5 supports ONLY internal (compiled-in, source:"builtin") plugins.
-// External (go-plugin/gRPC) support is added in Phase 4.
 type Host struct {
 	cfg      PluginsConfig
 	registry *ServiceRegistry
@@ -399,6 +481,11 @@ type Host struct {
 	// staticRegistry holds all compiled-in plugin factories, populated by
 	// internal/pluginhost/registry_builtin.go (generated / hand-maintained).
 	staticRegistry map[string]func() pluginapi.Plugin
+
+	// pluginDBFactory creates a scoped handle for an enabled plugin. It is
+	// supplied by the composition root because the kernel, not plugins, owns
+	// the connection pool.
+	pluginDBFactory PluginDBFactory
 
 	// loaded is the ordered slice of successfully initialised plugins.
 	loaded []loadedPlugin
@@ -411,7 +498,22 @@ type Host struct {
 	// not sufficient because Start is allowed to block until its context ends.
 	runCancel context.CancelFunc
 
-	mu sync.RWMutex
+	// lifecycleMu serialises Load and Shutdown without holding mu while calling
+	// untrusted plugin code. Plugins can therefore use regular Host accessors
+	// from their lifecycle methods without deadlocking the host.
+	lifecycleMu sync.Mutex
+
+	// starts tracks every Start goroutine so Shutdown can wait until they have
+	// actually returned after cancellation.
+	starts sync.WaitGroup
+
+	// banCache is a kernel-owned read model populated by AntifraudProvider
+	// push updates. Subscription requests must never issue RPCs to an external
+	// antifraud plugin on their hot path.
+	banCache *LocalBanCache
+
+	mu    sync.RWMutex
+	state hostState
 }
 
 // New creates a Host with the given configuration and optional event emitter.
@@ -422,17 +524,66 @@ func New(
 	log *slog.Logger,
 	staticPlugins map[string]func() pluginapi.Plugin,
 	emitFn func(string, map[string]any, map[string]any),
+	options ...HostOption,
 ) *Host {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Host{
-		cfg:            cfg,
+	host := &Host{
+		cfg:            clonePluginsConfig(cfg),
 		registry:       newServiceRegistry(),
 		log:            log,
-		staticRegistry: staticPlugins,
+		staticRegistry: cloneStaticRegistry(staticPlugins),
 		emitFn:         emitFn,
+		banCache:       NewLocalBanCache(),
 	}
+	for _, option := range options {
+		if option != nil {
+			option(host)
+		}
+	}
+	return host
+}
+
+func clonePluginsConfig(cfg PluginsConfig) PluginsConfig {
+	if cfg == nil {
+		return nil
+	}
+	copy := make(PluginsConfig, len(cfg))
+	for name, entry := range cfg {
+		entry.Config = cloneRawConfig(entry.Config)
+		entry.Args = append([]string(nil), entry.Args...)
+		copy[name] = entry
+	}
+	return copy
+}
+
+func cloneRawConfig(cfg pluginapi.RawConfig) pluginapi.RawConfig {
+	if cfg == nil {
+		return nil
+	}
+	copy := make(pluginapi.RawConfig, len(cfg))
+	for key, value := range cfg {
+		copy[key] = value
+	}
+	return copy
+}
+
+func cloneStaticRegistry(registry map[string]func() pluginapi.Plugin) map[string]func() pluginapi.Plugin {
+	if registry == nil {
+		return nil
+	}
+	copy := make(map[string]func() pluginapi.Plugin, len(registry))
+	for name, factory := range registry {
+		copy[name] = factory
+	}
+	return copy
+}
+
+func cloneMetadata(metadata pluginapi.Metadata) pluginapi.Metadata {
+	metadata.Publishes = append([]pluginapi.ServiceRef(nil), metadata.Publishes...)
+	metadata.Requires = append([]pluginapi.ServiceRef(nil), metadata.Requires...)
+	return metadata
 }
 
 // Load validates the dependency graph, then initialises and starts all enabled
@@ -442,12 +593,69 @@ func New(
 //   - A non-optional required service has no publisher among the enabled plugins.
 //   - The dependency graph contains a cycle.
 //   - Any plugin's Init() returns an error.
-func (h *Host) Load(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *Host) Load(ctx context.Context) (err error) {
+	if ctx == nil {
+		return errors.New("pluginhost: Load context must not be nil")
+	}
 
-	if len(h.loaded) > 0 {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+
+	h.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			h.mu.Unlock()
+		}
+	}()
+
+	switch h.state {
+	case hostNew:
+		h.state = hostLoading
+	case hostRunning:
 		return errors.New("Host.Load() called more than once")
+	case hostStopped:
+		return errors.New("Host.Load() cannot be called after Shutdown()")
+	default:
+		return errors.New("Host.Load() is already in progress")
+	}
+
+	// The registry used during Init is private until every plugin has passed
+	// Init and declared all of its services. This prevents external callers from
+	// observing a partially initialised graph.
+	stagingRegistry := newServiceRegistry()
+	initialised := make([]loadedPlugin, 0, len(h.cfg))
+	preflighted := make([]preflightPlugin, 0, len(h.cfg))
+	defer func() {
+		if err == nil {
+			return
+		}
+		// Never run arbitrary plugin Stop methods while holding the Host lock:
+		// a plugin may legitimately call a Host accessor during cleanup.
+		h.mu.Unlock()
+		locked = false
+		cleanupErr := h.rollbackInitialised(ctx, initialised)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), externalPluginRPCTimeout)
+		for i := len(preflighted) - 1; i >= 0; i-- {
+			preflighted[i].AbortPreflight(cleanupCtx)
+		}
+		cleanupCancel()
+		h.mu.Lock()
+		locked = true
+		h.loaded = nil
+		h.registry = newServiceRegistry()
+		h.runCancel = nil
+		h.state = hostNew
+		if cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("plugin host load cancelled before initialisation: %w", err)
+	}
+	if entry, configured := h.cfg["core"]; configured && !entry.Enabled {
+		return errors.New("plugin \"core\" is mandatory and cannot be disabled")
 	}
 
 	// Collect metadata for all enabled plugins to build the dependency graph.
@@ -455,35 +663,89 @@ func (h *Host) Load(ctx context.Context) error {
 		name    string
 		entry   PluginEntry
 		factory func() pluginapi.Plugin
+		plugin  pluginapi.Plugin
 	}
 
 	candidates := make([]candidate, 0, len(h.cfg))
-	for name, entry := range h.cfg {
+	names := make([]string, 0, len(h.cfg))
+	for name := range h.cfg {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry := h.cfg[name]
 		if !entry.Enabled {
 			h.log.Info("[pluginhost] plugin disabled — skipping", "plugin", name)
 			continue
 		}
-		factory, ok := h.staticRegistry[name]
-		if !ok {
-			return fmt.Errorf("plugin %q is enabled but not found in the builtin registry; "+
-				"check your build tags or add it to registry_builtin.go", name)
+		if strings.TrimSpace(name) == "" {
+			return errors.New("enabled plugin configuration has an empty name")
 		}
-		candidates = append(candidates, candidate{name: name, entry: entry, factory: factory})
+		switch entry.Source {
+		case "builtin":
+			factory, ok := h.staticRegistry[name]
+			if !ok {
+				return fmt.Errorf("plugin %q is enabled but not found in the builtin registry; "+
+					"check your build tags or add it to registry_builtin.go", name)
+			}
+			if factory == nil {
+				return fmt.Errorf("plugin %q has a nil builtin factory", name)
+			}
+			candidates = append(candidates, candidate{name: name, entry: entry, factory: factory})
+		case "external":
+			if name == "core" {
+				return errors.New("plugin \"core\" is mandatory and cannot use source \"external\"")
+			}
+			candidates = append(candidates, candidate{
+				name: name, entry: entry, plugin: newExternalPlugin(name, entry, h.log),
+			})
+		default:
+			return fmt.Errorf("plugin %q has unsupported source %q; supported sources are %q and %q",
+				name, entry.Source, "builtin", "external")
+		}
 	}
 
 	// Instantiate each candidate to read its Metadata.
 	instances := make(map[string]pluginapi.Plugin, len(candidates))
+	metadataByName := make(map[string]pluginapi.Metadata, len(candidates))
 	metas := make([]pluginapi.Metadata, 0, len(candidates))
 	enabled := make(map[string]bool, len(candidates))
 
 	for _, c := range candidates {
-		p := c.factory()
-		m := p.Metadata()
+		p := c.plugin
+		if p == nil {
+			p = c.factory()
+		}
+		if isNilService(p) {
+			return fmt.Errorf("plugin factory registered as %q returned nil", c.name)
+		}
+		if external, ok := p.(preflightPlugin); ok {
+			h.mu.Unlock()
+			locked = false
+			preflightErr := external.Preflight(ctx)
+			h.mu.Lock()
+			locked = true
+			if preflightErr != nil {
+				return fmt.Errorf("external plugin %q preflight failed: %w", c.name, preflightErr)
+			}
+			preflighted = append(preflighted, external)
+		}
+		m := cloneMetadata(p.Metadata())
 		if m.Name != c.name {
 			return fmt.Errorf("plugin factory registered as %q returned Metadata.Name=%q — they must match",
 				c.name, m.Name)
 		}
+		if strings.TrimSpace(m.Kind) == "" {
+			return fmt.Errorf("plugin %q has an empty Metadata.Kind", m.Name)
+		}
+		if m.Mandatory && m.Name != "core" {
+			return fmt.Errorf("plugin %q is mandatory, but only plugin \"core\" may be mandatory", m.Name)
+		}
+		if m.Name == "core" && !m.Mandatory {
+			return errors.New("plugin \"core\" must set Metadata.Mandatory=true")
+		}
 		instances[m.Name] = p
+		metadataByName[m.Name] = m
 		metas = append(metas, m)
 		enabled[m.Name] = true
 		if !apiVersionSupported(m.APIVersion) {
@@ -521,9 +783,13 @@ func (h *Host) Load(ctx context.Context) error {
 	h.log.Info("[pluginhost] load order determined", "order", order)
 
 	// Init plugins in order.
+	loaded := make([]loadedPlugin, 0, len(order))
 	for _, name := range order {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("plugin host load cancelled before initialising %q: %w", name, err)
+		}
 		p := instances[name]
-		m := p.Metadata()
+		m := metadataByName[name]
 		entry := h.cfg[name]
 
 		// Build the set of declared Requires for the scoped resolver.
@@ -532,35 +798,92 @@ func (h *Host) Load(ctx context.Context) error {
 			declared[req.Name] = true
 		}
 
+		db := h.databaseHandle(name)
+		if h.pluginDBFactory != nil && db == nil {
+			return fmt.Errorf("plugin %q database handle factory returned nil", name)
+		}
+		if db != nil {
+			h.log.Info("[pluginhost] applying plugin migrations", "plugin", name, "namespace", db.PluginName())
+			h.mu.Unlock()
+			locked = false
+			migrationErr := runPluginMigrations(ctx, name, p, db)
+			h.mu.Lock()
+			locked = true
+			if migrationErr != nil {
+				return migrationErr
+			}
+		}
+
 		resolver := &scopedResolver{
 			pluginName: name,
 			declared:   declared,
-			registry:   h.registry,
-			db:         nil, // Phase 1: real PluginDBHandle wired here
+			registry:   stagingRegistry,
+			db:         db,
 			log:        &slogLogger{log: h.log.With("plugin", name)},
 			emitFn:     h.emitFn,
+			active:     true,
 		}
 
 		h.log.Info("[pluginhost] initialising plugin", "plugin", name, "version", m.Version)
-		if err := p.Init(ctx, entry.Config, resolver); err != nil {
-			return fmt.Errorf("plugin %q Init() failed: %w", name, err)
+		h.mu.Unlock()
+		locked = false
+		initErr := p.Init(ctx, cloneRawConfig(entry.Config), resolver)
+		h.mu.Lock()
+		locked = true
+		resolver.closeResolveWindow()
+		initialised = append(initialised, loadedPlugin{meta: m, plugin: p})
+		if initErr != nil {
+			return fmt.Errorf("plugin %q Init() failed: %w", name, initErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("plugin host load cancelled after initialising %q: %w", name, err)
 		}
 
-		if err := publishDeclaredServices(h.registry, name, m, p); err != nil {
-			return err
+		h.mu.Unlock()
+		locked = false
+		publishErr := publishDeclaredServices(stagingRegistry, name, m, p)
+		h.mu.Lock()
+		locked = true
+		if publishErr != nil {
+			return publishErr
 		}
 
-		h.loaded = append(h.loaded, loadedPlugin{meta: m, plugin: p})
+		loaded = append(loaded, loadedPlugin{meta: m, plugin: p})
 		h.log.Info("[pluginhost] plugin initialised", "plugin", name)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("plugin host load cancelled before starting plugins: %w", err)
+	}
+
+	// Install the local ban cache before any plugin is started. An internal
+	// provider can then publish recovered bans during Start, while an external
+	// provider gets the same push-only channel without exposing an RPC on the
+	// subscription hot path.
+	for _, lp := range loaded {
+		provider, ok := lp.plugin.(pluginapi.AntifraudProvider)
+		if !ok {
+			continue
+		}
+		h.mu.Unlock()
+		locked = false
+		provider.SetBanSink(h.banCache)
+		h.mu.Lock()
+		locked = true
 	}
 
 	// Start all plugins (each in its own goroutine). The Host owns a child
 	// context so Shutdown can stop plugins even if the caller's Load context is
 	// still alive (the normal case for a long-running server).
 	runCtx, runCancel := context.WithCancel(ctx)
+	h.registry = stagingRegistry
+	h.loaded = loaded
 	h.runCancel = runCancel
-	for _, lp := range h.loaded {
+	h.starts.Add(len(loaded))
+	h.state = hostRunning
+	for _, lp := range loaded {
 		go func(lp loadedPlugin) {
+			defer h.starts.Done()
 			h.log.Info("[pluginhost] starting plugin", "plugin", lp.meta.Name)
 			if err := lp.plugin.Start(runCtx); err != nil && !errors.Is(err, context.Canceled) {
 				h.log.Error("[pluginhost] plugin Start() returned an error",
@@ -570,62 +893,195 @@ func (h *Host) Load(ctx context.Context) error {
 		}(lp)
 	}
 
-	h.log.Info("[pluginhost] all plugins loaded and started", "count", len(h.loaded))
+	h.log.Info("[pluginhost] all plugins loaded and started", "count", len(loaded))
 	return nil
 }
 
-// PublishService is a helper that allows a plugin's Init() implementation to
-// publish a service to the registry without holding a reference to the registry
-// directly. It is called by plugins as:
-//
-//	reg.(*pluginhost.ScopedPublisher).Publish("my_service", myImpl)
-//
-// In practice, plugins receive a thin wrapper that exposes Publish alongside Resolve.
-// This method on Host is used during testing.
-func (h *Host) PublishService(name string, svc any) error {
-	return h.registry.Publish(name, svc)
+// rollbackInitialised stops every plugin whose Init was entered, including the
+// one that returned an error. Init is allowed to allocate resources before it
+// detects a configuration or dependency problem, so excluding that last plugin
+// would leak those resources.
+func (h *Host) rollbackInitialised(ctx context.Context, initialised []loadedPlugin) error {
+	cleanupCtx := context.WithoutCancel(ctx)
+	var errs []error
+	for i := len(initialised) - 1; i >= 0; i-- {
+		lp := initialised[i]
+		h.log.Info("[pluginhost] rolling back plugin", "plugin", lp.meta.Name)
+		if err := lp.plugin.Stop(cleanupCtx); err != nil {
+			h.log.Error("[pluginhost] plugin rollback Stop() error", "plugin", lp.meta.Name, "error", err)
+			errs = append(errs, fmt.Errorf("plugin %q rollback Stop: %w", lp.meta.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ResolveService retrieves a published service by name. For use in tests and
 // internal kernel code that needs to access a service outside a plugin's Init().
 func (h *Host) ResolveService(name string) (any, error) {
-	return h.registry.resolve(name)
+	h.mu.RLock()
+	registry := h.registry
+	h.mu.RUnlock()
+	return registry.resolve(name)
 }
 
 // Shutdown stops all loaded plugins in reverse load order (last-loaded first,
 // core plugin last). Each plugin is given the context's deadline to finish.
 func (h *Host) Shutdown(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.runCancel != nil {
-		h.runCancel()
-		h.runCancel = nil
+	if ctx == nil {
+		return errors.New("pluginhost: Shutdown context must not be nil")
 	}
 
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+
+	h.mu.Lock()
+	switch h.state {
+	case hostNew, hostStopped:
+		h.mu.Unlock()
+		return nil
+	case hostRunning:
+		// Continue below.
+	default:
+		h.mu.Unlock()
+		return errors.New("Host.Shutdown() called while plugin host is not running")
+	}
+
+	loaded := append([]loadedPlugin(nil), h.loaded...)
+	runCancel := h.runCancel
+	h.runCancel = nil
+	h.state = hostStopping
+	h.mu.Unlock()
+
+	if runCancel != nil {
+		runCancel()
+	}
+
+	err := h.stopPlugins(ctx, loaded, "stopping")
+	if waitErr := h.waitForStarts(ctx); waitErr != nil {
+		err = errors.Join(err, waitErr)
+	}
+
+	h.mu.Lock()
+	h.loaded = nil
+	h.registry = newServiceRegistry()
+	h.state = hostStopped
+	h.mu.Unlock()
+	return err
+}
+
+func (h *Host) stopPlugins(ctx context.Context, plugins []loadedPlugin, action string) error {
 	var errs []error
-	for i := len(h.loaded) - 1; i >= 0; i-- {
-		lp := h.loaded[i]
-		h.log.Info("[pluginhost] stopping plugin", "plugin", lp.meta.Name)
+	for i := len(plugins) - 1; i >= 0; i-- {
+		lp := plugins[i]
+		h.log.Info("[pluginhost] "+action+" plugin", "plugin", lp.meta.Name)
 		if err := lp.plugin.Stop(ctx); err != nil {
 			h.log.Error("[pluginhost] plugin Stop() error", "plugin", lp.meta.Name, "error", err)
 			errs = append(errs, fmt.Errorf("plugin %q Stop: %w", lp.meta.Name, err))
 		}
 	}
-	h.loaded = nil
 	return errors.Join(errs...)
+}
+
+func (h *Host) waitForStarts(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("wait for plugin Start routines: %w", ctx.Err())
+	}
+	done := make(chan struct{})
+	go func() {
+		h.starts.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for plugin Start routines: %w", ctx.Err())
+	}
 }
 
 // HealthCheck returns a map of plugin name → health error (nil means healthy).
 // Called by the health monitor and `xraytool plugin list`.
 func (h *Host) HealthCheck(ctx context.Context) map[string]error {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	loaded := append([]loadedPlugin(nil), h.loaded...)
+	h.mu.RUnlock()
 
-	result := make(map[string]error, len(h.loaded))
-	for _, lp := range h.loaded {
-		result[lp.meta.Name] = lp.plugin.Health(ctx)
+	result := make(map[string]error, len(loaded))
+	for _, lp := range loaded {
+		healthErr := lp.plugin.Health(ctx)
+		if healthErr != nil {
+			if restartable, ok := lp.plugin.(restartablePlugin); ok && restartable.IsExternal() {
+				h.log.Warn("[pluginhost] external plugin health check failed; attempting restart",
+					"plugin", lp.meta.Name, "error", healthErr)
+				if restartErr := restartable.Restart(ctx); restartErr != nil {
+					healthErr = errors.Join(healthErr, restartErr)
+				} else {
+					healthErr = nil
+				}
+			}
+			if healthErr != nil && h.emitFn != nil {
+				h.emitFn("plugin.crashed", map[string]any{
+					"plugin": lp.meta.Name,
+					"error":  healthErr.Error(),
+				}, nil)
+			}
+		}
+		result[lp.meta.Name] = healthErr
 	}
 	return result
+}
+
+// Restart restarts one external plugin using its configured restart policy.
+// Builtin plugins intentionally cannot be restarted as subprocesses: their
+// lifecycle is owned by the process and should be restarted with the host.
+func (h *Host) Restart(ctx context.Context, name string) error {
+	if ctx == nil {
+		return errors.New("pluginhost: Restart context must not be nil")
+	}
+	h.mu.RLock()
+	state := h.state
+	var target pluginapi.Plugin
+	for _, lp := range h.loaded {
+		if lp.meta.Name == name {
+			target = lp.plugin
+			break
+		}
+	}
+	h.mu.RUnlock()
+	if state != hostRunning {
+		return errors.New("pluginhost: Restart requires a running host")
+	}
+	if target == nil {
+		return fmt.Errorf("pluginhost: plugin %q is not loaded", name)
+	}
+	restartable, ok := target.(restartablePlugin)
+	if !ok || !restartable.IsExternal() {
+		return fmt.Errorf("pluginhost: plugin %q is not an external plugin and cannot be restarted", name)
+	}
+	return restartable.Restart(ctx)
+}
+
+// ExternalLogs returns a bounded tail of stderr lines for a loaded external
+// plugin. Builtin plugins do not have a subprocess log stream and return a
+// descriptive error instead. A non-positive maxLines returns the entire tail.
+func (h *Host) ExternalLogs(name string, maxLines int) ([]string, error) {
+	h.mu.RLock()
+	var target pluginapi.Plugin
+	for _, lp := range h.loaded {
+		if lp.meta.Name == name {
+			target = lp.plugin
+			break
+		}
+	}
+	h.mu.RUnlock()
+	if target == nil {
+		return nil, fmt.Errorf("pluginhost: plugin %q is not loaded", name)
+	}
+	logs, ok := target.(externalLogProvider)
+	if !ok {
+		return nil, fmt.Errorf("pluginhost: plugin %q is not an external plugin", name)
+	}
+	return logs.Logs(maxLines), nil
 }
 
 // Loaded returns a snapshot of the currently loaded plugins' metadata.
@@ -634,7 +1090,7 @@ func (h *Host) Loaded() []pluginapi.Metadata {
 	defer h.mu.RUnlock()
 	metas := make([]pluginapi.Metadata, len(h.loaded))
 	for i, lp := range h.loaded {
-		metas[i] = lp.meta
+		metas[i] = cloneMetadata(lp.meta)
 	}
 	return metas
 }
@@ -663,12 +1119,25 @@ func (h *Host) Core() pluginapi.CoreProvider {
 
 // Antifraud returns the AntifraudProvider and a bool indicating whether one is loaded.
 func (h *Host) Antifraud() (pluginapi.AntifraudProvider, bool) {
-	svc, err := h.registry.resolve("antifraud_provider")
+	h.mu.RLock()
+	registry := h.registry
+	h.mu.RUnlock()
+	svc, err := registry.resolve("antifraud_provider")
 	if err != nil {
 		return nil, false
 	}
 	af, ok := svc.(pluginapi.AntifraudProvider)
 	return af, ok
+}
+
+// BanCache returns the local, push-populated anti-fraud read cache. Callers
+// use it for synchronous subscription checks instead of calling a provider
+// across a process boundary.
+func (h *Host) BanCache() *LocalBanCache {
+	h.mu.RLock()
+	cache := h.banCache
+	h.mu.RUnlock()
+	return cache
 }
 
 // PaymentProviders returns all loaded payment providers keyed by MethodID.
@@ -678,8 +1147,13 @@ func (h *Host) PaymentProviders() map[string]pluginapi.PaymentProvider {
 
 	result := make(map[string]pluginapi.PaymentProvider)
 	for _, lp := range h.loaded {
+		if external, ok := lp.plugin.(*externalPlugin); ok && !external.publishesPaymentProvider() {
+			continue
+		}
 		if pp, ok := lp.plugin.(pluginapi.PaymentProvider); ok {
-			result[pp.MethodID()] = pp
+			if methodID := strings.TrimSpace(pp.MethodID()); methodID != "" {
+				result[methodID] = pp
+			}
 		}
 	}
 	return result
@@ -692,6 +1166,9 @@ func (h *Host) EventSinks() []pluginapi.EventSink {
 
 	var sinks []pluginapi.EventSink
 	for _, lp := range h.loaded {
+		if external, ok := lp.plugin.(*externalPlugin); ok && !external.publishes("event_sink") {
+			continue
+		}
 		if es, ok := lp.plugin.(pluginapi.EventSink); ok {
 			sinks = append(sinks, es)
 		}

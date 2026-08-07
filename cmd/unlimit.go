@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"xraytool/internal/user"
+	"xraytool/internal/plugins/core/user"
 
 	"github.com/spf13/cobra"
 )

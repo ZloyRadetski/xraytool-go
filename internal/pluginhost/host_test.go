@@ -45,6 +45,31 @@ func (s *stubPlugin) PublishedServices() map[string]any {
 	return s.services
 }
 
+// noProviderPlugin deliberately does not implement ServiceProvider. It models
+// a plugin that declares a publication but has not implemented the required
+// host contract yet.
+type noProviderPlugin struct {
+	meta   pluginapi.Metadata
+	initFn func(context.Context, pluginapi.RawConfig, pluginapi.ServiceResolver) error
+	stopFn func()
+}
+
+func (p *noProviderPlugin) Metadata() pluginapi.Metadata { return p.meta }
+func (p *noProviderPlugin) Init(ctx context.Context, cfg pluginapi.RawConfig, reg pluginapi.ServiceResolver) error {
+	if p.initFn != nil {
+		return p.initFn(ctx, cfg, reg)
+	}
+	return nil
+}
+func (p *noProviderPlugin) Start(ctx context.Context) error { <-ctx.Done(); return nil }
+func (p *noProviderPlugin) Stop(_ context.Context) error {
+	if p.stopFn != nil {
+		p.stopFn()
+	}
+	return nil
+}
+func (p *noProviderPlugin) Health(_ context.Context) error { return nil }
+
 // stopFnPlugin extends stubPlugin with a custom stop callback — used to verify
 // shutdown order.
 type stopFnPlugin struct {
@@ -75,6 +100,7 @@ var _ pluginapi.Plugin = (*stubPlugin)(nil)
 var _ pluginapi.Plugin = (*stopFnPlugin)(nil)
 var _ pluginapi.Plugin = (*startFnPlugin)(nil)
 var _ pluginapi.ServiceProvider = (*stubPlugin)(nil)
+var _ pluginapi.Plugin = (*noProviderPlugin)(nil)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -430,8 +456,9 @@ func TestHostShutdown_CancelsPluginStartContext(t *testing.T) {
 
 	select {
 	case <-core.done:
-	case <-time.After(time.Second):
-		t.Fatal("plugin Start context was not cancelled by Shutdown")
+		// Shutdown waits for Start to return after cancelling its context.
+	default:
+		t.Fatal("Shutdown returned before plugin Start exited")
 	}
 }
 
@@ -561,4 +588,177 @@ func TestHostHealthCheck_ReturnsPluginErrors(t *testing.T) {
 	health := host.HealthCheck(context.Background())
 	assert.Nil(t, health["core"])
 	assert.Nil(t, health["antifraud"])
+}
+
+func TestHostLoad_RollsBackInitialisedPluginsAndCanRetry(t *testing.T) {
+	var mu sync.Mutex
+	var stopped []string
+	recordStop := func(name string) func() {
+		return func() {
+			mu.Lock()
+			defer mu.Unlock()
+			stopped = append(stopped, name)
+		}
+	}
+
+	core := &stopFnPlugin{
+		stubPlugin:   *makeCorePlugin(),
+		stopCallback: recordStop("core"),
+	}
+	mailer := &stopFnPlugin{
+		stubPlugin: stubPlugin{
+			meta:    pluginapi.Metadata{Name: "mailer", Kind: "notification", APIVersion: "1"},
+			initErr: errors.New("mailer init failed"),
+		},
+		stopCallback: recordStop("mailer"),
+	}
+	host := pluginhost.New(pluginhost.PluginsConfig{
+		"core":   {Enabled: true, Source: "builtin"},
+		"mailer": {Enabled: true, Source: "builtin"},
+	}, nil, map[string]func() pluginapi.Plugin{
+		"core":   func() pluginapi.Plugin { return core },
+		"mailer": func() pluginapi.Plugin { return mailer },
+	}, nil)
+
+	err := host.Load(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "mailer init failed")
+	assert.Equal(t, []string{"mailer", "core"}, stopped, "rollback must stop the failing plugin first")
+	assert.Empty(t, host.Loaded())
+	_, err = host.ResolveService("subscription_repository")
+	assert.Error(t, err, "a failed load must not expose staged services")
+
+	mailer.initErr = nil
+	require.NoError(t, host.Load(context.Background()), "a fully rolled-back host can retry Load")
+	require.NoError(t, host.Shutdown(context.Background()))
+}
+
+func TestHostLoad_PublishesServicesAtomically(t *testing.T) {
+	var stopped int
+	core := &stopFnPlugin{
+		stubPlugin: stubPlugin{
+			meta: pluginapi.Metadata{
+				Name:       "core",
+				Kind:       "core",
+				Mandatory:  true,
+				APIVersion: "1",
+				Publishes: []pluginapi.ServiceRef{
+					{Name: "first"},
+					{Name: "second"},
+				},
+			},
+			services: map[string]any{"first": struct{}{}},
+		},
+		stopCallback: func() { stopped++ },
+	}
+	host := pluginhost.New(pluginhost.PluginsConfig{
+		"core": {Enabled: true, Source: "builtin"},
+	}, nil, map[string]func() pluginapi.Plugin{
+		"core": func() pluginapi.Plugin { return core },
+	}, nil)
+
+	err := host.Load(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "did not provide declared service \"second\"")
+	assert.Equal(t, 1, stopped, "a publication failure still cleans up the initialised plugin")
+	_, err = host.ResolveService("first")
+	assert.Error(t, err, "the first service must not leak when a later declaration is missing")
+}
+
+func TestHostLoad_RequiresServiceProviderForDeclaredPublications(t *testing.T) {
+	stopped := false
+	core := &noProviderPlugin{
+		meta: pluginapi.Metadata{
+			Name:       "core",
+			Kind:       "core",
+			Mandatory:  true,
+			APIVersion: "1",
+			Publishes:  []pluginapi.ServiceRef{{Name: "must_publish"}},
+		},
+		stopFn: func() { stopped = true },
+	}
+	host := pluginhost.New(pluginhost.PluginsConfig{
+		"core": {Enabled: true, Source: "builtin"},
+	}, nil, map[string]func() pluginapi.Plugin{
+		"core": func() pluginapi.Plugin { return core },
+	}, nil)
+
+	err := host.Load(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "does not implement pluginapi.ServiceProvider")
+	assert.True(t, stopped)
+}
+
+func TestHostLoad_RejectsExternalCore(t *testing.T) {
+	host := pluginhost.New(pluginhost.PluginsConfig{
+		"core": {Enabled: true, Source: "external"},
+	}, nil, map[string]func() pluginapi.Plugin{
+		"core": func() pluginapi.Plugin { return makeCorePlugin() },
+	}, nil)
+
+	err := host.Load(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "core")
+	assert.ErrorContains(t, err, "cannot use source \"external\"")
+}
+
+func TestGraph_DeterministicOrder(t *testing.T) {
+	core := pluginapi.Metadata{
+		Name: "core", Kind: "core", Mandatory: true,
+		Publishes: []pluginapi.ServiceRef{{Name: "core_service"}},
+	}
+	alpha := pluginapi.Metadata{
+		Name: "alpha", Kind: "test",
+		Requires:  []pluginapi.ServiceRef{{Name: "core_service"}},
+		Publishes: []pluginapi.ServiceRef{{Name: "alpha_service"}},
+	}
+	beta := pluginapi.Metadata{
+		Name: "beta", Kind: "test",
+		Requires: []pluginapi.ServiceRef{{Name: "core_service"}},
+	}
+	charlie := pluginapi.Metadata{
+		Name: "charlie", Kind: "test",
+		Requires: []pluginapi.ServiceRef{{Name: "alpha_service"}},
+	}
+
+	for _, input := range [][]pluginapi.Metadata{
+		{core, alpha, beta, charlie},
+		{charlie, beta, alpha, core},
+		{beta, core, charlie, alpha},
+	} {
+		order, err := pluginhost.Graph(input, makeEnabled("core", "alpha", "beta", "charlie"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"core", "alpha", "beta", "charlie"}, order)
+	}
+}
+
+func TestHostLoad_ResolverCannotResolveAfterInit(t *testing.T) {
+	core := makeCorePlugin()
+	var resolver pluginapi.ServiceResolver
+	consumer := &stubPlugin{
+		meta: pluginapi.Metadata{
+			Name:       "consumer",
+			Kind:       "test",
+			APIVersion: "1",
+			Requires:   []pluginapi.ServiceRef{{Name: "subscription_repository"}},
+		},
+		initFn: func(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.ServiceResolver) error {
+			resolver = reg
+			_, err := reg.Resolve("subscription_repository")
+			return err
+		},
+	}
+	host := pluginhost.New(pluginhost.PluginsConfig{
+		"core":     {Enabled: true, Source: "builtin"},
+		"consumer": {Enabled: true, Source: "builtin"},
+	}, nil, map[string]func() pluginapi.Plugin{
+		"core":     func() pluginapi.Plugin { return core },
+		"consumer": func() pluginapi.Plugin { return consumer },
+	}, nil)
+
+	require.NoError(t, host.Load(context.Background()))
+	_, err := resolver.Resolve("subscription_repository")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "after Init() completed")
+	require.NoError(t, host.Shutdown(context.Background()))
 }

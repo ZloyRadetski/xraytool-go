@@ -17,6 +17,8 @@ import (
 	enginePlugin "xraytool/internal/plugins/engine_xray"
 	eventsinkPlugin "xraytool/internal/plugins/eventsink_webhook"
 	mailerPlugin "xraytool/internal/plugins/mailer_resend"
+	plategaPlugin "xraytool/internal/plugins/payment_platega"
+	pricingPlugin "xraytool/internal/plugins/pricing_default"
 )
 
 // BuiltinRegistry возвращает карту name → factory для всех compiled-in плагинов.
@@ -48,6 +50,12 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 		// EventSink: HTTP webhook delivery with HMAC signing and retry.
 		// Config keys: webhooks ([]string), webhook_secret.
 		"eventsink_webhook": func() pluginapi.Plugin { return eventsinkPlugin.New() },
+
+		// Platega payment gateway
+		"payment_platega": func() pluginapi.Plugin { return plategaPlugin.New() },
+		
+		// Pricing logic
+		"pricing_default": func() pluginapi.Plugin { return pricingPlugin.New() },
 		// ── Phase 1.5+: Engine plugins (TBD) ────────────────────────────────
 		// "engine_xray": func() pluginapi.Plugin { return engine_xray.New(cfg) },
 	}

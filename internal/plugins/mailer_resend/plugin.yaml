@@ -1,0 +1,10 @@
+name: mailer_resend
+kind: notification
+version: 1.0.0
+api_version: "1"
+description: Email notification delivery via the Resend.com API.
+type: internal
+config_schema: ../../pluginmanifest/schemas/mailer_resend.schema.json
+publishes:
+  - notification_provider
+requires: []

@@ -40,11 +40,12 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
-	"xraytool/internal/payment"
+	"xraytool/internal/plugins/core/payment"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/server"
-	"xraytool/internal/subscription"
-	usersvc "xraytool/internal/user"
+	"xraytool/internal/plugins/core/server"
+	"xraytool/internal/plugins/core/subscription"
+	"xraytool/internal/plugins/core/worker"
+	usersvc "xraytool/internal/plugins/core/user"
 )
 
 // ServiceName constants are the stable registry keys published by this plugin.
@@ -83,9 +84,11 @@ type SubscriptionLifecycle interface {
 // these dependencies at construction time still lets Init publish real values
 // before any dependent plugin is initialised.
 type Runtime struct {
-	Registry   domain.Registry
-	Engine     domain.Engine
-	Propagator domain.EventPropagator
+	Registry               domain.Registry
+	Engine                 domain.Engine
+	Propagator             domain.EventPropagator
+	UsePluginNotifications bool
+	UsePluginEventSinks    bool
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,8 +182,11 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 
 	// ── Events dispatcher ──────────────────────────────────────────────
 	p.dispatcher = events.NewDispatcher(&events.Config{
-		Webhooks:      p.cfg.Webhooks,
-		WebhookSecret: p.cfg.WebhookSecret,
+		OnDispatch: func(eventType string, data map[string]interface{}, userMeta map[string]interface{}) {
+			if p.reg != nil {
+				p.reg.EmitEvent(eventType, data, userMeta)
+			}
+		},
 	})
 
 	return p.initServices(p.runtime.Registry, p.runtime.Engine, p.runtime.Propagator)
@@ -244,7 +250,7 @@ func (p *Plugin) InitHTTPRouter(
 	engine domain.Engine,
 	apiKey string,
 ) {
-	p.httpRouter = server.New(
+	p.httpRouter = server.NewWithOptions(
 		p.cfg,
 		apiKey,
 		p.cacheMgr,
@@ -253,18 +259,45 @@ func (p *Plugin) InitHTTPRouter(
 		p.paymentSvc,
 		p.dispatcher,
 		slog.Default(),
+		server.Options{DisableLegacyMailer: p.runtime.UsePluginNotifications},
 	)
 }
 
-// Start keeps the core lifecycle active. The legacy workers remain under the
-// kernel composition root until the EngineProvider migration is complete; that
-// avoids running a second expiry worker against a partially migrated engine.
+// Start launches core workers (expiry, scrubber) and keeps the plugin alive
+// until the host cancels its context.
+//
+// The ExpiryWorker and ScrubberWorker are domain concerns of the core plugin
+// (subscription lifecycle, payment privacy), so they run here — not in the
+// kernel composition root.
 func (p *Plugin) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
 	p.workersDone = make(chan struct{})
-	defer close(p.workersDone)
 
+	if p.cfg.Worker.Enabled {
+		// ExpiryWorker: periodically expires overdue subscriptions and
+		// enforces device limits. Lives inside the core plugin because
+		// subscription expiry is a core business rule.
+		wkr := worker.NewExpiryWorker(
+			p.registry,
+			p.cfg,
+			p.dispatcher,
+			p.runtime.Engine,
+			slog.Default(),
+			p.runtime.Propagator,
+		)
+		go wkr.Run(runCtx)
+		slog.Info("[core] Expiry Worker started", "interval", p.cfg.Worker.ExpiryInterval)
+
+		// ScrubberWorker: erases old payment external IDs to protect user
+		// privacy. Lives here because payment scrubbing is a core plugin
+		// concern.
+		scrubber := worker.NewScrubberWorker(p.paymentSvc, slog.Default())
+		go scrubber.Run(runCtx)
+		slog.Info("[core] Privacy Scrubber started")
+	}
+
+	close(p.workersDone)
 	<-runCtx.Done()
 	return nil
 }

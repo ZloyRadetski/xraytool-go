@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"xraytool/internal/mailer"
 	"xraytool/internal/pluginapi"
 )
 
@@ -43,7 +42,7 @@ type pluginConfig struct {
 // Plugin wraps mailer.ResendMailer as a pluginapi.NotificationProvider.
 type Plugin struct {
 	log    *slog.Logger
-	mailer *mailer.ResendMailer
+	mailer *ResendMailer
 }
 
 // New creates an uninitialised plugin. Call via BuiltinRegistry factory.
@@ -78,7 +77,7 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 		return fmt.Errorf("mailer_resend: from_email is required in plugin config")
 	}
 
-	p.mailer = mailer.New(cfg.ResendAPIKey, cfg.FromEmail)
+	p.mailer = NewResendMailer(cfg.ResendAPIKey, cfg.FromEmail)
 
 	if reg != nil {
 		reg.Logger().Info("mailer_resend: initialised", "from", cfg.FromEmail)

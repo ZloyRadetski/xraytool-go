@@ -5,10 +5,13 @@ MAIN       := .
 LDFLAGS := -s -w
 GOFLAGS := CGO_ENABLED=0
 
-.PHONY: build build-linux clean install tidy
+.PHONY: build build-minimal build-linux clean install tidy
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) $(MAIN)
+
+build-minimal:
+	go build -tags minimal -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY)-minimal $(MAIN)
 
 build-linux:
 	GOOS=linux GOARCH=amd64 $(GOFLAGS) go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY)-linux-amd64 $(MAIN)

@@ -1,32 +1,39 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
-
-	"xraytool/internal/antifraud"
-	"xraytool/internal/appconfig"
-	"xraytool/internal/domain"
-	"xraytool/internal/logger"
-	"xraytool/internal/server"
-	"xraytool/internal/slave"
-	"xraytool/internal/statesync"
-	"xraytool/internal/subscription"
-	"xraytool/internal/vpn"
-	"xraytool/internal/worker"
 
 	"github.com/spf13/cobra"
+
+	"xraytool/internal/appconfig"
+	"xraytool/internal/logger"
 )
+
+// startServerCmd is the stable public server command.  The former imperative
+// composition root has been retired: both this command and the temporary v2
+// spelling now enter the PluginHost-based kernel in server_kernel.go.
+func startServerCmd(deps *AppDeps) *cobra.Command {
+	cmd := startServerKernelCmd(deps)
+	cmd.Use = "start-server"
+	cmd.Short = "Start the xraytool REST API server"
+	cmd.Long = "Start the xraytool REST API server using the Plugin Host architecture."
+
+	// These switches were accepted by the imperative server command but never
+	// changed its runtime behaviour. Keep them as hidden compatibility flags so
+	// existing service units and automation keep parsing while configuration is
+	// now owned by appconfig/plugins.
+	var legacyAPIConfig string
+	var legacyRunMigrations bool
+	cmd.Flags().StringVar(&legacyAPIConfig, "api-config", "xray_api_config.json", "legacy compatibility flag")
+	cmd.Flags().BoolVar(&legacyRunMigrations, "run-migrations", false, "legacy compatibility flag")
+	_ = cmd.Flags().MarkHidden("api-config")
+	_ = cmd.Flags().MarkHidden("run-migrations")
+	return cmd
+}
 
 func getClientIP(r *http.Request) string {
 	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -46,7 +53,7 @@ func getClientIP(r *http.Request) string {
 func logIntruder(r *http.Request, reason string) {
 	ip := getClientIP(r)
 	dump, err := httputil.DumpRequest(r, false)
-	dumpStr := "Не удалось сделать дамп"
+	dumpStr := "request dump unavailable"
 	if err == nil {
 		dumpStr = string(dump)
 	}
@@ -78,262 +85,4 @@ func isPathAllowed(cfg *appconfig.Config, path string) bool {
 		}
 	}
 	return false
-}
-
-func startServerCmd(deps *AppDeps) *cobra.Command {
-	var port int
-	var runMigrations bool
-	var configPath string
-
-	cmd := &cobra.Command{
-		Use:   "start-server",
-		Short: "Start the xraytool REST API server",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := requireRoot(); err != nil {
-				return err
-			}
-
-			executablePath, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("fatal error: %v", err)
-			}
-			if deps.Cfg.Server.APIKey == "" || deps.Cfg.Server.APIKey == "CHANGE_ME_IN_CONFIG" {
-				return fmt.Errorf("FATAL: server.api_key не может быть пустым или дефолтным в xraytool.yml")
-			}
-
-			if !cmd.Flags().Changed("port") && deps.Cfg != nil {
-				port = deps.Cfg.Ports.APIServer
-			}
-
-			// ── Step 5.1: Check Database ─────────────────────────
-			dbReady := deps.Registry != nil
-			if dbReady {
-				logger.Infof("[DB] Database ready (driver: %s)", deps.Cfg.Database.Driver)
-			} else {
-				logger.Errorf("[!] Database not ready")
-			}
-
-			// Graceful shutdown: close DB connection when server exits.
-			defer deps.RunCleanup()
-
-			// ── Step 5.1.5: Build the VPN Engine (Composition Root) ───────────────
-			// This is the ONLY place in the entire codebase that decides which
-			// concrete engine adapter to use. Everything downstream receives
-			// a vpn.Engine interface and is fully engine-agnostic.
-			var vpnEngine domain.Engine
-			switch deps.Cfg.Engine.Type {
-			// Future engines go here:
-			// case "singbox":
-			//     vpnEngine = singbox.New(deps.Cfg.Singbox.APIAddr, deps.Cfg.Paths.SingboxConfig, slog.Default())
-			default:
-				// Default: Xray-core adapter
-				vpnEngine = vpn.NewAdapter(deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayConfig, deps.Cfg.Paths.XrayTemplate, deps.Cfg.Reality.RotationEnabled, deps.Cfg.Reality.KeysFilepath, deps.Cfg.BlacklistedAdmins, slog.Default())
-				logger.Infof("[ENGINE] Using Xray-core adapter (grpc_addr=%s, template=%s)", deps.Cfg.Xray.APIAddr, deps.Cfg.Paths.XrayTemplate)
-			}
-
-			// Sync users from DB to the running xray process (no restart).
-			// Slaves do not store users in their DB, so running this on a slave would wipe its config.json!
-			if deps.Cfg.IsMaster() && deps.Registry != nil && deps.Cfg.Paths.XrayTemplate != "" {
-				subs, err := deps.Registry.Subscriptions().FindAll(cmd.Context())
-				if err != nil {
-					logger.Warnf("[ENGINE] Failed to load subscriptions for initial sync: %v", err)
-				} else {
-					dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
-					for _, sub := range subs {
-						if sub.Status != "active" || sub.Email == "" || sub.XrayUUID == "" {
-							continue
-						}
-						dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
-					}
-					result, syncErr := vpnEngine.SyncUsers(cmd.Context(), dbUsers, false)
-					if syncErr != nil {
-						logger.Warnf("[ENGINE] Initial user sync failed: %v", syncErr)
-					} else {
-						logger.Infof("[ENGINE] Initial sync: config regenerated, %d users hot-added (xray NOT restarted)", result.Added)
-					}
-				}
-			}
-
-			mux := http.NewServeMux()
-			xraytoolPath := executablePath
-
-			// Initialize CacheManager globally for the server
-			cacheManager := subscription.NewCacheManager(deps.Cfg, vpnEngine)
-			cacheManager.Refresh()
-
-			// ── Step 5.2: Mount REST API router (when DB is ready) ────────────
-			var apiRouter *server.Router
-			if dbReady {
-				var reporter domain.FraudEventReporter
-
-				slaveClient := slave.NewClient(deps.Cfg.SlaveAPI.ConnectTimeout, deps.Cfg.SlaveAPI.RequestTimeout, deps.Cfg.SlaveAPI.RemotePath)
-
-				if !deps.Cfg.IsMaster() && deps.Cfg.MasterAPI.URL != "" && deps.Cfg.AntiFraud.ReportToMaster {
-					entry := slave.Entry{
-						URL:      deps.Cfg.MasterAPI.URL,
-						APIKey:   deps.Cfg.MasterAPI.APIKey,
-						Insecure: deps.Cfg.MasterAPI.Insecure,
-					}
-					repAdp := slave.NewFraudReporterAdapter(slaveClient, entry, slog.Default())
-					go repAdp.Run(context.Background())
-					reporter = repAdp
-				}
-
-				apiRouter = server.New(deps.Cfg, deps.Cfg.Server.APIKey, cacheManager, vpnEngine, deps.UserSvc, deps.PaymentSvc, deps.Dispatcher, slog.Default())
-
-				// 🟢 Anti-Fraud Module 🟢──────────────────────────────────────────────
-				if deps.Cfg.AntiFraud.Enabled {
-					saltAPIKey := deps.Cfg.AntiFraud.SaltSecret
-					if saltAPIKey == "" {
-						// Use a cluster-wide constant fallback if SaltSecret is not explicitly set.
-						// Falling back to Server.APIKey / MasterAPI.APIKey causes hash mismatches
-						// when slaves have unique API keys.
-						saltAPIKey = "xraytool_default_antifraud_salt_secret"
-					}
-
-					afConfig := &antifraud.Config{
-						Enabled:               deps.Cfg.AntiFraud.Enabled,
-						DryRun:                deps.Cfg.AntiFraud.DryRun,
-						LogPath:               deps.Cfg.AntiFraud.LogPath,
-						LogRotationSizeMB:     deps.Cfg.AntiFraud.LogRotationSizeMB,
-						LogRotationMaxAge:     deps.Cfg.AntiFraud.LogRotationMaxAge,
-						IPLimitTTL:            deps.Cfg.AntiFraud.IPLimitTTL,
-						BanDuration:           deps.Cfg.AntiFraud.BanDuration,
-						SuspiciousIPThreshold: deps.Cfg.AntiFraud.MaxIPs,
-						ReportToMaster:        deps.Cfg.AntiFraud.ReportToMaster,
-						IsMaster:              deps.Cfg.IsMaster(),
-						APIKey:                saltAPIKey,
-					}
-					afModule := antifraud.New(afConfig, deps.Registry, vpnEngine, vpnEngine, deps.Propagator, reporter, slog.Default())
-					var ingestFn func(string, []domain.FraudEvent)
-					if deps.Cfg.IsMaster() {
-						ingestFn = afModule.IngestEvents
-					}
-					apiRouter.WithAntiFraud(afModule.IsBanned, afModule.ForceUnban, afModule.GetSnapshot, ingestFn)
-					go afModule.Run(context.Background())
-					logger.Infof("[ANTIFRAUD] Anti-Fraud module started (log_path=%s, max_ips=%d)",
-						deps.Cfg.AntiFraud.LogPath, deps.Cfg.AntiFraud.MaxIPs)
-				} else {
-					logger.Infof("[ANTIFRAUD] Anti-Fraud module DISABLED in config")
-				}
-
-				// Wire sync service: on master, syncSvc is injected later in the
-				// worker block below. On slave nodes we only need registry access
-				// for the ping/delta/full-trigger handlers.
-				if !deps.Cfg.IsMaster() {
-					apiRouter.WithSyncService(nil, deps.Registry)
-				}
-
-				mux.Handle("/", apiRouter)
-				logger.Infof("[API] REST API v1 handlers mounted (users, payments, admin)")
-
-				if deps.Cfg.Worker.Enabled {
-					wkr := worker.NewExpiryWorker(deps.Registry, deps.Cfg, deps.Dispatcher, vpnEngine, slog.Default())
-					go wkr.Run(context.Background())
-					logger.Infof("[WORKER] Background Expiry Worker started with interval %s", deps.Cfg.Worker.ExpiryInterval)
-
-					if deps.Cfg.IsMaster() && len(deps.Cfg.SlaveServers) > 0 {
-						syncInterval, err := time.ParseDuration(deps.Cfg.Worker.SyncStatesInterval)
-						if err != nil || syncInterval <= 0 {
-							logger.Warnf("[WORKER] Invalid worker.sync_states_interval '%s', falling back to 3m", deps.Cfg.Worker.SyncStatesInterval)
-							syncInterval = 3 * time.Minute
-						}
-						syncSvc := deps.SyncSvc
-						if syncSvc == nil {
-							syncSvc = statesync.NewService(deps.Registry, vpnEngine, deps.SlaveProvider, slog.Default())
-						}
-						apiRouter.WithSyncService(syncSvc, deps.Registry)
-						syncWkr := worker.NewSyncStatesWorker(syncSvc, syncInterval, slog.Default())
-						go syncWkr.Run(context.Background())
-						logger.Infof("[WORKER] Background SyncStates Worker started with interval %s", syncInterval)
-
-						if adapter, ok := vpnEngine.(*vpn.Adapter); ok {
-							adapter.OnConfigModified = func() {
-								logger.Infof("[ENGINE] Config modified on master, triggering immediate slave synchronization...")
-								go func() {
-									res, err := syncSvc.SyncAllSlaves(context.Background(), false, false)
-									if err != nil {
-										logger.Errorf("[ENGINE] Triggered synchronization failed: %v", err)
-									} else if res == nil {
-										logger.Infof("[ENGINE] Triggered synchronization skipped: another sync is already running")
-									} else {
-										logger.Infof("[ENGINE] Triggered synchronization completed successfully")
-									}
-								}()
-							}
-						}
-					}
-
-					// Start the Data Scrubber for Privacy
-					scrubber := worker.NewScrubberWorker(deps.PaymentSvc, slog.Default())
-					go scrubber.Run(context.Background())
-					logger.Infof("[WORKER] Background Privacy Scrubber started (24-hour payment footprint retention)")
-				} else {
-					logger.Infof("[WORKER] Background Expiry Worker is DISABLED in config")
-				}
-			} else {
-				logger.Warnf("DB not ready, skipping API initialization. Only static endpoints would be available if they existed.")
-			}
-
-			mux.HandleFunc("/undefined", func(w http.ResponseWriter, r *http.Request) {
-				logIntruder(r, "Hit catch-all undefined route")
-				http.NotFound(w, r)
-			})
-
-			logger.Infof(" Server:  127.0.0.1:%d", port)
-			logger.Infof(" Script:  %s", xraytoolPath)
-			logger.Infof(" Allowed: %s", strings.Join(deps.Cfg.Server.AllowedDirs, ", "))
-
-			logger.Infof("API server listening on 127.0.0.1:%d", port)
-
-			srv := &http.Server{
-				Addr:         fmt.Sprintf("127.0.0.1:%d", port),
-				Handler:      mux,
-				ReadTimeout:  10 * time.Second,
-				WriteTimeout: 20 * time.Second,
-				IdleTimeout:  120 * time.Second,
-			}
-
-			// ── Graceful shutdown ────────────────────────────────────────────────
-			// Listen for OS termination signals so we can drain in-flight requests
-			// and webhook deliveries before the process exits.
-			quit := make(chan os.Signal, 1)
-			signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
-			done := make(chan struct{})
-			go func() {
-				<-quit
-				logger.Infof("[SHUTDOWN] Received termination signal — shutting down gracefully")
-
-				// 1. Stop accepting new HTTP requests (30-second grace period).
-				shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if err := srv.Shutdown(shutCtx); err != nil {
-					logger.Errorf("[SHUTDOWN] HTTP server forced to close: %v", err)
-				}
-
-				// 2. Wait for all in-flight webhook deliveries and background tasks.
-				if apiRouter != nil {
-					logger.Infof("[SHUTDOWN] Waiting for background tasks and webhook deliveries...")
-					apiRouter.Shutdown()
-				} else {
-					logger.Infof("[SHUTDOWN] Waiting for in-flight webhook deliveries...")
-					deps.Dispatcher.Shutdown()
-				}
-				logger.Infof("[SHUTDOWN] All background tasks complete. Bye.")
-				close(done)
-			}()
-
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Errorf("API Server failed: %v", err)
-				return err
-			}
-			<-done
-			return nil
-		},
-	}
-
-	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
-	cmd.Flags().StringVar(&configPath, "api-config", "xray_api_config.json", "path to API config json")
-	cmd.Flags().BoolVar(&runMigrations, "run-migrations", false, "Run database AutoMigrate on startup")
-	return cmd
 }

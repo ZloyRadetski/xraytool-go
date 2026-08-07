@@ -5,6 +5,8 @@ go 1.26.5
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/goccy/go-json v0.10.6
+	github.com/hashicorp/go-hclog v1.6.3
+	github.com/hashicorp/go-plugin v1.8.0
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.11.1
 	github.com/xtls/libxray v0.0.0-20260523051618-f6ce61228b56
@@ -15,6 +17,11 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/fatih/color v1.13.0 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/hashicorp/yamux v0.1.2 // indirect
+	github.com/mattn/go-colorable v0.1.12 // indirect
+	github.com/oklog/run v1.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 )

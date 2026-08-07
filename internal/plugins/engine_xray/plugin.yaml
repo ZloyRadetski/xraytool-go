@@ -1,0 +1,11 @@
+name: engine_xray
+kind: engine
+version: 1.0.0
+api_version: "1"
+description: Xray-core VPN engine with client configuration contribution.
+type: internal
+config_schema: ../../pluginmanifest/schemas/engine_xray.schema.json
+publishes:
+  - engine.softban
+  - engine.logger_control
+requires: []

@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package xraytool.plugin.v1;
+
+option go_package = "xraytool/pluginrpc";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// ExternalPlugin is the one go-plugin/gRPC endpoint exposed by every external
+// xraytool plugin binary. Struct envelopes are deliberately used for v1 so
+// independent plugins can evolve documented per-service payloads without
+// transporting arbitrary Go objects across a process boundary.
+service ExternalPlugin {
+  rpc Describe(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc Init(google.protobuf.Struct) returns (google.protobuf.Empty);
+  rpc Start(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Stop(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Health(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc Call(google.protobuf.Struct) returns (google.protobuf.Struct);
+}
+
+// ServiceProxy is hosted by xraytool and reached through go-plugin's broker
+// during Init. A plugin may call only services declared in Describe().requires
+// that the host explicitly exposes as structured ServiceHandler instances.
+service ServiceProxy {
+  rpc Call(google.protobuf.Struct) returns (google.protobuf.Struct);
+}
+
+// Envelope documentation:
+//
+// Describe response: Metadata JSON object from pluginrpc.Metadata.
+// Init request: {config: object, service_proxy_broker_id: number,
+//                required_services: [string]}.
+// Call request: {service: string, method: string, payload: object}.
+// Call response: {payload: object}.
+// Health response: {healthy: bool, error?: string}.
+//
+// Current v1 adapters use snake_case payload keys. See
+// plugins-external/README.md for the per-service method schemas.
+//
+// The authoritative Go SDK is package xraytool/pluginrpc. This source is kept
+// alongside it for other language implementations and must be updated together
+// with ProtocolVersion whenever a wire-incompatible change is made.

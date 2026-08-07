@@ -1,0 +1,8 @@
+name: antifraud_stub
+kind: antifraud
+version: 0.1.0
+api_version: "1"
+description: "Reference external anti-fraud provider with push-only local-cache updates."
+type: external
+publishes:
+  - antifraud_provider

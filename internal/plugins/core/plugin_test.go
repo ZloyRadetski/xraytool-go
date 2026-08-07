@@ -12,7 +12,7 @@ import (
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/pluginhost"
 	core "xraytool/internal/plugins/core"
-	"xraytool/internal/vpn"
+	vpn "xraytool/internal/plugins/engine_xray"
 )
 
 func TestCoreInitPublishesAllDeclaredServices(t *testing.T) {

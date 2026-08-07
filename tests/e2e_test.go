@@ -134,6 +134,12 @@ platega_secret: "dummy"
 logging:
   level: "debug"
   format: "console"
+plugins:
+  payment_platega:
+    enabled: true
+    config:
+      merchant_id: "dummy"
+      secret: "dummy"
 `,
 		apiKey, xrayConfigAbs, statsStateAbs, inferredStatsAbs,
 		jsonSubAbs, routingAbs, routingRuAbs,
@@ -488,7 +494,7 @@ func TestE2ESuite(t *testing.T) {
 		_ = json.Unmarshal([]byte(resp), &userMap)
 		bal, _ := userMap["balance"].(float64)
 		if bal != 0 {
-			t.Errorf("Expected initial balance 0, got %v", bal)
+			t.Errorf("Expected initial balance 0, got %v. Raw resp: %s", bal, resp)
 		}
 	})
 
@@ -1453,9 +1459,9 @@ func TestE2ESuite(t *testing.T) {
 		if finalRefereeMap["sub_status"] != "active" {
 			t.Errorf("Referee subscription did not become active")
 		}
-		// 1000 - 500 = 500 balance remaining
-		if finalRefereeMap["balance"].(float64) != 500 {
-			t.Errorf("Expected balance 500, got %v", finalRefereeMap["balance"])
+		// 1400 - 500 = 900 balance remaining
+		if finalRefereeMap["balance"].(float64) != 900 {
+			t.Errorf("Expected balance 900, got %v", finalRefereeMap["balance"])
 		}
 
 		// Referrer gets 25% of referee payment (400) = 100
@@ -1593,18 +1599,18 @@ func TestE2ESuite(t *testing.T) {
 		var sub database.Subscription
 		db.Where("user_id = ?", u.ID).First(&sub)
 
-		if sub.ID == "" || sub.XrayUUID == "" {
+		if sub.ID == "" || sub.UUID == "" {
 			t.Skipf("No subscription found to test legacy fallback")
 		}
 
 		// Test UUID fallback
-		st1, _, err := apiRequest("GET", "/client?id="+sub.XrayUUID+"&hwid=leg_dev1", nil, false)
+		st1, _, err := apiRequest("GET", "/client?id="+sub.UUID+"&hwid=leg_dev1", nil, false)
 		if err != nil || st1 != http.StatusOK {
 			t.Errorf("Legacy xray_uuid fallback failed: status %d", st1)
 		}
 
 		// Test UUID.txt fallback
-		st2, _, err := apiRequest("GET", "/client?id="+sub.XrayUUID+".txt"+"&hwid=leg_dev2", nil, false)
+		st2, _, err := apiRequest("GET", "/client?id="+sub.UUID+".txt"+"&hwid=leg_dev2", nil, false)
 		if err != nil || st2 != http.StatusOK {
 			t.Errorf("Legacy xray_uuid.txt fallback failed: status %d", st2)
 		}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "dry_run": { "type": "boolean" },
+    "log_path": { "type": "string" },
+    "max_ips": { "type": "integer", "minimum": 1 },
+    "ip_limit_ttl": { "type": "string" },
+    "ban_duration": { "type": "string" },
+    "log_rotation_size_mb": { "type": "integer", "minimum": 1 },
+    "log_rotation_max_age": { "type": "string" },
+    "report_to_master": { "type": "boolean" },
+    "salt_secret": { "type": "string" },
+    "is_master": { "type": "boolean" }
+  }
+}

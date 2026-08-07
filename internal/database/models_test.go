@@ -2,6 +2,7 @@ package database_test
 
 import (
 	json "github.com/goccy/go-json"
+	"reflect"
 	"testing"
 
 	"xraytool/internal/database"
@@ -41,7 +42,7 @@ func TestUser_DefaultValues(t *testing.T) {
 
 func TestSubscription_DefaultMaxDevices(t *testing.T) {
 	db := newTestDB(t)
-	db.Create(&database.Subscription{ID: "s1", UserID: "u1", Email: "e", XrayUUID: "x"})
+	db.Create(&database.Subscription{ID: "s1", UserID: "u1", Email: "e", UUID: "x"})
 
 	var s database.Subscription
 	db.First(&s, "id = ?", "s1")
@@ -72,7 +73,7 @@ func TestPayment_DefaultTimestamp(t *testing.T) {
 func TestPlan_DefaultValues(t *testing.T) {
 	db := newTestDB(t)
 
-	plan := database.Plan{Months: 24, BasePrice: 3000}
+	plan := database.Plan{Months: 24, BasePrice: 3000, EngineIDs: []string{"xray", "singbox"}}
 	err := db.Create(&plan).Error
 	if err != nil {
 		t.Fatalf("failed to create plan: %v", err)
@@ -86,6 +87,9 @@ func TestPlan_DefaultValues(t *testing.T) {
 	}
 	if !p.IsActive {
 		t.Errorf("expected IsActive=true")
+	}
+	if got, want := p.EngineIDs, []string{"xray", "singbox"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("expected EngineIDs=%v, got %v", want, got)
 	}
 }
 

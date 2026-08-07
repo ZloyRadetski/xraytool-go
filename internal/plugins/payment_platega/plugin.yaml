@@ -1,0 +1,11 @@
+name: payment_platega
+kind: payment
+version: 1.0.0
+api_version: "1"
+description: Payment intents and verified callbacks through the Platega gateway.
+type: internal
+config_schema: ../../pluginmanifest/schemas/payment_platega.schema.json
+publishes:
+  - payment_provider.platega
+requires:
+  - payment_recorder

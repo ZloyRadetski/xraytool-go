@@ -23,13 +23,8 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/pluginhost"
-	antifraudPlugin "xraytool/internal/plugins/antifraud"
 	corePlugin "xraytool/internal/plugins/core"
-	eventsinkPlugin "xraytool/internal/plugins/eventsink_webhook"
-	"xraytool/internal/slave"
-	"xraytool/internal/statesync"
-	"xraytool/internal/vpn"
-	"xraytool/internal/worker"
+	vpn "xraytool/internal/plugins/engine_xray"
 )
 
 func startServerKernelCmd(deps *AppDeps) *cobra.Command {
@@ -79,18 +74,6 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			"grpc_addr", cfg.Xray.APIAddr, "template", cfg.Paths.XrayTemplate)
 	}
 
-	// The antifraud module needs its optional slave reporter before Host.Load so
-	// the plugin is fully initialised before Start is called.
-	var fraudReporter domain.FraudEventReporter
-	if cfg.AntiFraud.Enabled && !cfg.IsMaster() && cfg.MasterAPI.URL != "" && cfg.AntiFraud.ReportToMaster {
-		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
-		entry := slave.Entry{
-			URL: cfg.MasterAPI.URL, APIKey: cfg.MasterAPI.APIKey, Insecure: cfg.MasterAPI.Insecure,
-		}
-		reporter := slave.NewFraudReporterAdapter(client, entry, slog.Default())
-		go reporter.Run(ctx)
-		fraudReporter = reporter
-	}
 
 	// ── Step 2: Build PluginsConfig from appconfig ────────────────────────────
 	pluginsCfg := buildPluginsConfig(cfg)
@@ -123,15 +106,10 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			Propagator: deps.Propagator,
 		})
 	}
-	factories["antifraud"] = func() pluginapi.Plugin {
-		return antifraudPlugin.NewWithRuntime(antifraudPlugin.Runtime{
-			Registry:   deps.Registry,
-			Banner:     vpnEngine,
-			LoggerCtl:  vpnEngine,
-			Propagator: deps.Propagator,
-			Reporter:   fraudReporter,
-		})
-	}
+	// Populate optional built-in factories (antifraud, cluster_sync, …).
+	// configureOptionalPluginFactories is defined in server_kernel_optional.go
+	// (build tag !minimal) and builds the fraud reporter for slave nodes.
+	configureOptionalPluginFactories(factories, deps, vpnEngine, nil)
 
 	host = pluginhost.New(
 		pluginsCfg,
@@ -150,14 +128,17 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		return err
 	}
 
-	// ── Step 5: Log eventsink_webhook status ─────────────────────────────────
-	if evSink, ok := host.PluginByName("eventsink_webhook").(*eventsinkPlugin.Plugin); ok && evSink != nil {
-		slog.Info("[KERNEL] eventsink_webhook plugin active — webhook events will be delivered via plugin")
-	}
+	// ── Step 5: Log eventsink_webhook status (best-effort) ───────────────────
+	slog.Info("[KERNEL] Plugin Host loaded", "event_sinks", len(host.EventSinks()), "payment_providers", len(host.PaymentProviders()))
 
 	// ── Step 6: Build HTTP Router ─────────────────────────────────────────────
 	core.InitHTTPRouter(vpnEngine, cfg.Server.APIKey)
 	apiRouter := core.HTTPRouter()
+
+	paymentProviders := host.PaymentProviders()
+	if len(paymentProviders) > 0 {
+		apiRouter = apiRouter.WithPaymentProviders(paymentProviders)
+	}
 
 	// ── Step 7: Initial user sync (master only) ───────────────────────────────
 	if cfg.IsMaster() && deps.Registry != nil && cfg.Paths.XrayTemplate != "" {
@@ -166,7 +147,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		} else {
 			dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
 			for _, sub := range subs {
-				if sub.Status != "active" || sub.Email == "" || sub.XrayUUID == "" {
+				if sub.Status != "active" || sub.Email == "" || sub.UUID == "" {
 					continue
 				}
 				dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
@@ -181,17 +162,12 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 
 	// ── Step 8: Wire optional plugins into the router ─────────────────────────
 	if deps.Registry != nil {
-		// ── Antifraud plugin ─────────────────────────────────────────────────
-		if afPlugin, ok := host.PluginByName("antifraud").(*antifraudPlugin.Plugin); ok && afPlugin != nil && afPlugin.Config().Enabled {
-			mod := afPlugin.Module()
-			if mod == nil {
-				return fmt.Errorf("antifraud plugin loaded without an initialised module")
-			}
-			var ingestFn func(string, []domain.FraudEvent)
-			if cfg.IsMaster() {
-				ingestFn = mod.IngestEvents
-			}
-			apiRouter.WithAntiFraud(mod.IsBanned, mod.ForceUnban, mod.GetSnapshot, ingestFn)
+	// ── Antifraud plugin ───────────────────────────────────────────────────
+		// Use the pluginapi interface to avoid importing the concrete plugin
+		// package from the kernel. Any loaded antifraud plugin satisfying
+		// pluginapi.AntifraudProvider is wired the same way.
+		if afProvider, ok := host.PluginByName("antifraud").(pluginapi.AntifraudProvider); ok && afProvider != nil {
+			apiRouter.WithAntifraudProvider(afProvider, host.BanCache().IsBanned, cfg.IsMaster())
 			slog.Info("[KERNEL] Anti-Fraud plugin wired",
 				"log_path", cfg.AntiFraud.LogPath, "max_ips", cfg.AntiFraud.MaxIPs)
 		}
@@ -201,43 +177,8 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			apiRouter.WithSyncService(nil, deps.Registry)
 		}
 
-		// ── Workers ───────────────────────────────────────────────────────────
-		if cfg.Worker.Enabled {
-			wkr := worker.NewExpiryWorker(deps.Registry, cfg, core.Dispatcher(), vpnEngine, slog.Default())
-			go wkr.Run(context.Background())
-			slog.Info("[KERNEL] Expiry Worker started", "interval", cfg.Worker.ExpiryInterval)
-
-			if cfg.IsMaster() && len(cfg.SlaveServers) > 0 {
-				syncInterval, parseErr := time.ParseDuration(cfg.Worker.SyncStatesInterval)
-				if parseErr != nil || syncInterval <= 0 {
-					slog.Warn("[KERNEL] Invalid sync_states_interval, falling back to 3m")
-					syncInterval = 3 * time.Minute
-				}
-				syncSvc := deps.SyncSvc
-				if syncSvc == nil {
-					syncSvc = statesync.NewService(deps.Registry, vpnEngine, deps.SlaveProvider, slog.Default())
-				}
-				apiRouter.WithSyncService(syncSvc, deps.Registry)
-				syncWkr := worker.NewSyncStatesWorker(syncSvc, syncInterval, slog.Default())
-				go syncWkr.Run(context.Background())
-				slog.Info("[KERNEL] SyncStates Worker started", "interval", syncInterval)
-
-				if adapter, ok := vpnEngine.(*vpn.Adapter); ok {
-					adapter.OnConfigModified = func() {
-						slog.Info("[KERNEL] Config modified, triggering slave sync")
-						go func() {
-							if _, err := syncSvc.SyncAllSlaves(context.Background(), false, false); err != nil {
-								slog.Error("[KERNEL] Triggered sync failed", "error", err)
-							}
-						}()
-					}
-				}
-			}
-
-			scrubber := worker.NewScrubberWorker(core.PaymentSvc(), slog.Default())
-			go scrubber.Run(context.Background())
-			slog.Info("[KERNEL] Privacy Scrubber started")
-		}
+		// Workers are now started inside the core plugin's Start() method.
+		// SyncStates worker is managed by the clustersync plugin's Start() method.
 	}
 
 	// ── Step 9: HTTP server ───────────────────────────────────────────────────
@@ -302,45 +243,97 @@ func getPlugin[T any](host *pluginhost.Host, name string) (T, error) {
 // buildPluginsConfig translates appconfig.Config to PluginsConfig.
 // Phase 2: replaced by reading plugins.yaml directly.
 func buildPluginsConfig(cfg *appconfig.Config) pluginhost.PluginsConfig {
-	webhooksIface := make([]interface{}, len(cfg.Webhooks))
-	for i, w := range cfg.Webhooks {
-		webhooksIface[i] = w
+	result := make(pluginhost.PluginsConfig)
+	for name, conf := range cfg.Plugins {
+		result[name] = pluginhost.PluginEntry{
+			Enabled:       conf.Enabled,
+			Source:        conf.Source,
+			RestartPolicy: pluginhost.RestartPolicy(conf.RestartPolicy),
+			Config:        copyConfig(conf.Config),
+		}
+	}
+	// Convert engines: section entries to plugin entries with "engine_" prefix.
+	// e.g. engines.xray → engine_xray plugin entry.
+	for name, conf := range cfg.Engines.Entries {
+		result["engine_"+name] = pluginhost.PluginEntry{
+			Enabled:       conf.Enabled,
+			Source:        conf.Source,
+			RestartPolicy: pluginhost.RestartPolicy(conf.RestartPolicy),
+			Config:        copyConfig(conf.Config),
+		}
+	}
+	// Always ensure core is enabled
+	if _, exists := result["core"]; !exists {
+		result["core"] = pluginhost.PluginEntry{Enabled: true, Source: "builtin"}
+	} else {
+		coreConf := result["core"]
+		coreConf.Enabled = true
+		result["core"] = coreConf
+	}
+	return result
+}
+
+// copyConfig returns a deep copy of a config map to prevent the caller from
+// accidentally mutating the appconfig entries through the PluginsConfig map.
+func copyConfig(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// prepareMultiEngine builds a MultiEngine from the engine plugin factories that
+// are enabled in cfg. It is the Phase 1.5 composition helper (plan §2.6.2).
+//
+// factories is mutated in-place: a factory that returns a non-EngineProvider is
+// silently skipped so the caller does not need to filter the registry first.
+//
+// routingMode is variadic so call sites that rely on the broadcast default do
+// not need to supply it; only the first value is used.
+func prepareMultiEngine(
+	cfg pluginhost.PluginsConfig,
+	factories map[string]func() pluginapi.Plugin,
+	log *slog.Logger,
+	routingMode ...string,
+) (*pluginhost.MultiEngine, error) {
+	var engines []pluginapi.EngineProvider
+	var providers []pluginapi.EngineProvider
+	for name, entry := range cfg {
+		if !entry.Enabled {
+			continue
+		}
+		factory, ok := factories[name]
+		if !ok {
+			continue
+		}
+		plugin := factory()
+		ep, ok := plugin.(pluginapi.EngineProvider)
+		if !ok {
+			continue
+		}
+		// Restore the factory so the Host can reuse the same instance.
+		captured := ep
+		factories[name] = func() pluginapi.Plugin { return captured }
+		engines = append(engines, ep)
+		providers = append(providers, ep)
 	}
 
-	return pluginhost.PluginsConfig{
-		"core": {Enabled: true, Source: "builtin"},
-		"eventsink_webhook": {
-			Enabled: len(cfg.Webhooks) > 0,
-			Source:  "builtin",
-			Config: pluginapi.RawConfig{
-				"webhooks":       webhooksIface,
-				"webhook_secret": cfg.WebhookSecret,
-			},
-		},
-		"antifraud": {
-			Enabled: cfg.AntiFraud.Enabled,
-			Source:  "builtin",
-			Config: pluginapi.RawConfig{
-				"enabled":              cfg.AntiFraud.Enabled,
-				"dry_run":              cfg.AntiFraud.DryRun,
-				"log_path":             cfg.AntiFraud.LogPath,
-				"max_ips":              cfg.AntiFraud.MaxIPs,
-				"ip_limit_ttl":         cfg.AntiFraud.IPLimitTTL,
-				"ban_duration":         cfg.AntiFraud.BanDuration,
-				"log_rotation_size_mb": cfg.AntiFraud.LogRotationSizeMB,
-				"log_rotation_max_age": cfg.AntiFraud.LogRotationMaxAge,
-				"report_to_master":     cfg.AntiFraud.ReportToMaster,
-				"salt_secret":          cfg.AntiFraud.SaltSecret,
-				"is_master":            cfg.IsMaster(),
-			},
-		},
-		"mailer_resend": {
-			Enabled: cfg.Mailer.Enabled && cfg.Mailer.ResendAPIKey != "",
-			Source:  "builtin",
-			Config: pluginapi.RawConfig{
-				"resend_api_key": cfg.Mailer.ResendAPIKey,
-				"from_email":     cfg.Mailer.FromEmail,
-			},
-		},
+	multi := pluginhost.NewMultiEngine(engines, log)
+
+	mode := ""
+	if len(routingMode) > 0 {
+		mode = routingMode[0]
 	}
+	if mode != "" && mode != string(pluginhost.RoutingModeBroadcast) {
+		router, err := pluginhost.NewConfiguredEngineRouter(mode, providers)
+		if err != nil {
+			return nil, fmt.Errorf("prepareMultiEngine: %w", err)
+		}
+		multi = multi.WithRouter(router)
+	}
+	return multi, nil
 }

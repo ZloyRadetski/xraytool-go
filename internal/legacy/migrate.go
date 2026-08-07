@@ -201,7 +201,7 @@ func migrateData(srcDB *gorm.DB, dstDB *gorm.DB) error {
 		// ── Build + insert Subscription (if exists) ─────────────────────────
 		if ls, ok := subByTgID[lu.TgID]; ok {
 			newSubID := uuid.New().String()
-			newXrayUUID := uuid.New().String() // no old UUID stored in bot DB
+			newSubscriptionUUID := uuid.New().String() // no old UUID stored in bot DB
 
 			startsAt, err1 := parseFlexibleTimePtr(ls.StartsAt)
 			endsAt, err2 := parseFlexibleTimePtr(ls.EndsAt)
@@ -233,7 +233,7 @@ func migrateData(srcDB *gorm.DB, dstDB *gorm.DB) error {
 				ID:         newSubID,
 				UserID:     newUserID,
 				Email:      fmt.Sprintf("bot_client_%d", lu.TgID),
-				XrayUUID:   newXrayUUID,
+				UUID:       newSubscriptionUUID,
 				Status:     ls.Status,
 				MaxDevices: maxDevices,
 				AutoRenew:  lu.AutoRenew != 0,

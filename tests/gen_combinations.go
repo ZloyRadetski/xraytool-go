@@ -7,7 +7,7 @@ import (
 	json "github.com/goccy/go-json"
 	"os"
 
-	"xraytool/internal/vpn"
+	vpn "xraytool/internal/plugins/engine_xray"
 )
 
 func main() {

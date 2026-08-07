@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"xraytool/internal/domain"
-	"xraytool/internal/subscription"
+	"xraytool/internal/plugins/core/subscription"
 
 	"github.com/spf13/cobra"
 )

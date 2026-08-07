@@ -14,6 +14,14 @@ type VPNUserConfig struct {
 	MaxDevices int
 	Flow       string
 	Cipher     string
+	// PlanEngineIDs is the engine set selected by the subscription plan. It
+	// is consumed only when MultiEngine runs in by-plan mode. Keeping the
+	// routing hint beside the VPN user makes state-sync events self-contained.
+	PlanEngineIDs []string
+	// SubscriptionEngineIDs is an administrator override from
+	// Subscription.Metadata["engine_ids"]. It takes precedence in
+	// by-subscription-override mode.
+	SubscriptionEngineIDs []string
 }
 
 // TrafficStat represents the abstract traffic statistics for a single user.

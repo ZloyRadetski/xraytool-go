@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"xraytool/internal/antifraud"
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
 )
@@ -36,8 +35,8 @@ import (
 // Plugin wraps antifraud.Module as a pluginapi.AntifraudProvider.
 type Plugin struct {
 	log     *slog.Logger
-	module  *antifraud.Module
-	cfg     *antifraud.Config
+	module  *Module
+	cfg     *Config
 	runtime Runtime
 
 	// banSink is set by the host via SetBanSink before Start().
@@ -99,7 +98,7 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 		}
 	}
 	if registry != nil && p.runtime.Banner != nil && p.runtime.LoggerCtl != nil {
-		p.module = antifraud.New(
+		p.module = NewModule(
 			p.cfg,
 			registry,
 			p.runtime.Banner,
@@ -108,6 +107,9 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 			p.runtime.Reporter,
 			slog.Default(),
 		)
+		if p.banSink != nil {
+			p.module.SetBanSink(p.banSink)
+		}
 	}
 	if reg != nil {
 		reg.Logger().Info("antifraud: config parsed",
@@ -132,7 +134,7 @@ func (p *Plugin) InitWithDependencies(
 	if registry == nil {
 		return fmt.Errorf("antifraud plugin: registry must not be nil")
 	}
-	p.module = antifraud.New(
+	p.module = NewModule(
 		p.cfg,
 		registry,
 		banner,
@@ -141,6 +143,9 @@ func (p *Plugin) InitWithDependencies(
 		reporter,
 		slog.Default(),
 	)
+	if p.banSink != nil {
+		p.module.SetBanSink(p.banSink)
+	}
 	return nil
 }
 
@@ -180,6 +185,9 @@ func (p *Plugin) Health(_ context.Context) error {
 // Phase 2: module will call sink.PushBanUpdate / sink.PushUnban instead of banStore.
 func (p *Plugin) SetBanSink(sink pluginapi.BanUpdateSink) {
 	p.banSink = sink
+	if p.module != nil {
+		p.module.SetBanSink(sink)
+	}
 }
 
 // IsBanned reports whether the given email is currently soft-banned.
@@ -231,15 +239,15 @@ func (p *Plugin) IngestEvents(_ context.Context, sourceID string, events []plugi
 // Module returns the underlying antifraud.Module.
 // Used by kernel to wire WithAntiFraud hooks into server.Router.
 // Will be removed in Phase 3.
-func (p *Plugin) Module() *antifraud.Module { return p.module }
+func (p *Plugin) Module() *Module { return p.module }
 
 // Config returns the parsed config (for kernel to check cfg.Enabled etc.).
-func (p *Plugin) Config() *antifraud.Config { return p.cfg }
+func (p *Plugin) Config() *Config { return p.cfg }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func parseConfig(raw pluginapi.RawConfig) *antifraud.Config {
-	cfg := &antifraud.Config{
+func parseConfig(raw pluginapi.RawConfig) *Config {
+	cfg := &Config{
 		Enabled:               false,
 		DryRun:                false,
 		SuspiciousIPThreshold: 3,

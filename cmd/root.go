@@ -3,47 +3,18 @@ package cmd
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"runtime"
 
 	"github.com/spf13/cobra"
 
-	"xraytool/internal/appconfig"
-	"xraytool/internal/database"
-	"xraytool/internal/domain"
-	"xraytool/internal/events"
-	"xraytool/internal/logger"
-	"xraytool/internal/payment"
-	"xraytool/internal/slave"
-	"xraytool/internal/statesync"
-	"xraytool/internal/user"
-	"xraytool/internal/vpn"
+	"xraytool/internal/commandruntime"
 )
 
-type AppDeps struct {
-	Cfg             *appconfig.Config
-	Registry        domain.Registry
-	Engine          domain.Engine
-	Dispatcher      *events.Dispatcher
-	UserSvc         *user.Service
-	PaymentSvc      *payment.Service
-	Propagator      domain.EventPropagator
-	ClusterProvider domain.ClusterStatsProvider
-	SlaveProvider   domain.StateSyncSlaveProvider
-	// SyncSvc is the state-sync service created on master nodes.
-	// Passed to both the slave provider and the HTTP router.
-	SyncSvc *statesync.Service
-	Cleanup []func()
-}
-
-// RunCleanup executes all registered cleanup functions and clears the slice to prevent double execution.
-func (deps *AppDeps) RunCleanup() {
-	for _, cleanup := range deps.Cleanup {
-		cleanup()
-	}
-	deps.Cleanup = nil
-}
+// AppDeps is the transitional runtime exposed to legacy administrative CLI
+// commands. Its construction lives outside cmd so this package remains a thin
+// command dispatcher while those commands are migrated to plugin services.
+type AppDeps = commandruntime.Dependencies
 
 // Global flag variables
 var (
@@ -52,6 +23,11 @@ var (
 
 func NewRootCmd() *cobra.Command {
 	deps := &AppDeps{}
+	// Keep the Phase-1.1 spelling as a compatibility alias, but make the
+	// PluginHost server reachable through the stable `start-server` command.
+	kernelServerAlias := startServerKernelCmd(deps)
+	kernelServerAlias.Hidden = true
+	kernelServerAlias.Deprecated = "use start-server"
 
 	rootCmd := &cobra.Command{
 		Use:           "xraytool",
@@ -60,7 +36,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return loadDependencies(deps, cfgFile)
+			return loadDependencies(deps, cfgFile, cmd.Name())
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
 			deps.RunCleanup()
@@ -92,13 +68,14 @@ func NewRootCmd() *cobra.Command {
 		genBalancerCmd(deps),
 		antiFraudStateCmd(deps),
 		startServerCmd(deps),
-		startServerKernelCmd(deps), // Phase 1: Plugin Host composition root
+		kernelServerAlias,
 		convertCmd(deps),
 		migrateLegacyDBCmd(deps),
 		syncXrayCmd(deps),
 		applyBatchCmd(deps),
 		rotateKeysCmd(deps),
 		rebuildConfigCmd(deps),
+		newPluginCmd(),
 	)
 
 	return rootCmd
@@ -109,99 +86,15 @@ func Execute() error {
 	return NewRootCmd().Execute()
 }
 
-func loadDependencies(deps *AppDeps, configPath string) error {
-	cfg, err := appconfig.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load config %q: %v", configPath, err)
-	}
-	deps.Cfg = cfg
-
-	if err := logger.Init(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "WARN|failed to initialize logger: %v\n", err)
-	}
-
-	isServerOrMigrate := false
-	isKernelServer := false
-	for _, arg := range os.Args {
-		if arg == "start-server-v2" {
-			isKernelServer = true
-			isServerOrMigrate = true
-			break
-		}
-		if arg == "start-server" || arg == "migrate" || arg == "db-migrate" {
-			isServerOrMigrate = true
-			break
-		}
-	}
-
-	targetDB, err := database.NewConnection(database.Config{
-		Driver:      cfg.Database.Driver,
-		DSN:         cfg.Database.DSN,
-		SQLitePath:  cfg.Database.SQLitePath,
-		AutoMigrate: isServerOrMigrate,
-		Silent:      !isServerOrMigrate,
+func loadDependencies(deps *AppDeps, configPath, commandName string) error {
+	loaded, err := commandruntime.Load(configPath, commandruntime.LoadOptions{
+		AutoMigrate:      commandName == "start-server" || commandName == "start-server-v2" || commandName == "migrate" || commandName == "db-migrate",
+		PluginHostServer: commandName == "start-server" || commandName == "start-server-v2",
 	})
 	if err != nil {
-		return fmt.Errorf("failed to initialize database: %v", err)
+		return err
 	}
-	deps.Registry = database.NewRegistry(targetDB)
-	deps.Cleanup = append(deps.Cleanup, func() {
-		if deps.UserSvc != nil {
-			deps.UserSvc.Wait()
-		}
-		if sqlDB, err := targetDB.DB(); err == nil {
-			sqlDB.Close()
-		}
-	})
-
-	// Engine
-	deps.Engine = vpn.NewAdapter(cfg.Xray.APIAddr, cfg.Paths.XrayConfig, cfg.Paths.XrayTemplate, cfg.Reality.RotationEnabled, cfg.Reality.KeysFilepath, cfg.BlacklistedAdmins, slog.Default())
-
-	// User service
-	var propagator domain.EventPropagator
-	if len(cfg.SlaveServers) > 0 {
-		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
-		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
-		propagator = slave.NewEventPropagatorAdapter(slaveReg)
-	}
-	// The legacy composition root owns this dispatcher. The kernel path creates
-	// it inside the core plugin so events have one owner.
-	if !isKernelServer {
-		deps.Dispatcher = events.NewDispatcher(&events.Config{
-			Webhooks:      cfg.Webhooks,
-			WebhookSecret: cfg.WebhookSecret,
-		})
-	}
-	deps.Propagator = propagator
-
-	// On master, we create syncSvc early and wrap the engine so that all services
-	// (UserSvc, PaymentSvc, etc) automatically log sync events when mutating the engine.
-	if cfg.IsMaster() {
-		deps.SyncSvc = statesync.NewService(deps.Registry, deps.Engine, nil, slog.Default())
-		deps.Engine = statesync.NewEventAwareEngine(deps.Engine, deps.SyncSvc)
-	}
-	if !isKernelServer {
-		deps.UserSvc = user.NewService(deps.Registry, user.Config{IsMaster: cfg.IsMaster(), Domain: cfg.Server.Domain}, deps.Engine, propagator, slog.Default())
-		deps.PaymentSvc = payment.NewService(deps.Registry, deps.Dispatcher, slog.Default())
-	}
-
-	// Providers
-	if cfg.IsMaster() {
-		client := slave.NewClient(cfg.SlaveAPI.ConnectTimeout, cfg.SlaveAPI.RequestTimeout, cfg.SlaveAPI.RemotePath)
-		slaveReg := slave.NewRegistry(cfg.SlaveServers, client)
-		deps.ClusterProvider = slave.NewClusterStatsProvider(slaveReg)
-
-		deps.SlaveProvider = slave.NewStateSyncProvider(
-			slaveReg,
-			deps.SyncSvc,
-			cfg.Reality.RotationEnabled,
-			cfg.Reality.KeysFilepath,
-			slog.Default(),
-		)
-		// Wire the provider back into syncSvc so SyncAllSlaves delegates correctly.
-		deps.SyncSvc.SetSlaveProvider(deps.SlaveProvider)
-	}
-
+	*deps = *loaded
 	return nil
 }
 

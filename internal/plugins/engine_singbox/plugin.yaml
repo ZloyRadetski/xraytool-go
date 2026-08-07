@@ -1,0 +1,11 @@
+name: engine_singbox
+kind: engine
+version: 1.0.0
+api_version: "1"
+description: Sing-box VPN engine with atomic JSON user management and client link contribution.
+type: internal
+config_schema: ../../pluginmanifest/schemas/engine_singbox.schema.json
+publishes:
+  - engine.softban
+  - engine.logger_control
+requires: []

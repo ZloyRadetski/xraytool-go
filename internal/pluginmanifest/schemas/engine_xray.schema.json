@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "grpc_addr": { "type": "string" },
+    "config_path": { "type": "string" },
+    "template_path": { "type": "string" },
+    "server_address": { "type": "string" },
+    "server": { "type": "string" },
+    "host": { "type": "string" },
+    "address": { "type": "string" },
+    "hy2_config_yaml": { "type": "string" },
+    "reality_rotation": { "type": "boolean" },
+    "reality_keys_path": { "type": "string" },
+    "blacklisted_admins": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

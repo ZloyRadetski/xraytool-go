@@ -1,0 +1,10 @@
+name: pricing_default
+kind: pricing
+version: 1.0.0
+api_version: "1"
+description: Built-in subscription pricing, device upgrades, and promo selection.
+type: internal
+config_schema: ../../pluginmanifest/schemas/pricing_default.schema.json
+publishes:
+  - pricing_engine
+requires: []

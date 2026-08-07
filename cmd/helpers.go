@@ -7,10 +7,8 @@ import (
 	"regexp"
 	"time"
 
-	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
-	"xraytool/internal/slave"
-	"xraytool/internal/user"
+	"xraytool/internal/plugins/core/user"
 )
 
 // ---------------------------------------------------------------------------
@@ -86,6 +84,7 @@ func (p *Printer) Println(s string) {
 var validEmailRe = regexp.MustCompile(`^[a-zA-Z0-9@._][a-zA-Z0-9@._-]*$`)
 
 // validEmail returns true if the email contains only allowed characters. //nolint:unused
+//
 //nolint:unused
 func validEmail(email string) bool {
 	return validEmailRe.MatchString(email)
@@ -94,49 +93,12 @@ func validEmail(email string) bool {
 // ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
-//nolint:unused
 // defaultExpireDate returns a date 30 days from now in DD-MM-YYYY format.
+//
+//nolint:unused
 //nolint:unused
 func defaultExpireDate() string {
 	return time.Now().AddDate(0, 0, 30).Format("02-01-2006")
-}
-
-// ---------------------------------------------------------------------------
-// Slave propagation
-// ---------------------------------------------------------------------------
-//nolint:unused
-// propagate sends a command to all slave servers in parallel and prints results.
-// In batch mode, errors are silently swallowed (callers log separately).
-//nolint:unused
-func propagate(cfg *appconfig.Config, cmd string, params map[string]string, print *Printer) {
-	if !cfg.IsMaster() {
-		return
-	}
-
-	reg := slaveRegistry(cfg)
-	results := reg.PropagateAll(cmd, params)
-	for _, r := range results {
-		if r.Err != nil {
-			if !print.Batch {
-				fmt.Fprintf(os.Stderr, "  [slave:%s] FAIL: %v\n", r.Server, r.Err)
-			}
-		} else {
-			if !print.Batch {
-				fmt.Printf("  [slave:%s] OK\n", r.Server)
-			}
-		}
-	} //nolint:unused
-}
-
-// slaveRegistry builds a slave.Registry from the current config.
-//nolint:unused
-func slaveRegistry(cfg *appconfig.Config) *slave.Registry {
-	c := slave.NewClient(
-		cfg.SlaveAPI.ConnectTimeout,
-		cfg.SlaveAPI.RequestTimeout,
-		cfg.SlaveAPI.RemotePath,
-	)
-	return slave.NewRegistry(cfg.SlaveServers, c)
 }
 
 // ---------------------------------------------------------------------------

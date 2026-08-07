@@ -2,10 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"log/slog"
 	"xraytool/internal/domain"
-	"xraytool/internal/statesync"
-	"xraytool/internal/vpn"
+	vpn "xraytool/internal/plugins/engine_xray"
 
 	"github.com/spf13/cobra"
 )
@@ -32,7 +30,7 @@ If --sync is specified, it will also trigger statesync to rebuild configurations
 
 			dbUsers := make([]domain.VPNUserConfig, 0, len(subs))
 			for _, sub := range subs {
-				if sub.Status != "active" || sub.Email == "" || sub.XrayUUID == "" {
+				if sub.Status != "active" || sub.Email == "" || sub.UUID == "" {
 					continue
 				}
 				dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
@@ -59,7 +57,10 @@ If --sync is specified, it will also trigger statesync to rebuild configurations
 				}
 
 				fmt.Println("INFO|Propagating config updates and synchronizing all Slaves...")
-				svc := statesync.NewService(deps.Registry, deps.Engine, deps.SlaveProvider, slog.Default())
+				svc := deps.SyncSvc
+				if svc == nil {
+					return fmt.Errorf("cluster_sync plugin is not configured on this node")
+				}
 				results, err := svc.SyncAllSlaves(ctx, false, false)
 				if err != nil {
 					return fmt.Errorf("failed to sync slaves: %w", err)

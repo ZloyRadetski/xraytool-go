@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sync_interval": { "type": "string" },
+    "sync_on_start": { "type": "boolean" }
+  }
+}

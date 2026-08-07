@@ -98,10 +98,10 @@ func TestSubscription_CreateAndLink(t *testing.T) {
 	db.Create(&user)
 
 	sub := database.Subscription{
-		ID:       "s1",
-		UserID:   "u1",
-		Email:    "bot_client_12345",
-		XrayUUID: "uuid",
+		ID:     "s1",
+		UserID: "u1",
+		Email:  "bot_client_12345",
+		UUID:   "uuid",
 	}
 	if err := db.Create(&sub).Error; err != nil {
 		t.Fatalf("failed to create subscription: %v", err)
@@ -122,7 +122,7 @@ func TestSubscription_CreateAndLink(t *testing.T) {
 
 func TestSubscription_StatusUpdate(t *testing.T) {
 	db := newTestDB(t)
-	sub := database.Subscription{ID: "s1", UserID: "u1", Email: "e", XrayUUID: "x"}
+	sub := database.Subscription{ID: "s1", UserID: "u1", Email: "e", UUID: "x"}
 	db.Create(&sub)
 
 	db.Model(&database.Subscription{}).Where("id = ?", "s1").Update("status", "active")
@@ -136,7 +136,7 @@ func TestSubscription_StatusUpdate(t *testing.T) {
 
 func TestDevice_TrackingAndCount(t *testing.T) {
 	db := newTestDB(t)
-	sub := database.Subscription{ID: "s1", UserID: "u1", Email: "e", XrayUUID: "x"}
+	sub := database.Subscription{ID: "s1", UserID: "u1", Email: "e", UUID: "x"}
 	db.Create(&sub)
 
 	db.Create(&database.Device{SubscriptionID: "s1", HWID: "h1"})
@@ -264,7 +264,7 @@ func TestMetadata_NullHandling(t *testing.T) {
 
 func TestSubscription_NullableTimes(t *testing.T) {
 	db := newTestDB(t)
-	sub := database.Subscription{ID: "s1", UserID: "u1", Email: "e", XrayUUID: "x", StartsAt: nil, EndsAt: nil}
+	sub := database.Subscription{ID: "s1", UserID: "u1", Email: "e", UUID: "x", StartsAt: nil, EndsAt: nil}
 	db.Create(&sub)
 
 	var fetched database.Subscription

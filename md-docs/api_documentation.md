@@ -534,14 +534,20 @@ X-API-Key: secret
 
 ## 🪝 Вебхуки (Webhooks)
 
-### 19. `POST /api/v1/payments/platega/callback`
-Прием вебхука от платежного шлюза Platega. Защищен проверкой HMAC SHA-256 подписи в заголовке `X-Platega-Signature`.
+### 19. `POST /api/v1/payments/{method}/callback`
+Прием вебхука от подключенного платежного провайдера. Маршрут не требует
+`X-API-Key`: провайдер сам проверяет подпись или секрет и возвращает
+нормализованный статус платежа. Неизвестный или отключенный `method` вернет
+`404`.
+
+Для встроенного Platega `method` равен `platega`, а обязательный заголовок —
+`X-Secret` со значением `plugins.payment_platega.config.secret`.
 
 **Пример входящего запроса (от Platega):**
 ```http
 POST /api/v1/payments/platega/callback HTTP/1.1
 Content-Type: application/json
-X-Platega-Signature: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
+X-Secret: configured-platega-secret
 
 {
   "external_id": "ext_invoice_998877",
@@ -830,6 +836,7 @@ X-API-Key: secret
 Генерируется, когда пользователю начислен реферальный процент.
 * **Data:** `{"user_id": "uuid...", "amount": 39, "from_payment_id": 42, "telegram_id": 12345}`
 
-#### 4. `platega.callback`
-Трансляция сырого вебхука от платежки Platega.
+#### 4. `{method}.callback`
+Трансляция проверенного вебхука платежного провайдера. Для Platega имя
+события — `platega.callback`.
 * **Data:** `{"external_id": "...", "status": "completed", ...}`

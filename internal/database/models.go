@@ -41,8 +41,8 @@ type Subscription struct {
 	// Email is the xray client email identifier, e.g. "bot_client_123456".
 	// Must be unique across all subscriptions.
 	Email string `gorm:"type:text;not null;uniqueIndex"`
-	// XrayUUID is the xray client UUID used in the inbound config.
-	XrayUUID string `gorm:"type:text;not null;uniqueIndex"`
+	// UUID is the engine-agnostic client identifier used in VPN configurations.
+	UUID string `gorm:"column:uuid;type:text;not null;uniqueIndex"`
 	// Status is the subscription lifecycle state: "active", "inactive", "expired", etc.
 	Status string `gorm:"type:text;not null;default:'inactive';index"`
 	// MaxDevices is how many devices can simultaneously use this subscription.
@@ -104,9 +104,12 @@ type Plan struct {
 	Months                int   `gorm:"uniqueIndex;not null"`
 	BasePrice             int   `gorm:"not null"`
 	GlobalDiscountPercent int   `gorm:"default:0;not null"`
-	IsActive              bool  `gorm:"default:true;not null"`
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// EngineIDs is persisted as JSON for SQLite/PostgreSQL compatibility. It
+	// is intentionally optional: an empty set retains broadcast compatibility.
+	EngineIDs []string `gorm:"serializer:json"`
+	IsActive  bool     `gorm:"default:true;not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // PromoCode represents a discount code that can be used by users.

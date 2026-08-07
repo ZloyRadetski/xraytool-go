@@ -3,8 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"xraytool/internal/statesync"
 
 	"github.com/spf13/cobra"
 )
@@ -28,8 +26,11 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 				return
 			}
 
-			dbReg := deps.Registry
-			svc := statesync.NewService(dbReg, deps.Engine, deps.SlaveProvider, slog.Default())
+			svc := deps.SyncSvc
+			if svc == nil {
+				fmt.Println("ERROR|cluster_sync plugin is not configured on this node")
+				return
+			}
 
 			// Self-heal: Sync UUIDs from Database to Master config before building snapshot
 			changed, err := svc.SelfHealMasterUUIDs(context.Background())

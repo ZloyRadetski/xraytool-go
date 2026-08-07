@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"xraytool/internal/vpn"
+	vpn "xraytool/internal/plugins/engine_xray"
 
 	"github.com/spf13/cobra"
 )

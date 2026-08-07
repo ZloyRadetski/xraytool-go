@@ -24,6 +24,18 @@ func NewRegistry(db *gorm.DB) Registry {
 	return &gormRegistry{db: db}
 }
 
+// GormDB returns the connection owned by a registry created by NewRegistry.
+// It is intentionally a narrow composition-root escape hatch: application
+// services continue to depend on domain.Registry, while the plugin host needs
+// the pool solely to construct scoped PluginDBHandle instances.
+func GormDB(registry domain.Registry) (*gorm.DB, bool) {
+	gormRegistry, ok := registry.(*gormRegistry)
+	if !ok || gormRegistry == nil || gormRegistry.db == nil {
+		return nil, false
+	}
+	return gormRegistry.db, true
+}
+
 func wrapError(err error) error {
 	if err == nil {
 		return nil
@@ -468,10 +480,10 @@ func (r *gormSubscriptionRepo) FindByClientIdentifier(ctx context.Context, clien
 	var subs []Subscription
 	var query *gorm.DB
 	if r.db.Dialector.Name() == "postgres" {
-		query = r.db.WithContext(ctx).Where("id = ? OR xray_uuid = ? OR metadata::jsonb ->> 'subfile' = ? OR metadata::jsonb ->> 'subfile' = ?",
+		query = r.db.WithContext(ctx).Where("id = ? OR uuid = ? OR metadata::jsonb ->> 'subfile' = ? OR metadata::jsonb ->> 'subfile' = ?",
 			clientId, clientId, clientId, clientId+".txt")
 	} else {
-		query = r.db.WithContext(ctx).Where("id = ? OR xray_uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?",
+		query = r.db.WithContext(ctx).Where("id = ? OR uuid = ? OR json_extract(metadata, '$.subfile') = ? OR json_extract(metadata, '$.subfile') = ?",
 			clientId, clientId, clientId, clientId+".txt")
 	}
 	if err := query.Limit(1).Find(&subs).Error; err != nil {
@@ -549,6 +561,7 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 		}
 
 		var newEndsAt time.Time
+		metadata := sub.Metadata
 		if planID != nil {
 			var plan Plan
 			if err := tx.First(&plan, *planID).Error; err != nil {
@@ -559,6 +572,17 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 				baseTime = *sub.EndsAt
 			}
 			newEndsAt = baseTime.AddDate(0, plan.Months, 0)
+			// Persist a routing snapshot with the subscription. Plan routing
+			// then travels with state-sync events and does not require each
+			// slave to resolve plan records independently.
+			if metadata == nil {
+				metadata = Metadata{}
+			}
+			if len(plan.EngineIDs) == 0 {
+				delete(metadata, "plan_engine_ids")
+			} else {
+				metadata["plan_engine_ids"] = append([]string(nil), plan.EngineIDs...)
+			}
 		} else {
 			if newEndsAtPtr == nil {
 				return fmt.Errorf("newEndsAt is required if planID is nil")
@@ -579,15 +603,30 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 		}
 
 		now := time.Now()
+		updates := map[string]interface{}{
+			"status":      "active",
+			"ends_at":     newEndsAt,
+			"max_devices": maxDevices,
+			"starts_at":   now,
+			"updated_at":  now,
+		}
+		if err := tx.Model(&Subscription{}).
+			Where("user_id = ?", userID).
+			Updates(updates).Error; err != nil {
+			return err
+		}
+		if planID == nil {
+			return nil
+		}
+
+		// GORM's JSON serializer is invoked for a model field, but not when a
+		// raw map value is passed through Updates(map[string]any). Updating
+		// metadata through a typed model therefore preserves both SQLite TEXT
+		// and PostgreSQL JSONB behaviour instead of handing database/sql an
+		// unsupported Go map.
 		return tx.Model(&Subscription{}).
 			Where("user_id = ?", userID).
-			Updates(map[string]interface{}{
-				"status":      "active",
-				"ends_at":     newEndsAt,
-				"max_devices": maxDevices,
-				"starts_at":   now,
-				"updated_at":  now,
-			}).Error
+			Updates(&Subscription{Metadata: metadata}).Error
 	})
 }
 
