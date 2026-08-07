@@ -3,9 +3,24 @@ package support_chat
 import (
 	"encoding/json"
 	"net/http"
-
-
 )
+
+// getUserID extracts the user identifier from context, headers, or query parameters.
+func getUserID(r *http.Request) string {
+	if uid, ok := r.Context().Value("user_id").(string); ok && uid != "" {
+		return uid
+	}
+	if uid := r.Header.Get("X-User-ID"); uid != "" {
+		return uid
+	}
+	if uid := r.Header.Get("X-Telegram-ID"); uid != "" {
+		return uid
+	}
+	if uid := r.URL.Query().Get("user_id"); uid != "" {
+		return uid
+	}
+	return ""
+}
 
 // To access URL params from http.ServeMux in go 1.22+ we can use r.PathValue("id")
 
@@ -16,11 +31,8 @@ type createConversationReq struct {
 
 func (p *Plugin) handleClientCreateConversation() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Assume authentication middleware sets user in context
-		// This depends on the exact core auth middleware, but let's assume
-		// we can get UserID. For now, we will extract it from the request context.
-		userID, ok := r.Context().Value("user_id").(string)
-		if !ok || userID == "" {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -92,8 +104,8 @@ func (p *Plugin) handleClientCreateConversation() http.HandlerFunc {
 
 func (p *Plugin) handleClientListConversations() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := r.Context().Value("user_id").(string)
-		if !ok || userID == "" {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -112,8 +124,8 @@ func (p *Plugin) handleClientListConversations() http.HandlerFunc {
 
 func (p *Plugin) handleClientGetConversation() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := r.Context().Value("user_id").(string)
-		if !ok || userID == "" {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -141,8 +153,8 @@ func (p *Plugin) handleClientGetConversation() http.HandlerFunc {
 
 func (p *Plugin) handleClientListMessages() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := r.Context().Value("user_id").(string)
-		if !ok || userID == "" {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -185,8 +197,8 @@ type createMessageReq struct {
 
 func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := r.Context().Value("user_id").(string)
-		if !ok || userID == "" {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

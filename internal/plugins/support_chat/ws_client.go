@@ -95,8 +95,8 @@ func (p *Plugin) serveWs(role string) http.HandlerFunc {
 			return
 		}
 
-		userID, ok := r.Context().Value("user_id").(string)
-		if !ok || userID == "" {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
