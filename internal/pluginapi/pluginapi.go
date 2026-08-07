@@ -321,7 +321,9 @@ type CoreProvider interface {
 	// Business-orchestration methods that must remain in core so that every
 	// payment provider uses the same subscription-extension rules.
 	ExtendSubscription(ctx context.Context, subID string, months int) error
-	ApplyReferralReward(ctx context.Context, paymentID int64) error
+
+	// AuthMiddleware protects routes by enforcing the global API key.
+	AuthMiddleware(next http.Handler) http.Handler
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -445,6 +447,12 @@ type PaymentProvider interface {
 
 	// Refund initiates a refund for the given gateway transaction.
 	Refund(ctx context.Context, externalID string, amount int) error
+}
+
+// PaymentProviderConsumer is an optional interface for plugins that need to
+// dispatch payments across multiple payment providers (e.g. the billing plugin).
+type PaymentProviderConsumer interface {
+	SetPaymentProviders(providers map[string]PaymentProvider)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-package payment
+package billing
 
 import (
 	"context"

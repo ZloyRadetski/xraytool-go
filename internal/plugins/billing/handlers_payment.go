@@ -1,4 +1,4 @@
-package server
+package billing
 
 // handlers_payment.go — implements all payment-related REST handlers.
 //
@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"xraytool/internal/domain"
-	"xraytool/internal/plugins/core/payment"
 	"xraytool/internal/pluginapi"
 )
 
@@ -54,7 +53,7 @@ func buildPaymentResponse(p *domain.Payment) map[string]interface{} {
 // Returns: {"payment_id":42}
 // ─────────────────────────────────────────────────────────────────────────────
 
-func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		TelegramID  int64  `json:"telegram_id"`
 		Email       string `json:"email"`
@@ -72,7 +71,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	if !readBody(w, req, &body) {
 		return
 	}
-	reqPayload := payment.CreatePaymentRequest{
+	reqPayload := CreatePaymentRequest{
 		TelegramID:  body.TelegramID,
 		Email:       body.Email,
 		Amount:      body.Amount,
@@ -85,29 +84,29 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		Platform:    body.Platform,
 	}
 
-	pay, err := r.paymentSvc.CreatePayment(req.Context(), reqPayload)
+	pay, err := p.paymentSvc.CreatePayment(req.Context(), reqPayload)
 	if err != nil {
-		if errors.Is(err, payment.ErrUserNotFound) {
+		if errors.Is(err, ErrUserNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, payment.ErrInvalidPlanID) ||
-			errors.Is(err, payment.ErrPromoLimitReached) ||
-			errors.Is(err, payment.ErrPromoAlreadyUsed) ||
+		if errors.Is(err, ErrInvalidPlanID) ||
+			errors.Is(err, ErrPromoLimitReached) ||
+			errors.Is(err, ErrPromoAlreadyUsed) ||
 			strings.Contains(err.Error(), "is required") ||
 			strings.Contains(err.Error(), "must be positive") {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		r.log.Error("create payment", "err", err)
+		p.log.Error("create payment", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create payment")
 		return
 	}
 
-	if provider, ok := r.paymentProvider(body.Method); ok {
-		paymentURL, err := r.createProviderPayment(req.Context(), provider, pay, body.TelegramID, body.Email, body.PlanID, body.SuccessURL, body.FailedURL)
+	if provider, ok := p.paymentProvider(body.Method); ok {
+		paymentURL, err := p.createProviderPayment(req.Context(), provider, pay, body.TelegramID, body.Email, body.PlanID, body.SuccessURL, body.FailedURL)
 		if err != nil {
-			r.log.Error("payment provider CreateIntent failed", "method", body.Method, "payment_id", pay.ID, "err", err)
+			p.log.Error("payment provider CreateIntent failed", "method", body.Method, "payment_id", pay.ID, "err", err)
 			writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to initiate payment: %v", err))
 			return
 		}
@@ -125,7 +124,7 @@ func (r *Router) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"payment_id": pay.ID})
 }
 
-func (r *Router) createProviderPayment(
+func (p *Plugin) createProviderPayment(
 	ctx context.Context,
 	provider pluginapi.PaymentProvider,
 	pay *domain.Payment,
@@ -176,7 +175,7 @@ func (r *Router) createProviderPayment(
 	if result == nil || strings.TrimSpace(result.ExternalID) == "" || strings.TrimSpace(result.PaymentURL) == "" {
 		return "", errors.New("payment provider returned an empty transaction ID or payment URL")
 	}
-	if err := r.paymentSvc.UpdateExternalID(ctx, pay.ID, result.ExternalID); err != nil {
+	if err := p.paymentSvc.UpdateExternalID(ctx, pay.ID, result.ExternalID); err != nil {
 		return "", fmt.Errorf("save provider transaction reference: %w", err)
 	}
 	pay.ExternalID = &result.ExternalID
@@ -189,7 +188,7 @@ func (r *Router) createProviderPayment(
 // Returns array of payment objects.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleListPayments(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
 
 	status := q.Get("status")
@@ -197,9 +196,9 @@ func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
 	pt := q.Get("payment_type")
 	tgIDStr := q.Get("telegram_id")
 
-	payments, err := r.paymentSvc.FindPaymentsByFilters(req.Context(), status, method, pt, tgIDStr)
+	payments, err := p.paymentSvc.FindPaymentsByFilters(req.Context(), status, method, pt, tgIDStr)
 	if err != nil {
-		r.log.Error("list payments", "err", err)
+		p.log.Error("list payments", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -216,7 +215,7 @@ func (r *Router) handleListPayments(w http.ResponseWriter, req *http.Request) {
 // Returns a single payment object.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func (r *Router) handleGetPayment(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleGetPayment(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 	paymentID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || paymentID <= 0 {
@@ -224,7 +223,7 @@ func (r *Router) handleGetPayment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	payment, err := r.paymentSvc.FindPaymentByID(req.Context(), fmt.Sprintf("%d", paymentID))
+	payment, err := p.paymentSvc.FindPaymentByID(req.Context(), fmt.Sprintf("%d", paymentID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "payment not found")
 		return
@@ -239,7 +238,7 @@ func (r *Router) handleGetPayment(w http.ResponseWriter, req *http.Request) {
 // Returns {"ok":true} or 409 if the payment is not in expected status.
 // ─────────────────────────────────────────────────────────────────────────────
 
-func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 	paymentID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || paymentID <= 0 {
@@ -259,9 +258,9 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	updated, err := r.paymentSvc.UpdatePaymentStatus(req.Context(), paymentID, body.Status, body.ExpectedStatuses)
+	updated, err := p.paymentSvc.UpdatePaymentStatus(req.Context(), paymentID, body.Status, body.ExpectedStatuses)
 	if err != nil {
-		r.log.Error("update payment status", "err", err)
+		p.log.Error("update payment status", "err", err)
 		writeError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -271,12 +270,12 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 	}
 
 	if body.Status == "completed" {
-		payment, err := r.paymentSvc.FindPaymentByID(req.Context(), fmt.Sprintf("%d", paymentID))
+		payment, err := p.paymentSvc.FindPaymentByID(req.Context(), fmt.Sprintf("%d", paymentID))
 		if err == nil && payment != nil {
-			updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
+			updatedSub, err := p.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
 			if err == nil && updatedSub != nil {
-				r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID) //nolint:errcheck
-				r.unbanUserInXrayAsync(*updatedSub)
+				p.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID) //nolint:errcheck
+				p.unbanUserInXrayAsync(*updatedSub)
 			}
 		}
 	}
@@ -293,9 +292,9 @@ func (r *Router) handleUpdatePaymentStatus(w http.ResponseWriter, req *http.Requ
 // handlePaymentCallback delegates gateway-specific authentication and parsing
 // to the selected PaymentProvider, then applies the provider-neutral payment
 // lifecycle owned by core.
-func (r *Router) handlePaymentCallback(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handlePaymentCallback(w http.ResponseWriter, req *http.Request) {
 	method := strings.ToLower(strings.TrimSpace(req.PathValue("method")))
-	provider, ok := r.paymentProvider(method)
+	provider, ok := p.paymentProvider(method)
 	if !ok {
 		writeError(w, http.StatusNotFound, "payment provider not found")
 		return
@@ -314,7 +313,7 @@ func (r *Router) handlePaymentCallback(w http.ResponseWriter, req *http.Request)
 			status = http.StatusUnauthorized
 			message = "invalid callback credentials"
 		}
-		r.log.Warn("payment callback rejected", "method", method, "err", err, "ip", getClientIP(req))
+		p.log.Warn("payment callback rejected", "method", method, "err", err, "ip", getClientIP(req))
 		writeError(w, status, message)
 		return
 	}
@@ -335,36 +334,36 @@ func (r *Router) handlePaymentCallback(w http.ResponseWriter, req *http.Request)
 	if result.Currency != "" {
 		data["currency"] = result.Currency
 	}
-	r.dispatcher.Dispatch(method+".callback", data, nil)
+	p.dispatcher.Dispatch(method+".callback", data, nil)
 
-	if err := r.paymentSvc.ProcessExternalPaymentStatus(req.Context(), result.ExternalID, result.Status); err != nil {
+	if err := p.paymentSvc.ProcessExternalPaymentStatus(req.Context(), result.ExternalID, result.Status); err != nil {
 		// The callback is authenticated, so retain the previous idempotent
 		// webhook response behaviour even if local persistence failed.
-		r.log.Error("failed to process external payment status", "method", method, "external_id", result.ExternalID, "err", err)
+		p.log.Error("failed to process external payment status", "method", method, "external_id", result.ExternalID, "err", err)
 	} else if result.Status == "completed" {
-		r.afterCompletedExternalPayment(req.Context(), result.ExternalID)
+		p.afterCompletedExternalPayment(req.Context(), result.ExternalID)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (r *Router) afterCompletedExternalPayment(ctx context.Context, externalID string) {
-	payment, err := r.paymentSvc.FindPaymentByExternalID(ctx, externalID)
+func (p *Plugin) afterCompletedExternalPayment(ctx context.Context, externalID string) {
+	payment, err := p.paymentSvc.FindPaymentByExternalID(ctx, externalID)
 	if err != nil || payment == nil || payment.Status != "completed" {
 		return
 	}
-	updatedSub, err := r.userSvc.GetSubscriptionByUserID(ctx, payment.UserID)
+	updatedSub, err := p.userSvc.GetSubscriptionByUserID(ctx, payment.UserID)
 	if err != nil || updatedSub == nil {
 		return
 	}
-	r.userSvc.DeleteNotificationsBySubID(ctx, updatedSub.ID) //nolint:errcheck
-	r.unbanUserInXrayAsync(*updatedSub)
+	p.userSvc.DeleteNotificationsBySubID(ctx, updatedSub.ID) //nolint:errcheck
+	p.unbanUserInXrayAsync(*updatedSub)
 }
 
 // handlePlatgaCallback remains as a source-compatible private bridge for
 // callers compiled against the pre-plugin route. Registered routes use
 // handlePaymentCallback above.
-func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) {
 	rawBody, err := io.ReadAll(http.MaxBytesReader(w, req.Body, 1<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -379,20 +378,20 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 
 	secretHeader := req.Header.Get("X-Secret")
 	if secretHeader == "" {
-		r.log.Warn("platega callback missing X-Secret header")
+		p.log.Warn("platega callback missing X-Secret header")
 		writeError(w, http.StatusUnauthorized, "missing secret")
 		return
 	}
 
-	if r.cfg.PlategaSecret == "" {
-		r.log.Error("platega webhook received but platega_secret is not configured")
+	if p.cfg.PlategaSecret == "" {
+		p.log.Error("platega webhook received but platega_secret is not configured")
 		writeError(w, http.StatusServiceUnavailable, "webhook not configured")
 		return
 	}
 
 	// Platega sends the secret in plain text
-	if subtle.ConstantTimeCompare([]byte(secretHeader), []byte(r.cfg.PlategaSecret)) != 1 {
-		r.log.Warn("platega callback secret mismatch", "ip", getClientIP(req), "expected_len", len(r.cfg.PlategaSecret))
+	if subtle.ConstantTimeCompare([]byte(secretHeader), []byte(p.cfg.PlategaSecret)) != 1 {
+		p.log.Warn("platega callback secret mismatch", "ip", getClientIP(req), "expected_len", len(p.cfg.PlategaSecret))
 		writeError(w, http.StatusUnauthorized, "invalid secret")
 		return
 	}
@@ -406,24 +405,24 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 	}
 
 	status, _ := body["status"].(string)
-	r.log.Info("platega callback received", "external_id", extID, "status", status)
+	p.log.Info("platega callback received", "external_id", extID, "status", status)
 
 	// Always dispatch the raw Platega callback event
-	r.dispatcher.Dispatch("platega.callback", body, nil)
+	p.dispatcher.Dispatch("platega.callback", body, nil)
 
 	if extID != "" && status != "" {
-		if err := r.paymentSvc.ProcessExternalPaymentStatus(req.Context(), extID, status); err != nil {
-			r.log.Error("failed to process external payment status", "err", err, "extID", extID)
+		if err := p.paymentSvc.ProcessExternalPaymentStatus(req.Context(), extID, status); err != nil {
+			p.log.Error("failed to process external payment status", "err", err, "extID", extID)
 			// Don't fail the webhook — Platega expects 200 OK regardless.
 		}
 		// Only unban if the payment was actually completed successfully.
 		if status == "success" || status == "SUCCESS" || status == "CONFIRMED" || status == "COMPLETED" || status == "completed" {
-			payment, err := r.paymentSvc.FindPaymentByExternalID(req.Context(), extID)
+			payment, err := p.paymentSvc.FindPaymentByExternalID(req.Context(), extID)
 			if err == nil && payment != nil && payment.Status == "completed" {
-				updatedSub, err := r.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
+				updatedSub, err := p.userSvc.GetSubscriptionByUserID(req.Context(), payment.UserID)
 				if err == nil && updatedSub != nil {
-					r.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID) //nolint:errcheck
-					r.unbanUserInXrayAsync(*updatedSub)
+					p.userSvc.DeleteNotificationsBySubID(req.Context(), updatedSub.ID) //nolint:errcheck
+					p.unbanUserInXrayAsync(*updatedSub)
 				}
 			}
 		}
@@ -433,8 +432,8 @@ func (r *Router) handlePlatgaCallback(w http.ResponseWriter, req *http.Request) 
 }
 
 // GET /api/v1/admin/payments/stats
-func (r *Router) handleAdminPaymentsStats(w http.ResponseWriter, req *http.Request) {
-	payments, err := r.paymentSvc.FindAll(req.Context())
+func (p *Plugin) handleAdminPaymentsStats(w http.ResponseWriter, req *http.Request) {
+	payments, err := p.paymentSvc.FindAll(req.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db error")
 		return

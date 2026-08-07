@@ -455,6 +455,28 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 				"currency":    "RUB",
 			},
 		},
+		"billing": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"promo": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"referral": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"support_chat": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{
+				"master_key": "dGVzdF9rZXlfdGVzdF9rZXlfdGVzdF9rZXlfdGVzdF9rZXk=",
+			},
+		},
 		"antifraud": {
 			Enabled: cfg.AntiFraud.Enabled,
 			Source:  "builtin",

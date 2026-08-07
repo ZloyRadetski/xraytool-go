@@ -1,4 +1,4 @@
-package server
+package promo
 
 import (
 	json "github.com/goccy/go-json"
@@ -11,7 +11,7 @@ import (
 )
 
 // handleAdminCreatePromoCode creates a new promo code.
-func (r *Router) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Request) {
 	var payload struct {
 		Code            string     `json:"code"`
 		DiscountPercent int        `json:"discount_percent"`
@@ -44,12 +44,12 @@ func (r *Router) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Req
 		IsActive:        true,
 	}
 
-	if err := r.paymentSvc.CreatePromoCode(req.Context(), &promo); err != nil {
+	if err := p.registry.Promos().Create(req.Context(), &promo); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			http.Error(w, `{"error": "promo code already exists"}`, http.StatusConflict)
 			return
 		}
-		r.log.Error("Failed to create promo code", "error", err)
+		p.log.Error("Failed to create promo code", "error", err)
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -59,10 +59,10 @@ func (r *Router) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Req
 }
 
 // handleAdminListPromoCodes returns all promo codes.
-func (r *Router) handleAdminListPromoCodes(w http.ResponseWriter, req *http.Request) {
-	codes, err := r.paymentSvc.FindAllPromoCodes(req.Context())
+func (p *Plugin) handleAdminListPromoCodes(w http.ResponseWriter, req *http.Request) {
+	codes, err := p.registry.Promos().FindAll(req.Context())
 	if err != nil {
-		r.log.Error("Failed to list promo codes", "error", err)
+		p.log.Error("Failed to list promo codes", "error", err)
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -72,7 +72,7 @@ func (r *Router) handleAdminListPromoCodes(w http.ResponseWriter, req *http.Requ
 }
 
 // handleAdminDeletePromoCode hard-deletes or deactivates a promo code.
-func (r *Router) handleAdminDeletePromoCode(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleAdminDeletePromoCode(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -80,9 +80,9 @@ func (r *Router) handleAdminDeletePromoCode(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	rowsAffected, err := r.paymentSvc.DeletePromoCode(req.Context(), id)
+	rowsAffected, err := p.registry.Promos().Delete(req.Context(), id)
 	if err != nil {
-		r.log.Error("Failed to delete promo code", "error", err)
+		p.log.Error("Failed to delete promo code", "error", err)
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -96,7 +96,7 @@ func (r *Router) handleAdminDeletePromoCode(w http.ResponseWriter, req *http.Req
 }
 
 // handleAdminEditPromoCode edits an existing promo code.
-func (r *Router) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Request) {
+func (p *Plugin) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Request) {
 	idStr := req.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
@@ -118,7 +118,7 @@ func (r *Router) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	promo, err := r.paymentSvc.FindPromoCodeByID(req.Context(), id)
+	promo, err := p.registry.Promos().FindByID(req.Context(), id)
 	if err != nil {
 		http.Error(w, `{"error": "promo code not found"}`, http.StatusNotFound)
 		return
@@ -141,15 +141,74 @@ func (r *Router) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Reque
 	}
 	promo.ExpiresAt = payload.ExpiresAt
 
-	if err := r.paymentSvc.UpdatePromoCode(req.Context(), promo); err != nil {
+	if err := p.registry.Promos().Update(req.Context(), promo); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			http.Error(w, `{"error": "promo code name already exists"}`, http.StatusConflict)
 			return
 		}
-		r.log.Error("Failed to update promo code", "error", err)
+		p.log.Error("Failed to update promo code", "error", err)
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
 	}
 
 	json.NewEncoder(w).Encode(promo) //nolint:errcheck
+}
+
+func (p *Plugin) handleValidatePromoCode(w http.ResponseWriter, req *http.Request) {
+	code := strings.ToUpper(strings.TrimSpace(req.URL.Query().Get("code")))
+	platform := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("platform")))
+
+	if code == "" {
+		http.Error(w, `{"error": "code is required"}`, http.StatusBadRequest)
+		return
+	}
+	if platform == "" {
+		http.Error(w, `{"error": "platform is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	promo, err := p.registry.Promos().FindByCode(req.Context(), code)
+	if err != nil {
+		http.Error(w, `{"error": "promo code not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if !promo.IsActive {
+		http.Error(w, `{"error": "promo code is inactive"}`, http.StatusBadRequest)
+		return
+	}
+
+	if promo.ExpiresAt != nil && time.Now().After(*promo.ExpiresAt) {
+		http.Error(w, `{"error": "promo code has expired"}`, http.StatusBadRequest)
+		return
+	}
+
+	if promo.TargetPlatform != "all" && promo.TargetPlatform != platform {
+		http.Error(w, `{"error": "promo code is not valid for this platform"}`, http.StatusBadRequest)
+		return
+	}
+
+	if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
+		http.Error(w, `{"error": "promo code usage limit reached"}`, http.StatusBadRequest)
+		return
+	}
+
+	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
+	if telegramIDStr != "" {
+		user, err := p.userSvc.FindUserByPlatformID(req.Context(), "telegram", telegramIDStr)
+		if err == nil {
+			count, _ := p.registry.Payments().CountByPromoAndUser(req.Context(), promo.ID, user.ID, "completed")
+			if count > 0 {
+				http.Error(w, `{"error": "promo code already used by this user"}`, http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+		"valid":            true,
+		"discount_percent": promo.DiscountPercent,
+		"id":               promo.ID,
+	})
 }

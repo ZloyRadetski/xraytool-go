@@ -61,6 +61,6 @@ func TestNewWithOptions_UsesNoLegacyMailerFallback(t *testing.T) {
 		ResendAPIKey: "test-key",
 		FromEmail:    "noreply@example.test",
 	}}
-	router := NewWithOptions(cfg, "key", nil, nil, nil, nil, nil, slog.Default(), Options{DisableLegacyMailer: true})
+	router := NewWithOptions(cfg, "key", nil, nil, nil, nil, slog.Default(), nil, Options{DisableLegacyMailer: true})
 	require.Empty(t, router.notificationProviders)
 }

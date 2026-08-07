@@ -765,7 +765,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	var newEndsAtPtr *time.Time
 
 	if body.PlanID != nil {
-		plans, err := r.paymentSvc.FindActivePlans(context.Background())
+		plans, err := r.registry.Plans().FindActive(context.Background())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to get plans")
 			return
@@ -814,7 +814,7 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		promoPrice := baseAmount
 		if body.PromoCode != "" {
 			code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
-			promo, err := r.paymentSvc.FindPromoCodeByCode(context.Background(), code)
+			promo, err := r.registry.Promos().FindByCode(context.Background(), code)
 			if err == nil {
 				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
 					// We only check if it applies to platform

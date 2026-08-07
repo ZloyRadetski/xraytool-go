@@ -3,8 +3,6 @@ package server
 import (
 	json "github.com/goccy/go-json"
 	"net/http"
-	"strings"
-	"time"
 )
 
 type PlanResponse struct {
@@ -16,7 +14,7 @@ type PlanResponse struct {
 }
 
 func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
-	plans, err := r.paymentSvc.FindActivePlans(req.Context())
+	plans, err := r.registry.Plans().FindActive(req.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get plans")
 		return
@@ -39,63 +37,4 @@ func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
-}
-
-func (r *Router) handleValidatePromoCode(w http.ResponseWriter, req *http.Request) {
-	code := strings.ToUpper(strings.TrimSpace(req.URL.Query().Get("code")))
-	platform := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("platform")))
-
-	if code == "" {
-		writeError(w, http.StatusBadRequest, "code is required")
-		return
-	}
-	if platform == "" {
-		writeError(w, http.StatusBadRequest, "platform is required")
-		return
-	}
-
-	promo, err := r.paymentSvc.FindPromoCodeByCode(req.Context(), code)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "promo code not found")
-		return
-	}
-
-	if !promo.IsActive {
-		writeError(w, http.StatusBadRequest, "promo code is inactive")
-		return
-	}
-
-	if promo.ExpiresAt != nil && time.Now().After(*promo.ExpiresAt) {
-		writeError(w, http.StatusBadRequest, "promo code has expired")
-		return
-	}
-
-	if promo.TargetPlatform != "all" && promo.TargetPlatform != platform {
-		writeError(w, http.StatusBadRequest, "promo code is not valid for this platform")
-		return
-	}
-
-	if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
-		writeError(w, http.StatusBadRequest, "promo code usage limit reached")
-		return
-	}
-
-	telegramIDStr := strings.TrimSpace(req.URL.Query().Get("telegram_id"))
-	if telegramIDStr != "" {
-		user, err := r.userSvc.FindUserByPlatformID(req.Context(), "telegram", telegramIDStr)
-		if err == nil {
-			count, _ := r.paymentSvc.CountPaymentsByPromoAndUser(req.Context(), promo.ID, user.ID, "completed")
-			if count > 0 {
-				writeError(w, http.StatusBadRequest, "promo code already used by this user")
-				return
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
-		"valid":            true,
-		"discount_percent": promo.DiscountPercent,
-		"id":               promo.ID,
-	})
 }

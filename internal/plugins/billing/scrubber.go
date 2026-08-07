@@ -1,16 +1,14 @@
-package worker
+package billing
 
 import (
 	"context"
 	"log/slog"
 	"time"
-
-	"xraytool/internal/plugins/core/payment"
 )
 
 // ScrubberWorker periodically removes sensitive data (like old external payment IDs) to protect user anonymity.
 type ScrubberWorker struct {
-	paymentSvc *payment.Service
+	paymentSvc *Service
 	log        *slog.Logger
 	interval   time.Duration
 	retention  time.Duration
@@ -18,7 +16,7 @@ type ScrubberWorker struct {
 
 // NewScrubberWorker creates a new ScrubberWorker.
 // It will scrub data older than the retention duration, checking every interval.
-func NewScrubberWorker(paymentSvc *payment.Service, log *slog.Logger) *ScrubberWorker {
+func NewScrubberWorker(paymentSvc *Service, log *slog.Logger) *ScrubberWorker {
 	return &ScrubberWorker{
 		paymentSvc: paymentSvc,
 		log:        log.With("component", "scrubber_worker"),

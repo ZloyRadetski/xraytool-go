@@ -1,4 +1,4 @@
-package payment
+package billing
 
 import (
 	"context"
@@ -123,9 +123,6 @@ func (s *Service) ProcessExternalPaymentStatus(ctx context.Context, extID, statu
 					s.log.Error("failed to credit user balance after payment completed", "payment_id", payment.ID, "err", err)
 					return err
 				}
-			}
-			if err := s.applyReferralRewardForPayment(ctx, tx, payment); err != nil {
-				s.log.Error("failed to apply referral reward on platega callback", "err", err)
 			}
 			dispatchCompleted = true
 			paymentToSend = payment
@@ -543,18 +540,6 @@ func (s *Service) FindPaymentByExternalID(ctx context.Context, extID string) (*d
 	return s.registry.Payments().FindByExternalID(ctx, extID)
 }
 
-// ApplyReferralReward applies the existing referral-reward rule for a single
-// payment. It is exposed for the core plugin so a payment provider can request
-// the operation through the core boundary without direct repository writes.
-func (s *Service) ApplyReferralReward(ctx context.Context, paymentID int64) error {
-	return s.registry.WithTx(ctx, func(tx domain.Registry) error {
-		payment, err := tx.Payments().FindByID(ctx, fmt.Sprintf("%d", paymentID))
-		if err != nil {
-			return err
-		}
-		return s.applyReferralRewardForPayment(ctx, tx, payment)
-	})
-}
 
 // UpdatePaymentStatus updates the status of a payment.
 func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, status string, expectedStatuses []string) (bool, error) {
@@ -583,9 +568,7 @@ func (s *Service) UpdatePaymentStatus(ctx context.Context, paymentID int64, stat
 						return err
 					}
 				}
-				if err := s.applyReferralRewardForPayment(ctx, tx, payment); err != nil {
-					s.log.Error("failed to apply referral reward", "err", err)
-				}
+
 				dispatchCompleted = true
 				paymentToSend = payment
 			}
@@ -640,44 +623,3 @@ func (s *Service) extendSubscriptionForPayment(ctx context.Context, registry dom
 	}
 }
 
-// applyReferralRewardForPayment credits the referrer of the payer with 25% of
-// the payment amount, and records a ReferralReward row. Returns nil if successful or no-op.
-func (s *Service) applyReferralRewardForPayment(ctx context.Context, registry domain.Registry, payment *domain.Payment) error {
-	user, err := registry.Users().FindByID(ctx, payment.UserID)
-	if err != nil {
-		return nil // No user found, nothing to do
-	}
-	if user.ReferredBy == nil || *user.ReferredBy == "" {
-		return nil
-	}
-
-	const referralPercent = 0.25
-	reward := int(float64(payment.Amount) * referralPercent)
-	if reward <= 0 {
-		return nil
-	}
-
-	referrerID := *user.ReferredBy
-	if referrerID == user.ID {
-		return nil
-	}
-
-	txErr := registry.Users().AddReferralReward(ctx, referrerID, user.ID, payment.ID, reward)
-
-	if txErr != nil {
-		s.log.Error("referral reward transaction failed", "err", txErr)
-		return txErr
-	}
-
-	referrer, err := registry.Users().FindByID(ctx, referrerID)
-	if err == nil {
-		if tgIDRaw, ok := referrer.Metadata["telegram_id"]; ok {
-			s.dispatcher.Dispatch("referral.reward", map[string]interface{}{
-				"telegram_id":       tgIDRaw,
-				"reward_amount":     reward,
-				"referred_username": user.Username,
-			}, nil)
-		}
-	}
-	return nil
-}

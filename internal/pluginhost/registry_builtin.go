@@ -20,6 +20,9 @@ import (
 	plategaPlugin "xraytool/internal/plugins/payment_platega"
 	pricingPlugin "xraytool/internal/plugins/pricing_default"
 	supportChatPlugin "xraytool/internal/plugins/support_chat"
+	billingPlugin "xraytool/internal/plugins/billing"
+	promoPlugin "xraytool/internal/plugins/promo"
+	referralPlugin "xraytool/internal/plugins/referral"
 )
 
 // BuiltinRegistry возвращает карту name → factory для всех compiled-in плагинов.
@@ -60,6 +63,9 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 		
 		// Support chat
 		"support_chat": func() pluginapi.Plugin { return supportChatPlugin.New() },
+		"billing": func() pluginapi.Plugin { return billingPlugin.NewPlugin(cfg) },
+		"promo": func() pluginapi.Plugin { return promoPlugin.NewPlugin() },
+		"referral": func() pluginapi.Plugin { return referralPlugin.NewPlugin() },
 		// ── Phase 1.5+: Engine plugins (TBD) ────────────────────────────────
 		// "engine_xray": func() pluginapi.Plugin { return engine_xray.New(cfg) },
 	}

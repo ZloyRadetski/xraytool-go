@@ -41,7 +41,6 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
-	"xraytool/internal/plugins/core/payment"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/core/server"
 	"xraytool/internal/plugins/core/subscription"
@@ -59,7 +58,6 @@ const (
 	ServicePaymentRecorder        = "payment_recorder"
 	ServiceSubscriptionLifecycle  = "subscription_lifecycle"
 	ServiceUserService            = "user_service"
-	ServicePaymentService         = "payment_service"
 	ServiceEventDispatcher        = "event_dispatcher"
 	ServiceDomainRegistry         = "domain_registry"
 )
@@ -73,7 +71,6 @@ const (
 // outside this contract.
 type SubscriptionLifecycle interface {
 	ExtendSubscription(ctx context.Context, subscriptionID string, months int) error
-	ApplyReferralReward(ctx context.Context, paymentID int64) error
 }
 
 // Runtime contains the kernel-owned resources that the core plugin needs to
@@ -106,7 +103,6 @@ type Plugin struct {
 	registry   domain.Registry
 	dispatcher *events.Dispatcher
 	userSvc    *usersvc.Service
-	paymentSvc *payment.Service
 	cacheMgr   *subscription.CacheManager
 	httpRouter *server.Router
 	log        *slog.Logger
@@ -152,9 +148,9 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 			{Name: ServicePaymentRecorder},
 			{Name: ServiceSubscriptionLifecycle},
 			{Name: ServiceUserService},
-			{Name: ServicePaymentService},
 			{Name: ServiceEventDispatcher},
 			{Name: ServiceDomainRegistry},
+			{Name: "auth_middleware"},
 		},
 		// Core has no Requires — it is the root of the dependency graph.
 		Requires: nil,
@@ -212,9 +208,6 @@ func (p *Plugin) initServices(
 		slog.Default(),
 	)
 
-	// ── payment.Service ────────────────────────────────────────────────
-	p.paymentSvc = payment.NewService(registry, p.dispatcher, slog.Default())
-
 	// ── subscription cache manager ─────────────────────────────────────
 	p.cacheMgr = subscription.NewCacheManager(p.cfg, engine)
 	p.cacheMgr.Refresh()
@@ -226,7 +219,7 @@ func (p *Plugin) initServices(
 // owns the actual publication and verifies that this list exactly matches the
 // plugin metadata before it starts any dependent plugin.
 func (p *Plugin) PublishedServices() map[string]any {
-	if p.registry == nil || p.userSvc == nil || p.paymentSvc == nil || p.dispatcher == nil {
+	if p.registry == nil || p.userSvc == nil || p.dispatcher == nil {
 		return nil
 	}
 	return map[string]any{
@@ -237,9 +230,9 @@ func (p *Plugin) PublishedServices() map[string]any {
 		ServicePaymentRecorder:        p.registry.Payments(),
 		ServiceSubscriptionLifecycle:  p,
 		ServiceUserService:            p.userSvc,
-		ServicePaymentService:         p.paymentSvc,
 		ServiceEventDispatcher:        p.dispatcher,
 		ServiceDomainRegistry:         p.registry,
+		"auth_middleware":             p.AuthMiddleware,
 	}
 }
 
@@ -257,11 +250,15 @@ func (p *Plugin) InitHTTPRouter(
 		p.cacheMgr,
 		engine,
 		p.userSvc,
-		p.paymentSvc,
 		p.dispatcher,
 		slog.Default(),
+		p.registry,
 		server.Options{DisableLegacyMailer: p.runtime.UsePluginNotifications},
 	)
+}
+
+func (p *Plugin) AuthMiddleware(next http.Handler) http.Handler {
+	return p.httpRouter.AuthMiddleware(next)
 }
 
 // Start launches core workers (expiry, scrubber) and keeps the plugin alive
@@ -295,17 +292,6 @@ func (p *Plugin) Start(ctx context.Context) error {
 			wkr.Run(runCtx)
 		}()
 		slog.Info("[core] Expiry Worker started", "interval", p.cfg.Worker.ExpiryInterval)
-
-		// ScrubberWorker: erases old payment external IDs to protect user
-		// privacy. Lives here because payment scrubbing is a core plugin
-		// concern.
-		scrubber := worker.NewScrubberWorker(p.paymentSvc, slog.Default())
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			scrubber.Run(runCtx)
-		}()
-		slog.Info("[core] Privacy Scrubber started")
 	}
 
 	go func() {
@@ -399,9 +385,6 @@ func (p *Plugin) Dispatcher() *events.Dispatcher { return p.dispatcher }
 // UserSvc returns the user.Service.
 func (p *Plugin) UserSvc() *usersvc.Service { return p.userSvc }
 
-// PaymentSvc returns the payment.Service.
-func (p *Plugin) PaymentSvc() *payment.Service { return p.paymentSvc }
-
 // ExtendSubscription applies the core's engine-agnostic extension rule to one
 // subscription. Payment providers use this narrow service rather than writing
 // subscription rows themselves.
@@ -428,15 +411,6 @@ func (p *Plugin) ExtendSubscription(ctx context.Context, subscriptionID string, 
 		sub.Status = "active"
 		return tx.Subscriptions().Update(ctx, sub)
 	})
-}
-
-// ApplyReferralReward delegates to the existing payment-domain implementation
-// while keeping the action behind the core plugin boundary.
-func (p *Plugin) ApplyReferralReward(ctx context.Context, paymentID int64) error {
-	if p.paymentSvc == nil {
-		return fmt.Errorf("core plugin: payment service not initialised")
-	}
-	return p.paymentSvc.ApplyReferralReward(ctx, paymentID)
 }
 
 // CacheManager returns the subscription.CacheManager.

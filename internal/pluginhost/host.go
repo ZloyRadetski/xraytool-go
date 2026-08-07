@@ -1176,6 +1176,20 @@ func (h *Host) EventSinks() []pluginapi.EventSink {
 	return sinks
 }
 
+// PaymentProviderConsumers returns all loaded PaymentProviderConsumer plugins.
+func (h *Host) PaymentProviderConsumers() []pluginapi.PaymentProviderConsumer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	var consumers []pluginapi.PaymentProviderConsumer
+	for _, lp := range h.loaded {
+		if c, ok := lp.plugin.(pluginapi.PaymentProviderConsumer); ok {
+			consumers = append(consumers, c)
+		}
+	}
+	return consumers
+}
+
 // EngineProviders returns all loaded EngineProvider plugins.
 func (h *Host) EngineProviders() []pluginapi.EngineProvider {
 	h.mu.RLock()

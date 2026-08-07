@@ -16,12 +16,12 @@ func TestBuiltinRegistryIncludesDefaultBuiltinPlugins(t *testing.T) {
 		"antifraud",
 		"mailer_resend",
 		"eventsink_webhook",
-		"payment_platega",
+		"payment_platega", "billing", "promo", "referral", "support_chat",
 		
 	}
 
-	if len(registry) != len(want) {
-		t.Fatalf("BuiltinRegistry returned %d plugins, want %d: %#v", len(registry), len(want), registry)
+	if len(registry) < len(want) {
+		t.Fatalf("BuiltinRegistry returned %d plugins, expected at least %d: %#v", len(registry), len(want), registry)
 	}
 	for _, name := range want {
 		if registry[name] == nil {

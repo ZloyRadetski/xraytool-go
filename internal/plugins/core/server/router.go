@@ -46,7 +46,6 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
-	"xraytool/internal/plugins/core/payment"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/core/subscription"
 	usersvc "xraytool/internal/plugins/core/user"
@@ -64,7 +63,6 @@ type Router struct {
 	notificationProviders []pluginapi.NotificationProvider
 	engine                domain.Engine
 	userSvc               *usersvc.Service
-	paymentSvc            *payment.Service
 	// paymentProviders are keyed by their normalized MethodID. They are
 	// injected after PluginHost.Load, so the router never imports a concrete
 	// gateway implementation.
@@ -104,14 +102,14 @@ func (r *Router) Shutdown() {
 
 // New constructs a Router, registers all routes and middleware, and returns the
 // underlying http.Handler ready to pass to http.ListenAndServe.
-func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, engine domain.Engine, userSvc *usersvc.Service, paymentSvc *payment.Service, dispatcher *events.Dispatcher, log *slog.Logger) *Router {
-	return NewWithOptions(cfg, apiKey, cm, engine, userSvc, paymentSvc, dispatcher, log, Options{})
+func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, engine domain.Engine, userSvc *usersvc.Service, dispatcher *events.Dispatcher, log *slog.Logger, registry domain.Registry) *Router {
+	return NewWithOptions(cfg, apiKey, cm, engine, userSvc, dispatcher, log, registry, Options{})
 }
 
 // NewWithOptions constructs a Router with explicit transition wiring options.
 // It is used by the plugin-host composition root; New remains source-compatible
 // for the legacy command path.
-func NewWithOptions(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, engine domain.Engine, userSvc *usersvc.Service, paymentSvc *payment.Service, dispatcher *events.Dispatcher, log *slog.Logger, options Options) *Router {
+func NewWithOptions(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, engine domain.Engine, userSvc *usersvc.Service, dispatcher *events.Dispatcher, log *slog.Logger, registry domain.Registry, options Options) *Router {
 	r := &Router{
 		mux:        http.NewServeMux(),
 		apiKey:     apiKey,
@@ -121,7 +119,7 @@ func NewWithOptions(cfg *appconfig.Config, apiKey string, cm *subscription.Cache
 		cm:         cm,
 		engine:     engine,
 		userSvc:    userSvc,
-		paymentSvc: paymentSvc,
+		registry:   registry,
 	}
 
 	r.registerRoutes()
@@ -264,7 +262,7 @@ func (r *Router) registerRoutes() {
 	//   - responses are compressed when the client sends Accept-Encoding: gzip
 	//   - request bodies are transparently decompressed when Content-Encoding: gzip
 	protected := func(h http.HandlerFunc) http.Handler {
-		return r.gzipMiddleware(r.authMiddleware(h))
+		return r.gzipMiddleware(r.AuthMiddleware(h))
 	}
 
 	// Files & Webhooks
@@ -294,23 +292,15 @@ func (r *Router) registerRoutes() {
 
 	// Plans & Promocodes
 	r.mux.Handle("GET /api/v1/plans", protected(r.handleGetPlans))
-	r.mux.Handle("GET /api/v1/promocodes/validate", protected(r.handleValidatePromoCode))
-
-	// Payments
-	r.mux.Handle("POST /api/v1/payments/create", protected(r.handleCreatePayment))
-	r.mux.Handle("GET /api/v1/payments", protected(r.handleListPayments))
-	r.mux.Handle("GET /api/v1/payments/{id}", protected(r.handleGetPayment))
-	r.mux.Handle("POST /api/v1/payments/{id}/status", protected(r.handleUpdatePaymentStatus))
 
 	// Gateway callbacks are authenticated by their selected provider, not by
 	// the admin API-key middleware. This lets a newly installed provider expose
 	// its conventional /payments/<method>/callback endpoint without adding a
 	// concrete route to the core router.
-	r.mux.Handle("POST /api/v1/payments/{method}/callback", http.HandlerFunc(r.handlePaymentCallback))
+	// (Payments are now handled by the billing plugin)
 
 	// Admin
 	r.mux.Handle("GET /api/v1/admin/users", protected(r.handleAdminListUsers))
-	r.mux.Handle("GET /api/v1/admin/payments/stats", protected(r.handleAdminPaymentsStats))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/block", protected(r.handleAdminBlockUser))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/unblock", protected(r.handleAdminUnblockUser))
 	r.mux.Handle("POST /api/v1/admin/users/{email}/set-expire", protected(r.handleAdminSetExpire))
@@ -319,12 +309,6 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("DELETE /api/v1/admin/users/{platform}/{id}", protected(r.handleAdminDeleteUser))
 	// Anti-Fraud
 	r.mux.Handle("GET /api/v1/admin/antifraud/state", protected(r.handleAdminAntiFraudState))
-
-	// Admin Promocodes
-	r.mux.Handle("POST /api/v1/admin/promocodes", protected(r.handleAdminCreatePromoCode))
-	r.mux.Handle("GET /api/v1/admin/promocodes", protected(r.handleAdminListPromoCodes))
-	r.mux.Handle("PUT /api/v1/admin/promocodes/{id}", protected(r.handleAdminEditPromoCode))
-	r.mux.Handle("DELETE /api/v1/admin/promocodes/{id}", protected(r.handleAdminDeletePromoCode))
 
 	// Internal — existing single-action sync endpoint (kept for backward compat).
 	r.mux.Handle("POST /api/v1/internal/xray/sync", protected(r.handleInternalXraySync))
@@ -407,8 +391,8 @@ func (r *Router) gzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// authMiddleware rejects requests that don't carry a valid X-API-Key header.
-func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
+// AuthMiddleware rejects requests that don't carry a valid X-API-Key header.
+func (r *Router) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		key := req.Header.Get("X-API-Key")
 
@@ -429,7 +413,7 @@ func (r *Router) authMiddleware(next http.HandlerFunc) http.Handler {
 			w.Write([]byte(`{"error":"unauthorized"}`)) //nolint:errcheck
 			return
 		}
-		next(w, req)
+		next.ServeHTTP(w, req)
 	})
 }
 

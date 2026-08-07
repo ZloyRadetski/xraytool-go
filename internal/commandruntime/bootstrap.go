@@ -19,7 +19,7 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
-	"xraytool/internal/plugins/core/payment"
+	"xraytool/internal/plugins/billing"
 	"xraytool/internal/plugins/core/user"
 	vpn "xraytool/internal/plugins/engine_xray"
 )
@@ -45,7 +45,7 @@ type Dependencies struct {
 	Engine          domain.Engine
 	Dispatcher      *events.Dispatcher
 	UserSvc         *user.Service
-	PaymentSvc      *payment.Service
+	PaymentSvc      *billing.Service
 	Propagator      domain.EventPropagator
 	ClusterProvider domain.ClusterStatsProvider
 	SlaveProvider   domain.StateSyncSlaveProvider
@@ -138,7 +138,7 @@ func Load(configPath string, options LoadOptions) (*Dependencies, error) {
 			deps.Propagator,
 			slog.Default(),
 		)
-		deps.PaymentSvc = payment.NewService(deps.Registry, deps.Dispatcher, slog.Default())
+		deps.PaymentSvc = billing.NewService(deps.Registry, deps.Dispatcher, slog.Default())
 	}
 
 	return deps, nil

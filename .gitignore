@@ -21,6 +21,7 @@ devices_state.json
 build.ps1
 *.ps1
 *test*.yaml
+*.py
 
 # Go workspace
 go.work
@@ -47,4 +48,4 @@ config*.template.json
 xray-core*/
 xraytool_server_save/
 tests/
-.VSCodeCounter/
+.VSCodeCounter/config.yaml

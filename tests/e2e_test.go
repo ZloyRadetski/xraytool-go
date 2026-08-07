@@ -71,8 +71,8 @@ func TestMain(m *testing.M) {
 	// Build xraytool binary
 	cmd := exec.Command("go", "build", "-o", binPath, ".")
 	cmd.Dir = rootDir
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("Failed to build xraytool binary: %v\n", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Printf("Failed to build xraytool binary: %v\nOutput:\n%s\n", err, string(out))
 		os.Exit(1)
 	}
 
@@ -979,8 +979,12 @@ func TestE2ESuite(t *testing.T) {
 		_, payResp, _ := apiRequest("POST", "/api/v1/payments/create", payBody, true)
 		var pMap map[string]interface{}
 		_ = json.Unmarshal([]byte(payResp), &pMap)
-		payID := int64(pMap["payment_id"].(float64))
-
+		var payID int64
+		if pMap["payment_id"] != nil {
+			payID = int64(pMap["payment_id"].(float64))
+		} else {
+			t.Fatalf("Create payment failed, resp: %s", payResp)
+		}
 		// Complete payment
 		statusBody := map[string]interface{}{
 			"status":            "completed",
@@ -1341,7 +1345,12 @@ func TestE2ESuite(t *testing.T) {
 		_, payResp, _ := apiRequest("POST", "/api/v1/payments/create", payBody, true)
 		var pMap map[string]interface{}
 		_ = json.Unmarshal([]byte(payResp), &pMap)
-		payID := int64(pMap["payment_id"].(float64))
+		var payID int64
+		if pMap["payment_id"] != nil {
+			payID = int64(pMap["payment_id"].(float64))
+		} else {
+			t.Fatalf("Create payment failed, resp: %s", payResp)
+		}
 
 		// Complete payment
 		_, _, _ = apiRequest("POST", fmt.Sprintf("/api/v1/payments/%d/status", payID), map[string]interface{}{"status": "completed", "expected_statuses": []string{"pending_card"}}, true)
@@ -1435,7 +1444,12 @@ func TestE2ESuite(t *testing.T) {
 		_, payResp, _ := apiRequest("POST", "/api/v1/payments/create", payBody, true)
 		var pMap map[string]interface{}
 		_ = json.Unmarshal([]byte(payResp), &pMap)
-		payID := int64(pMap["payment_id"].(float64))
+		var payID int64
+		if pMap["payment_id"] != nil {
+			payID = int64(pMap["payment_id"].(float64))
+		} else {
+			t.Fatalf("Create payment failed, resp: %s", payResp)
+		}
 
 		// Complete payment
 		_, _, _ = apiRequest("POST", fmt.Sprintf("/api/v1/payments/%d/status", payID), map[string]interface{}{"status": "completed", "expected_statuses": []string{"pending_card"}}, true)

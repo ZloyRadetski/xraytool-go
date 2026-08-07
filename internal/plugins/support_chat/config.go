@@ -30,6 +30,10 @@ func parseConfig(raw pluginapi.RawConfig) (pluginConfig, error) {
 		WebSocketEnabled: true,
 		WSPingInterval:   30 * time.Second,
 		WSPongTimeout:    10 * time.Second,
+		Database: DBConfig{
+			Driver:     "sqlite",
+			SQLitePath: "data/support_chat.db",
+		},
 	}
 
 	if raw == nil {

@@ -2,8 +2,6 @@ package server_test
 
 import (
 	"xraytool/internal/domain"
-	"xraytool/internal/plugins/core/payment"
-	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/core/user"
 
 	"gorm.io/gorm"
@@ -56,11 +54,7 @@ func newTestRouter(t *testing.T) *server.Router {
 	cm := subscription.NewCacheManager(cfg, engine)
 	dispatcher := events.NewDispatcher(&events.Config{})
 	userSvc := user.NewService(testReg, user.Config{IsMaster: true, Domain: cfg.Server.Domain}, engine, nil, slog.Default())
-	paymentSvc := payment.NewService(testReg, dispatcher, slog.Default())
-
-	return server.New(cfg, "test-api-key", cm, engine, userSvc, paymentSvc, dispatcher, slog.Default()).WithPaymentProviders(map[string]pluginapi.PaymentProvider{
-		"platega": newTestPaymentProvider(),
-	})
+	return server.New(cfg, "test-api-key", cm, engine, userSvc, dispatcher, slog.Default(), testReg)
 }
 
 func do(r *server.Router, method, path, body string, apiKey string) *httptest.ResponseRecorder {

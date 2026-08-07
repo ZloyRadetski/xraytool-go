@@ -146,6 +146,9 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	paymentProviders := host.PaymentProviders()
 	if len(paymentProviders) > 0 {
 		apiRouter = apiRouter.WithPaymentProviders(paymentProviders)
+		for _, consumer := range host.PaymentProviderConsumers() {
+			consumer.SetPaymentProviders(paymentProviders)
+		}
 	}
 
 	notificationProviders := host.NotificationProviders("email")
