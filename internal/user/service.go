@@ -1057,7 +1057,7 @@ func (s *Service) LinkEmailAccount(ctx context.Context, tgUserID string, email s
 		}
 
 		if tgUser.Metadata != nil {
-			if _, hasEmail := tgUser.Metadata["email"]; hasEmail {
+			if emailVal, hasEmail := tgUser.Metadata["email"].(string); hasEmail && emailVal != "" {
 				return fmt.Errorf("к этому Telegram-аккаунту уже привязан Email")
 			}
 		}

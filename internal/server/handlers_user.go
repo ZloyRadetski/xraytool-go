@@ -916,7 +916,11 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 	if user.Metadata == nil {
 		user.Metadata = domain.Metadata{}
 	}
-	user.Metadata[body.Key] = body.Value
+	if body.Value == nil || body.Value == "" {
+		delete(user.Metadata, body.Key)
+	} else {
+		user.Metadata[body.Key] = body.Value
+	}
 
 	if err := r.userSvc.UpdateUser(context.Background(), user); err != nil {
 		r.log.Error("set metadata", "err", err)
