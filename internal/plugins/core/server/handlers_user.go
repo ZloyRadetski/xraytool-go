@@ -908,10 +908,6 @@ func (r *Router) handleSetMetadata(w http.ResponseWriter, req *http.Request) {
 	if user.Metadata == nil {
 		user.Metadata = domain.Metadata{}
 	}
-<<<<<<< HEAD:internal/server/handlers_user.go
-=======
-
->>>>>>> af04641 (﻿Завершение рефакторинга плагинной архитектуры (Phases 1-8)):internal/plugins/core/server/handlers_user.go
 	if body.Value == nil || body.Value == "" {
 		delete(user.Metadata, body.Key)
 	} else {
