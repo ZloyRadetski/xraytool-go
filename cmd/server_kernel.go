@@ -23,6 +23,7 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/pluginhost"
+	"xraytool/internal/database"
 	corePlugin "xraytool/internal/plugins/core"
 	vpn "xraytool/internal/plugins/engine_xray"
 )
@@ -111,11 +112,18 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	// (build tag !minimal) and builds the fraud reporter for slave nodes.
 	configureOptionalPluginFactories(factories, deps, vpnEngine, nil)
 
+	// Extract the connection from the legacy registry for plugin host schema ownership.
+	var hostOpts []pluginhost.HostOption
+	if gormDB, ok := database.GormDB(deps.Registry); ok {
+		hostOpts = append(hostOpts, pluginhost.WithPluginDBFactory(database.NewPluginDBFactory(gormDB)))
+	}
+
 	host = pluginhost.New(
 		pluginsCfg,
 		slog.Default(),
 		factories,
 		emitFn,
+		hostOpts...
 	)
 
 	if err := host.Load(ctx); err != nil {
@@ -138,6 +146,11 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	paymentProviders := host.PaymentProviders()
 	if len(paymentProviders) > 0 {
 		apiRouter = apiRouter.WithPaymentProviders(paymentProviders)
+	}
+
+	notificationProviders := host.NotificationProviders("email")
+	if len(notificationProviders) > 0 {
+		apiRouter = apiRouter.WithNotificationProviders(notificationProviders...)
 	}
 
 	// ── Step 7: Initial user sync (master only) ───────────────────────────────
@@ -170,6 +183,11 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			apiRouter.WithAntifraudProvider(afProvider, host.BanCache().IsBanned, cfg.IsMaster())
 			slog.Info("[KERNEL] Anti-Fraud plugin wired",
 				"log_path", cfg.AntiFraud.LogPath, "max_ips", cfg.AntiFraud.MaxIPs)
+		}
+
+		if csProvider, ok := host.PluginByName("cluster_sync").(pluginapi.ClusterSyncProvider); ok && csProvider != nil {
+			apiRouter.WithClusterSyncProvider(csProvider)
+			slog.Info("[KERNEL] Cluster Sync plugin wired")
 		}
 
 		// ── Sync service (slave mode) ─────────────────────────────────────────
