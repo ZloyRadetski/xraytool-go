@@ -56,12 +56,12 @@ func TestStore_Messages(t *testing.T) {
 
 	conv, _ := s.CreateConversation(ctx, "user-1", "Subject")
 
-	_, err := s.CreateMessage(ctx, conv.ID, "client", "Hello admin")
+	_, err := s.CreateMessage(ctx, conv.ID, "client", "Hello admin", nil)
 	if err != nil {
 		t.Fatalf("CreateMessage failed: %v", err)
 	}
 
-	_, err = s.CreateMessage(ctx, conv.ID, "admin", "Hello client")
+	_, err = s.CreateMessage(ctx, conv.ID, "admin", "Hello client", nil)
 	if err != nil {
 		t.Fatalf("CreateMessage failed: %v", err)
 	}

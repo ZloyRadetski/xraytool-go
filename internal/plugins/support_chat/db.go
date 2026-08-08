@@ -35,8 +35,8 @@ func openDB(cfg DBConfig) (*gorm.DB, error) {
 	}
 
 	// AutoMigrate tables
-	if err := db.AutoMigrate(&Conversation{}, &Message{}); err != nil {
-		return nil, fmt.Errorf("failed to migrate tables: %w", err)
+	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}); err != nil {
+		return nil, fmt.Errorf("failed to auto migrate: %w", err)
 	}
 
 	return db, nil

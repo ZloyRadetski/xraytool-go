@@ -15,6 +15,12 @@ type pluginConfig struct {
 	WebSocketEnabled bool
 	WSPingInterval   time.Duration
 	WSPongTimeout    time.Duration
+	Media            MediaConfig
+}
+
+type MediaConfig struct {
+	StoragePath   string
+	MaxFileSizeMB int
 }
 
 type DBConfig struct {
@@ -33,6 +39,10 @@ func parseConfig(raw pluginapi.RawConfig) (pluginConfig, error) {
 		Database: DBConfig{
 			Driver:     "sqlite",
 			SQLitePath: "data/support_chat.db",
+		},
+		Media: MediaConfig{
+			StoragePath:   "/etc/xraytool/support_media",
+			MaxFileSizeMB: 50,
 		},
 	}
 
@@ -72,6 +82,17 @@ func parseConfig(raw pluginapi.RawConfig) (pluginConfig, error) {
 		cfg.MaxOpenPerUser = int(v)
 	} else if v, ok := raw["max_open_per_user"].(int); ok {
 		cfg.MaxOpenPerUser = v
+	}
+
+	if mediaMap, ok := raw["media"].(map[string]any); ok {
+		if path, ok := mediaMap["storage_path"].(string); ok {
+			cfg.Media.StoragePath = path
+		}
+		if size, ok := mediaMap["max_file_size_mb"].(float64); ok {
+			cfg.Media.MaxFileSizeMB = int(size)
+		} else if size, ok := mediaMap["max_file_size_mb"].(int); ok {
+			cfg.Media.MaxFileSizeMB = size
+		}
 	}
 
 	if v, ok := raw["websocket_enabled"].(bool); ok {

@@ -25,8 +25,9 @@ func getUserID(r *http.Request) string {
 // To access URL params from http.ServeMux in go 1.22+ we can use r.PathValue("id")
 
 type createConversationReq struct {
-	Subject string `json:"subject"`
-	Message string `json:"message"`
+	Subject     string   `json:"subject"`
+	Message     string   `json:"message"`
+	Attachments []string `json:"attachments"`
 }
 
 func (p *Plugin) handleClientCreateConversation() http.HandlerFunc {
@@ -73,7 +74,7 @@ func (p *Plugin) handleClientCreateConversation() http.HandlerFunc {
 			return
 		}
 
-		msg, err := p.store.CreateMessage(r.Context(), conv.ID, "client", req.Message)
+		msg, err := p.store.CreateMessage(r.Context(), conv.ID, "client", req.Message, req.Attachments)
 		if err != nil {
 			p.log.Error("Failed to create initial message", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -195,7 +196,8 @@ func (p *Plugin) handleClientListMessages() http.HandlerFunc {
 }
 
 type createMessageReq struct {
-	Text string `json:"text"`
+	Text        string   `json:"text"`
+	Attachments []string `json:"attachments"`
 }
 
 func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
@@ -237,7 +239,7 @@ func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
 			return
 		}
 
-		msg, err := p.store.CreateMessage(r.Context(), convID, "client", req.Text)
+		msg, err := p.store.CreateMessage(r.Context(), convID, "client", req.Text, req.Attachments)
 		if err != nil {
 			p.log.Error("Failed to create message", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)

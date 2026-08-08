@@ -18,6 +18,11 @@ func NewStore(db *gorm.DB, crypto *Crypto) *Store {
 	return &Store{db: db, crypto: crypto}
 }
 
+// Crypto returns the crypto instance.
+func (s *Store) Crypto() *Crypto {
+	return s.crypto
+}
+
 // Conversation Filters
 type ConversationFilter struct {
 	UserID *string
@@ -100,12 +105,13 @@ type MessageOutput struct {
 	ConversationID string     `json:"conversation_id"`
 	SenderRole     string     `json:"sender_role"`
 	Text           string     `json:"text"`
-	ReadAt         *time.Time `json:"read_at"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ReadAt         *time.Time   `json:"read_at"`
+	CreatedAt      time.Time    `json:"created_at"`
+	Attachments    []Attachment `json:"attachments"`
 }
 
 // CreateMessage encrypts and stores a new message.
-func (s *Store) CreateMessage(ctx context.Context, convID, senderRole, text string) (*MessageOutput, error) {
+func (s *Store) CreateMessage(ctx context.Context, convID, senderRole, text string, attachmentIDs []string) (*MessageOutput, error) {
 	// Verify conversation exists
 	if _, err := s.GetConversation(ctx, convID); err != nil {
 		return nil, fmt.Errorf("conversation not found: %w", err)
@@ -129,10 +135,20 @@ func (s *Store) CreateMessage(ctx context.Context, convID, senderRole, text stri
 		if err := tx.Create(msg).Error; err != nil {
 			return err
 		}
+		if len(attachmentIDs) > 0 {
+			if err := tx.Model(&Attachment{}).Where("id IN ?", attachmentIDs).Update("message_id", msg.ID).Error; err != nil {
+				return err
+			}
+		}
 		return tx.Model(&Conversation{}).Where("id = ?", convID).Update("updated_at", time.Now()).Error
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to save message: %w", err)
+	}
+
+	var finalAttachments []Attachment
+	if len(attachmentIDs) > 0 {
+		s.db.WithContext(ctx).Where("message_id = ?", msg.ID).Find(&finalAttachments)
 	}
 
 	return &MessageOutput{
@@ -142,13 +158,14 @@ func (s *Store) CreateMessage(ctx context.Context, convID, senderRole, text stri
 		Text:           text,
 		ReadAt:         nil,
 		CreatedAt:      msg.CreatedAt,
+		Attachments:    finalAttachments,
 	}, nil
 }
 
 // ListMessages retrieves and decrypts all messages for a conversation.
 func (s *Store) ListMessages(ctx context.Context, convID string) ([]MessageOutput, error) {
 	var msgs []Message
-	if err := s.db.WithContext(ctx).Where("conversation_id = ?", convID).Order("created_at ASC").Find(&msgs).Error; err != nil {
+	if err := s.db.WithContext(ctx).Preload("Attachments").Where("conversation_id = ?", convID).Order("created_at ASC").Find(&msgs).Error; err != nil {
 		return nil, err
 	}
 
@@ -167,9 +184,56 @@ func (s *Store) ListMessages(ctx context.Context, convID string) ([]MessageOutpu
 			Text:           plaintext,
 			ReadAt:         m.ReadAt,
 			CreatedAt:      m.CreatedAt,
+			Attachments:    m.Attachments,
 		}
 	}
 	return outputs, nil
+}
+
+// CreateAttachment creates a new unlinked attachment record.
+func (s *Store) CreateAttachment(ctx context.Context, uploaderID, fileName, mimeType string, size int64, storagePath string, nonce []byte) (*Attachment, error) {
+	att := &Attachment{
+		ID:          uuid.New().String(),
+		UploaderID:  uploaderID,
+		FileName:    fileName,
+		MimeType:    mimeType,
+		Size:        size,
+		StoragePath: storagePath,
+		Nonce:       nonce,
+		CreatedAt:   time.Now(),
+	}
+	if err := s.db.WithContext(ctx).Create(att).Error; err != nil {
+		return nil, err
+	}
+	return att, nil
+}
+
+// GetAttachment retrieves an attachment by ID.
+func (s *Store) GetAttachment(ctx context.Context, id string) (*Attachment, error) {
+	var att Attachment
+	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&att).Error; err != nil {
+		return nil, err
+	}
+	return &att, nil
+}
+
+// UserOwnsAttachment checks if the user has access to the attachment's conversation.
+func (s *Store) UserOwnsAttachment(ctx context.Context, userID string, att *Attachment) bool {
+	if att.MessageID == nil || *att.MessageID == "" {
+		return att.UploaderID == userID
+	}
+
+	var msg Message
+	if err := s.db.WithContext(ctx).Where("id = ?", *att.MessageID).First(&msg).Error; err != nil {
+		return false
+	}
+
+	var conv Conversation
+	if err := s.db.WithContext(ctx).Where("id = ?", msg.ConversationID).First(&conv).Error; err != nil {
+		return false
+	}
+
+	return conv.UserID == userID
 }
 
 // MarkMessagesRead marks messages as read for a given conversation.

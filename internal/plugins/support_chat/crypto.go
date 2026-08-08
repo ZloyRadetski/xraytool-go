@@ -95,3 +95,54 @@ func (c *Crypto) Decrypt(conversationID string, ciphertext, nonce []byte) (strin
 
 	return string(plaintext), nil
 }
+
+// EncryptStream encrypts data from src to dst using AES-CTR.
+func (c *Crypto) EncryptStream(conversationID string, dst io.Writer, src io.Reader) (nonce []byte, err error) {
+	key, err := c.deriveKey(conversationID)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce = make([]byte, block.BlockSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	stream := cipher.NewCTR(block, nonce)
+	writer := &cipher.StreamWriter{S: stream, W: dst}
+
+	if _, err := io.Copy(writer, src); err != nil {
+		return nil, fmt.Errorf("encryption stream failed: %w", err)
+	}
+	return nonce, nil
+}
+
+// DecryptStream decrypts data from src to dst using AES-CTR.
+func (c *Crypto) DecryptStream(conversationID string, dst io.Writer, src io.Reader, nonce []byte) error {
+	key, err := c.deriveKey(conversationID)
+	if err != nil {
+		return err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return err
+	}
+
+	if len(nonce) != block.BlockSize() {
+		return errors.New("invalid nonce size")
+	}
+
+	stream := cipher.NewCTR(block, nonce)
+	reader := &cipher.StreamReader{S: stream, R: src}
+
+	if _, err := io.Copy(dst, reader); err != nil {
+		return fmt.Errorf("decryption stream failed: %w", err)
+	}
+	return nil
+}

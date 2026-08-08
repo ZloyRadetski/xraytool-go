@@ -160,6 +160,8 @@ func (p *Plugin) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/support/conversations/{id}", p.handleClientGetConversation())
 	mux.HandleFunc("GET /api/v1/support/conversations/{id}/messages", p.handleClientListMessages())
 	mux.HandleFunc("POST /api/v1/support/conversations/{id}/messages", p.handleClientCreateMessage())
+	mux.HandleFunc("POST /api/v1/support/attachments", p.handleUploadAttachment())
+	mux.HandleFunc("GET /api/v1/support/attachments/{id}/download", p.handleDownloadAttachment())
 	
 	// Admin routes
 	mux.HandleFunc("GET /api/v1/admin/support/conversations", p.handleAdminListConversations())

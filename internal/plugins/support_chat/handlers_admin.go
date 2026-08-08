@@ -89,7 +89,7 @@ func (p *Plugin) handleAdminCreateMessage() http.HandlerFunc {
 			return
 		}
 
-		msg, err := p.store.CreateMessage(r.Context(), convID, "admin", req.Text)
+		msg, err := p.store.CreateMessage(r.Context(), convID, "admin", req.Text, req.Attachments)
 		if err != nil {
 			p.log.Error("Failed to create message for admin", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
