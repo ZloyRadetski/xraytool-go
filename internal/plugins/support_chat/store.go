@@ -2,6 +2,7 @@ package support_chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -191,13 +192,14 @@ func (s *Store) ListMessages(ctx context.Context, convID string) ([]MessageOutpu
 }
 
 // CreateAttachment creates a new unlinked attachment record.
-func (s *Store) CreateAttachment(ctx context.Context, uploaderID, fileName, mimeType string, size int64, storagePath string, nonce []byte) (*Attachment, error) {
+func (s *Store) CreateAttachment(ctx context.Context, uploaderID, fileName, mimeType string, size int64, storagePath string, nonce []byte, fileHash string) (*Attachment, error) {
 	att := &Attachment{
 		ID:          uuid.New().String(),
 		UploaderID:  uploaderID,
 		FileName:    fileName,
 		MimeType:    mimeType,
 		Size:        size,
+		FileHash:    fileHash,
 		StoragePath: storagePath,
 		Nonce:       nonce,
 		CreatedAt:   time.Now(),
@@ -206,6 +208,22 @@ func (s *Store) CreateAttachment(ctx context.Context, uploaderID, fileName, mime
 		return nil, err
 	}
 	return att, nil
+}
+
+// FindAttachmentByHash returns an existing attachment by its hash, or nil if not found.
+func (s *Store) FindAttachmentByHash(ctx context.Context, hash string) (*Attachment, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	var att Attachment
+	err := s.db.WithContext(ctx).Where("file_hash = ?", hash).First(&att).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &att, nil
 }
 
 // GetAttachment retrieves an attachment by ID.

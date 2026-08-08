@@ -1,7 +1,10 @@
 package support_chat
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,47 +43,66 @@ func (p *Plugin) handleUploadAttachment() http.HandlerFunc {
 			mimeType = "application/octet-stream"
 		}
 
-		// Prepare local storage path
-		err = os.MkdirAll(p.cfg.Media.StoragePath, 0755)
-		if err != nil {
-			p.log.Error("Failed to create media directory", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		// Calculate file hash
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, file); err != nil {
+			http.Error(w, "Failed to read file", http.StatusInternalServerError)
 			return
 		}
+		fileHash := hex.EncodeToString(hasher.Sum(nil))
 
-		fileName := uuid.New().String() + ".bin"
-		localPath := filepath.Join(p.cfg.Media.StoragePath, fileName)
-		outFile, err := os.Create(localPath)
-		if err != nil {
-			p.log.Error("Failed to create file", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
+		// Rewind file for encryption if needed
+		if seeker, ok := file.(io.Seeker); ok {
+			seeker.Seek(0, io.SeekStart)
 		}
 
-		// Encrypt on the fly using conversation ID? 
-		// Wait! Attachments are uploaded BEFORE they are linked to a message, so we don't know the ConversationID yet!
-		// We can just use the Plugin's master key directly with a dummy static conversation ID "attachment" to encrypt the file, OR use the uploader ID.
-		// Let's use a static context string "global_attachments" for all files.
-		nonce, err := p.store.Crypto().EncryptStream("global_attachments", outFile, file)
-		outFile.Close()
-		if err != nil {
-			os.Remove(localPath)
-			p.log.Error("Failed to encrypt/save file", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		// Get file size
-		fi, _ := os.Stat(localPath)
 		var size int64
-		if fi != nil {
-			size = fi.Size()
+		var localPath string
+		var nonce []byte
+
+		existing, err := p.store.FindAttachmentByHash(r.Context(), fileHash)
+		if err == nil && existing != nil {
+			// Deduplicate: use existing file on disk
+			localPath = existing.StoragePath
+			nonce = existing.Nonce
+			size = existing.Size
 		} else {
-			size = handler.Size
+			// New file: prepare storage and encrypt
+			err = os.MkdirAll(p.cfg.Media.StoragePath, 0755)
+			if err != nil {
+				p.log.Error("Failed to create media directory", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			fileName := uuid.New().String() + ".bin"
+			localPath = filepath.Join(p.cfg.Media.StoragePath, fileName)
+			outFile, err := os.Create(localPath)
+			if err != nil {
+				p.log.Error("Failed to create file", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			nonce, err = p.store.Crypto().EncryptStream("global_attachments", outFile, file)
+			outFile.Close()
+			if err != nil {
+				os.Remove(localPath)
+				p.log.Error("Failed to encrypt/save file", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			fi, _ := os.Stat(localPath)
+			if fi != nil {
+				size = fi.Size()
+			} else {
+				size = handler.Size
+			}
 		}
 
 		// Save to DB
-		att, err := p.store.CreateAttachment(r.Context(), userID, handler.Filename, mimeType, size, localPath, nonce)
+		att, err := p.store.CreateAttachment(r.Context(), userID, handler.Filename, mimeType, size, localPath, nonce, fileHash)
 		if err != nil {
 			os.Remove(localPath)
 			p.log.Error("Failed to save attachment to db", "error", err)

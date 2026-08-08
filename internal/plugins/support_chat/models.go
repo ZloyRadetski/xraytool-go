@@ -35,6 +35,7 @@ type Attachment struct {
 	FileName    string    `gorm:"type:text;not null" json:"file_name"`
 	MimeType    string    `gorm:"type:varchar(128);not null" json:"mime_type"`
 	Size        int64     `gorm:"not null" json:"size"`
+	FileHash    string    `gorm:"index;type:varchar(64)" json:"-"`
 	StoragePath string    `gorm:"type:text;not null" json:"-"`
 	Nonce       []byte    `gorm:"type:blob;not null" json:"-"`
 	CreatedAt   time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
