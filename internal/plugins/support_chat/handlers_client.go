@@ -44,9 +44,12 @@ func (p *Plugin) handleClientCreateConversation() http.HandlerFunc {
 			return
 		}
 
-		if req.Subject == "" || req.Message == "" {
-			http.Error(w, "Subject and message are required", http.StatusBadRequest)
+		if (req.Subject == "" || req.Message == "") && len(req.Attachments) == 0 {
+			http.Error(w, "Subject and message or attachments are required", http.StatusBadRequest)
 			return
+		}
+		if req.Subject == "" {
+			req.Subject = "Прикрепленный файл" // Default subject
 		}
 
 		// Enforce MaxOpenPerUser limit
@@ -234,8 +237,8 @@ func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		if req.Text == "" {
-			http.Error(w, "Text is required", http.StatusBadRequest)
+		if req.Text == "" && len(req.Attachments) == 0 {
+			http.Error(w, "Text or attachments are required", http.StatusBadRequest)
 			return
 		}
 

@@ -84,8 +84,8 @@ func (p *Plugin) handleAdminCreateMessage() http.HandlerFunc {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		if req.Text == "" {
-			http.Error(w, "Text is required", http.StatusBadRequest)
+		if req.Text == "" && len(req.Attachments) == 0 {
+			http.Error(w, "Text or attachments are required", http.StatusBadRequest)
 			return
 		}
 
