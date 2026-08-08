@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"sync"
 
-	"gorm.io/gorm"
 	"xraytool/internal/pluginapi"
+
+	"gorm.io/gorm"
 )
 
 // Provider implements the SupportChatProvider interface (publishes service).
@@ -119,7 +120,7 @@ func (p *Plugin) Start(ctx context.Context) error {
 
 func (p *Plugin) Stop(_ context.Context) error {
 	p.wg.Wait()
-	
+
 	if p.db != nil {
 		if sqlDB, err := p.db.DB(); err == nil {
 			_ = sqlDB.Close()
@@ -162,13 +163,13 @@ func (p *Plugin) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/support/conversations/{id}/messages", p.handleClientCreateMessage())
 	mux.HandleFunc("POST /api/v1/support/attachments", p.handleUploadAttachment())
 	mux.HandleFunc("GET /api/v1/support/attachments/{id}/download", p.handleDownloadAttachment())
-	
+
 	// Admin routes
 	mux.HandleFunc("GET /api/v1/admin/support/conversations", p.handleAdminListConversations())
 	mux.HandleFunc("GET /api/v1/admin/support/conversations/{id}/messages", p.handleAdminListMessages())
 	mux.HandleFunc("POST /api/v1/admin/support/conversations/{id}/messages", p.handleAdminCreateMessage())
 	mux.HandleFunc("PATCH /api/v1/admin/support/conversations/{id}/status", p.handleAdminPatchStatus())
-	
+
 	// WebSocket routes
 	mux.HandleFunc("GET /api/v1/support/conversations/{id}/ws", p.serveWs("client"))
 	mux.HandleFunc("GET /api/v1/admin/support/ws", p.serveWs("admin"))
