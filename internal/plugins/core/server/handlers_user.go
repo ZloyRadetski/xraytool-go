@@ -612,8 +612,8 @@ func (r *Router) handleAdjustBalance(w http.ResponseWriter, req *http.Request) {
 	if !readBody(w, req, &body) {
 		return
 	}
-	if body.Amount <= 0 || body.Amount > 100000000 {
-		writeError(w, http.StatusBadRequest, "amount must be positive and less than 100000000")
+	if body.Amount == 0 || body.Amount < -100000000 || body.Amount > 100000000 {
+		writeError(w, http.StatusBadRequest, "amount must be non-zero and between -100000000 and 100000000")
 		return
 	}
 

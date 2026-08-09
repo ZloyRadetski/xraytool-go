@@ -66,6 +66,15 @@ func TestAdjustBalance(t *testing.T) {
 	if int(jsonBody(t, w)["balance"].(float64)) != 200 {
 		t.Errorf("expected 200")
 	}
+
+	// Device-limit purchases deduct their cost using a negative balance adjustment.
+	w = doAuth(r, "POST", "/api/v1/users/telegram/1006/balance", `{"amount":-40}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 when deducting balance, got %d. body: %s", w.Code, w.Body.String())
+	}
+	if int(jsonBody(t, w)["balance"].(float64)) != 160 {
+		t.Errorf("expected 160 after deduction")
+	}
 }
 
 func TestSetMaxDevices(t *testing.T) {
