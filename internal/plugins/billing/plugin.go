@@ -2,12 +2,12 @@ package billing
 
 import (
 	"context"
-	"log/slog"
-	"net/http"
-	"net"
-	"strings"
 	json "github.com/goccy/go-json"
 	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
@@ -48,33 +48,33 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 			{Name: "domain_registry"},
 			{Name: "event_dispatcher"},
 			{Name: "user_service"},
-			{Name: "auth_middleware"},
+			{Name: "protected_middleware"},
 		},
 	}
 }
 
 func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg pluginapi.ServiceResolver) error {
 	p.log = reg.Logger()
-	
+
 	domainReg, err := reg.Resolve("domain_registry")
 	if err != nil {
 		return err
 	}
 	p.registry = domainReg.(domain.Registry)
-	
+
 	dispatcher, err := reg.Resolve("event_dispatcher")
 	if err != nil {
 		return err
 	}
 	p.dispatcher = dispatcher.(*events.Dispatcher)
-	
+
 	userSvc, err := reg.Resolve("user_service")
 	if err != nil {
 		return err
 	}
 	p.userSvc = userSvc.(*usersvc.Service)
 
-	authMw, err := reg.Resolve("auth_middleware")
+	authMw, err := reg.Resolve("protected_middleware")
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func (p *Plugin) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/payments/{id}", protected(p.handleGetPayment))
 	mux.Handle("POST /api/v1/payments/{id}/status", protected(p.handleUpdatePaymentStatus))
 	mux.Handle("GET /api/v1/admin/payments/stats", protected(p.handleAdminPaymentsStats))
-	
+
 	// Callbacks are called by external payment providers without X-API-Key.
 	// They must verify their own signatures instead.
 	mux.Handle("POST /api/v1/payments/{method}/callback", http.HandlerFunc(p.handlePaymentCallback))

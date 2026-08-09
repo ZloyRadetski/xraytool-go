@@ -1,0 +1,8 @@
+name: identity_memory
+kind: identity
+version: 1.0.0
+api_version: "1"
+description: Bounded in-memory OTP and session verification provider.
+type: internal
+publishes:
+  - identity_provider

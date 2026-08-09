@@ -9,7 +9,8 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/logger"
-	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/pluginapi"
+	"xraytool/internal/xrayconfig"
 )
 
 // CacheManager handles in-memory caching of frequently read files
@@ -26,14 +27,17 @@ type CacheManager struct {
 	// separate from domain.Engine lets the legacy single-engine path retain its
 	// exact behaviour while MultiEngine can opt in to plugin-produced links.
 	clientConfigContributor any
+	trafficProvider         pluginapi.TrafficProvider
+	trafficQuotaProvider    pluginapi.TrafficQuotaProvider
+	formatProvider          pluginapi.SubscriptionFormatProvider
 
 	// Cached Data
-	xrayConfig  vpn.RawConfig
+	xrayConfig  xrayconfig.RawConfig
 	activeUsers map[string]*ActiveUser
 	subTemplate string
 	routeGlobal string
 	routeRU     string
-	realityKeys *vpn.RealityKeys
+	realityKeys *xrayconfig.RealityKeys
 
 	// ModTimes to detect file changes on disk
 	xrayConfigModTime  time.Time
@@ -110,7 +114,7 @@ func (c *CacheManager) refreshXrayConfig() {
 	}
 
 	logger.Infof("[Cache] Обнаружено изменение %s. Обновление индекса пользователей...", path)
-	cfg, err := vpn.Read(path)
+	cfg, err := xrayconfig.Read(path)
 	if err != nil {
 		logger.Errorf("[Cache] Ошибка чтения Xray config: %v", err)
 		return
@@ -302,10 +306,43 @@ func (c *CacheManager) GetTemplates() (sub string, routeGlobal string, routeRU s
 }
 
 // GetRawConfig returns a copy of the xray config if needed for reading reality keys etc.
-func (c *CacheManager) GetRawConfig() vpn.RawConfig {
+func (c *CacheManager) GetRawConfig() xrayconfig.RawConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.xrayConfig
+}
+
+// SetTrafficProviders injects optional accounting and quota implementations.
+// They are wired by the composition root after all plugins have loaded, so the
+// legacy file-based fallback remains available to the non-plugin server path.
+func (c *CacheManager) SetTrafficProviders(traffic pluginapi.TrafficProvider, quota pluginapi.TrafficQuotaProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trafficProvider = traffic
+	c.trafficQuotaProvider = quota
+}
+
+// TrafficProviders returns the currently configured optional providers.
+func (c *CacheManager) TrafficProviders() (pluginapi.TrafficProvider, pluginapi.TrafficQuotaProvider) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.trafficProvider, c.trafficQuotaProvider
+}
+
+// SetSubscriptionFormatProvider installs the optional renderer for
+// client-specific subscription formats. A nil provider preserves the legacy
+// in-core conversion path for callers that do not run Plugin Host.
+func (c *CacheManager) SetSubscriptionFormatProvider(provider pluginapi.SubscriptionFormatProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.formatProvider = provider
+}
+
+// SubscriptionFormatProvider returns the currently configured renderer.
+func (c *CacheManager) SubscriptionFormatProvider() pluginapi.SubscriptionFormatProvider {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.formatProvider
 }
 
 func (c *CacheManager) refreshRealityKeys() {
@@ -317,7 +354,7 @@ func (c *CacheManager) refreshRealityKeys() {
 	c.mu.RUnlock()
 
 	if info, err := os.Stat(c.cfg.Reality.KeysFilepath); err == nil && !info.ModTime().Equal(keysModTime) {
-		keys, err := vpn.LoadOrCreateRealityKeys(c.cfg.Reality.KeysFilepath)
+		keys, err := xrayconfig.LoadOrCreateRealityKeys(c.cfg.Reality.KeysFilepath)
 		if err == nil {
 			c.mu.Lock()
 			c.realityKeys = keys
@@ -329,7 +366,7 @@ func (c *CacheManager) refreshRealityKeys() {
 }
 
 // GetRealityKeys returns the cached Reality keys, if loaded.
-func (c *CacheManager) GetRealityKeys() *vpn.RealityKeys {
+func (c *CacheManager) GetRealityKeys() *xrayconfig.RealityKeys {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.realityKeys

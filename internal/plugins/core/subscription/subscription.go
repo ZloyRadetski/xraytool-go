@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/xrayconfig"
 )
 
 // Package-level compiled regexes (avoids recompilation on every call).
@@ -198,7 +198,7 @@ func userAgentHasToken(uaLower, token string) bool {
 }
 
 //nolint:unused
-func findActiveUserBySubfile(cfg vpn.RawConfig, filename string, defaultExpire string) *ActiveUser {
+func findActiveUserBySubfile(cfg xrayconfig.RawConfig, filename string, defaultExpire string) *ActiveUser {
 	targetNorm := normalizeSubfileToID(filename)
 	if targetNorm == "" {
 		return nil
@@ -311,7 +311,7 @@ func normalizeHwid(s string) string {
 	return s
 }
 
-func firstRealityPrivateKey(cfg vpn.RawConfig) string {
+func firstRealityPrivateKey(cfg xrayconfig.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -336,7 +336,7 @@ func firstRealityPrivateKey(cfg vpn.RawConfig) string {
 	return ""
 }
 
-func firstRealityPublicKey(cfg vpn.RawConfig) string {
+func firstRealityPublicKey(cfg xrayconfig.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -361,7 +361,7 @@ func firstRealityPublicKey(cfg vpn.RawConfig) string {
 	return ""
 }
 
-func randomRealityShortID(cfg vpn.RawConfig) string {
+func randomRealityShortID(cfg xrayconfig.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -398,7 +398,7 @@ func randomRealityShortID(cfg vpn.RawConfig) string {
 	return ""
 }
 
-func firstRealitySNI(cfg vpn.RawConfig) string {
+func firstRealitySNI(cfg xrayconfig.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return "google.com"
@@ -490,7 +490,7 @@ func derivePublicKey(privateKey string) string {
 	return pub
 }
 
-func ssServerPassword(cfg vpn.RawConfig) string {
+func ssServerPassword(cfg xrayconfig.RawConfig) string {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
 		return ""
@@ -531,7 +531,7 @@ func buildDeterministicHy2Pass(uuidHint, email string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func getOrCreateHy2ObfsPassword(yamlPath string, cfg vpn.RawConfig) string {
+func getOrCreateHy2ObfsPassword(yamlPath string, cfg xrayconfig.RawConfig) string {
 	// 1. Try parsing directly from Xray Hysteria2 inbound settings (settings.obfs.password)
 	inbounds, err := cfg.GetInbounds()
 	if err == nil {

@@ -470,10 +470,38 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 			Source:  "builtin",
 			Config:  map[string]any{},
 		},
+		// Keep the current JSON traffic-state behaviour behind a replaceable
+		// provider. A deployment can disable this entry and enable another
+		// traffic plugin that publishes the same services.
+		"traffic_file": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"subscription_lifecycle": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"subscription_format_legacy": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"config_storage": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"identity_memory": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
 		"support_chat": {
 			Enabled: true,
 			Source:  "builtin",
-			Config:  map[string]any{
+			Config: map[string]any{
 				"master_key": "dGVzdF9rZXlfdGVzdF9rZXlfdGVzdF9rZXlfdGVzdF9rZXk=",
 			},
 		},

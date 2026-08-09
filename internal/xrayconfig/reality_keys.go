@@ -1,4 +1,4 @@
-package engine_xray
+package xrayconfig
 
 import (
 	"crypto/ecdh"

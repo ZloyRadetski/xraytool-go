@@ -351,7 +351,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		code, err := requestOTP(email, 5*time.Minute)
+		code, err := r.issueOTP(req.Context(), email, "", 5*time.Minute)
 		if err != nil {
 			if errors.Is(err, ErrMaxRequestsReached) {
 				r.log.Warn("request_code: rate limited", "email", email, "ip", getClientIP(req))
@@ -383,7 +383,7 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	code, err := requestOTP(tgIDStr, 5*time.Minute)
+	code, err := r.issueOTP(req.Context(), tgIDStr, "", 5*time.Minute)
 	if err != nil {
 		if errors.Is(err, ErrMaxRequestsReached) {
 			r.log.Warn("request_code: rate limited", "telegram_id", body.TelegramID, "ip", getClientIP(req))
@@ -443,7 +443,7 @@ func (r *Router) handleVerifyCode(w http.ResponseWriter, req *http.Request) {
 		identifier = strconv.FormatInt(body.TelegramID, 10)
 	}
 
-	ok, _, err := verifyOTP(identifier, body.Code)
+	ok, _, err := r.verifyIdentityOTP(req.Context(), identifier, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
 			r.log.Warn("verify_code: brute force detected", "identifier", identifier, "ip", getClientIP(req))
@@ -486,13 +486,13 @@ func (r *Router) handleLinkSession(w http.ResponseWriter, req *http.Request) {
 	tgIDStr := strconv.FormatInt(body.TelegramID, 10)
 
 	// Rate limit: max 2 requests per 30 seconds per telegram_id to prevent DoS
-	_, rateLimitErr := requestOTP("tg_ratelimit_"+tgIDStr, 30*time.Second)
+	_, rateLimitErr := r.issueOTP(req.Context(), "tg_ratelimit_"+tgIDStr, "", 30*time.Second)
 	if errors.Is(rateLimitErr, ErrMaxRequestsReached) {
 		writeError(w, http.StatusTooManyRequests, "too many requests, please wait")
 		return
 	}
 
-	code, err := requestOTPWithPayload(body.SessionID, tgIDStr, 5*time.Minute)
+	code, err := r.issueOTP(req.Context(), body.SessionID, tgIDStr, 5*time.Minute)
 	if err != nil {
 		if errors.Is(err, ErrMaxRequestsReached) {
 			writeError(w, http.StatusTooManyRequests, "too many requests")
@@ -526,7 +526,7 @@ func (r *Router) handleVerifySession(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	ok, payload, err := verifyOTP(body.SessionID, body.Code)
+	ok, payload, err := r.verifyIdentityOTP(req.Context(), body.SessionID, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
 			writeError(w, http.StatusForbidden, "too many failed attempts")
@@ -1403,7 +1403,7 @@ func (r *Router) handleLinkTelegram(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	ok, payload, err := verifyOTP(body.SessionID, body.Code)
+	ok, payload, err := r.verifyIdentityOTP(req.Context(), body.SessionID, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
 			writeError(w, http.StatusForbidden, "too many failed attempts")
@@ -1471,7 +1471,7 @@ func (r *Router) handleLinkEmail(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	ok, _, err := verifyOTP(email, body.Code)
+	ok, _, err := r.verifyIdentityOTP(req.Context(), email, body.Code)
 	if err != nil {
 		if errors.Is(err, ErrMaxAttemptsReached) {
 			writeError(w, http.StatusForbidden, "too many failed attempts")

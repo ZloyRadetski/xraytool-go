@@ -1,0 +1,9 @@
+name: traffic_file
+kind: traffic
+version: 1.0.0
+api_version: "1"
+description: File-backed cumulative traffic accounting.
+type: internal
+publishes:
+  - traffic_provider
+  - traffic_quota_provider

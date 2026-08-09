@@ -1,0 +1,9 @@
+name: config_storage
+kind: storage
+version: 1.0.0
+api_version: "1"
+description: Authorized storage for configuration assets.
+type: internal
+requires:
+  - protected_middleware
+  - event_dispatcher

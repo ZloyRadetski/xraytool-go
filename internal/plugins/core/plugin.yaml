@@ -14,7 +14,10 @@ publishes:
   - payment_recorder
   - subscription_lifecycle
   - user_service
-  - payment_service
   - event_dispatcher
   - domain_registry
+  - domain_engine
+  - event_propagator
+  - auth_middleware
+  - protected_middleware
 requires: []

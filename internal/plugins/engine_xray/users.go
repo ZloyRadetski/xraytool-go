@@ -388,7 +388,7 @@ func mutateClients(cfg RawConfig, email string, fn func(RawClient)) error {
 		for j, c := range clients {
 			if c.Email() == email {
 				fn(c)
-				clients[j] = c.cleanLegacy()
+				clients[j] = c.CleanLegacy()
 				changed = true
 			}
 		}

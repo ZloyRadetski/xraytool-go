@@ -20,10 +20,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"xraytool/internal/appconfig"
+	"xraytool/internal/database"
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/pluginhost"
-	"xraytool/internal/database"
 	corePlugin "xraytool/internal/plugins/core"
 	vpn "xraytool/internal/plugins/engine_xray"
 )
@@ -75,7 +75,6 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			"grpc_addr", cfg.Xray.APIAddr, "template", cfg.Paths.XrayTemplate)
 	}
 
-
 	// ── Step 2: Build PluginsConfig from appconfig ────────────────────────────
 	pluginsCfg := buildPluginsConfig(cfg)
 
@@ -123,7 +122,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		slog.Default(),
 		factories,
 		emitFn,
-		hostOpts...
+		hostOpts...,
 	)
 
 	if err := host.Load(ctx); err != nil {
@@ -135,6 +134,20 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	if err != nil {
 		return err
 	}
+	trafficSvc, trafficErr := host.ResolveService(pluginapi.ServiceTrafficProvider)
+	quotaSvc, quotaErr := host.ResolveService(pluginapi.ServiceTrafficQuotaProvider)
+	trafficProvider, trafficOK := trafficSvc.(pluginapi.TrafficProvider)
+	quotaProvider, quotaOK := quotaSvc.(pluginapi.TrafficQuotaProvider)
+	if (trafficErr == nil && trafficOK) || (quotaErr == nil && quotaOK) {
+		core.CacheManager().SetTrafficProviders(trafficProvider, quotaProvider)
+		slog.Info("[KERNEL] Traffic providers wired", "usage", trafficOK, "quota", quotaOK)
+	}
+	if formatSvc, err := host.ResolveService(pluginapi.ServiceSubscriptionFormatProvider); err == nil {
+		if provider, ok := formatSvc.(pluginapi.SubscriptionFormatProvider); ok {
+			core.CacheManager().SetSubscriptionFormatProvider(provider)
+			slog.Info("[KERNEL] Subscription format provider wired", "plugin", "subscription_format_legacy")
+		}
+	}
 
 	// ── Step 5: Log eventsink_webhook status (best-effort) ───────────────────
 	slog.Info("[KERNEL] Plugin Host loaded", "event_sinks", len(host.EventSinks()), "payment_providers", len(host.PaymentProviders()))
@@ -142,6 +155,12 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	// ── Step 6: Build HTTP Router ─────────────────────────────────────────────
 	core.InitHTTPRouter(vpnEngine, cfg.Server.APIKey)
 	apiRouter := core.HTTPRouter()
+	if identitySvc, err := host.ResolveService(pluginapi.ServiceIdentityProvider); err == nil {
+		if identityProvider, ok := identitySvc.(pluginapi.IdentityProvider); ok {
+			apiRouter = apiRouter.WithIdentityProvider(identityProvider)
+			slog.Info("[KERNEL] Identity provider wired")
+		}
+	}
 
 	paymentProviders := host.PaymentProviders()
 	if len(paymentProviders) > 0 {
@@ -178,7 +197,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 
 	// ── Step 8: Wire optional plugins into the router ─────────────────────────
 	if deps.Registry != nil {
-	// ── Antifraud plugin ───────────────────────────────────────────────────
+		// ── Antifraud plugin ───────────────────────────────────────────────────
 		// Use the pluginapi interface to avoid importing the concrete plugin
 		// package from the kernel. Any loaded antifraud plugin satisfying
 		// pluginapi.AntifraudProvider is wired the same way.

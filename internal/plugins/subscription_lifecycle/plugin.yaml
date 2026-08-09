@@ -1,0 +1,11 @@
+name: subscription_lifecycle
+kind: lifecycle
+version: 1.0.0
+api_version: "1"
+description: Expiry, warning, and device-limit maintenance worker.
+type: internal
+requires:
+  - domain_registry
+  - event_dispatcher
+  - domain_engine
+  - event_propagator

@@ -12,12 +12,13 @@ func TestBuiltinRegistryIncludesDefaultBuiltinPlugins(t *testing.T) {
 		"core",
 		"pricing_default",
 		"engine_xray",
-		
+
 		"antifraud",
 		"mailer_resend",
 		"eventsink_webhook",
 		"payment_platega", "billing", "promo", "referral", "support_chat",
-		
+		"config_storage", "identity_memory", "subscription_lifecycle",
+		"subscription_format_legacy", "traffic_file",
 	}
 
 	if len(registry) < len(want) {

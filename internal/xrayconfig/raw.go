@@ -4,7 +4,7 @@
 // The core design uses map[string]json.RawMessage at every level so that
 // round-tripping through JSON never silently drops fields that xraytool
 // does not know about.
-package engine_xray
+package xrayconfig
 
 import (
 	"fmt"
@@ -177,6 +177,13 @@ func (ib RawInbound) parseSettings() (map[string]json.RawMessage, error) {
 	return s, nil
 }
 
+// Settings returns a mutable field-preserving view of the inbound settings.
+// It is exported for engine implementations that need protocol-specific
+// inspection without re-parsing the parent config.
+func (ib RawInbound) Settings() (map[string]json.RawMessage, error) {
+	return ib.parseSettings()
+}
+
 // ---------------------------------------------------------------------------
 // Client / User object
 // ---------------------------------------------------------------------------
@@ -213,6 +220,11 @@ func (c RawClient) cleanLegacy() RawClient {
 	delete(result, "hy2_auth")
 	delete(result, "hy2_obfs")
 	return result
+}
+
+// CleanLegacy returns a copy without obsolete xraytool compatibility fields.
+func (c RawClient) CleanLegacy() RawClient {
+	return c.cleanLegacy()
 }
 
 // Email returns the user's email identifier. Falls back to "name" for

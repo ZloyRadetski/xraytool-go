@@ -1,0 +1,8 @@
+name: subscription_format_legacy
+kind: subscription_format
+version: 1.0.0
+api_version: "1"
+description: Legacy VLESS text and Clash YAML subscription renderer.
+type: internal
+publishes:
+  - subscription_format_provider

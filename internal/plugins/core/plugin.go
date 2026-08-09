@@ -35,7 +35,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"xraytool/internal/appconfig"
@@ -44,7 +43,6 @@ import (
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/core/server"
 	"xraytool/internal/plugins/core/subscription"
-	"xraytool/internal/plugins/core/worker"
 	usersvc "xraytool/internal/plugins/core/user"
 )
 
@@ -60,6 +58,8 @@ const (
 	ServiceUserService            = "user_service"
 	ServiceEventDispatcher        = "event_dispatcher"
 	ServiceDomainRegistry         = "domain_registry"
+	ServiceDomainEngine           = "domain_engine"
+	ServiceEventPropagator        = "event_propagator"
 )
 
 // SubscriptionLifecycle is the narrow port for subscription-extension business
@@ -72,6 +72,10 @@ const (
 type SubscriptionLifecycle interface {
 	ExtendSubscription(ctx context.Context, subscriptionID string, months int) error
 }
+
+type noopEventPropagator struct{}
+
+func (noopEventPropagator) PropagateAll(string, map[string]string) {}
 
 // Runtime contains the kernel-owned resources that the core plugin needs to
 // construct its services. The kernel owns the database connection lifecycle;
@@ -106,8 +110,8 @@ type Plugin struct {
 	cacheMgr   *subscription.CacheManager
 	httpRouter *server.Router
 	log        *slog.Logger
-
-	// Workers started in Start(), cancelled via cancel()
+	// Retained for shutdown compatibility while legacy callers may construct the
+	// core plugin directly. Core no longer starts lifecycle workers itself.
 	cancel      context.CancelFunc
 	workersDone chan struct{}
 
@@ -150,7 +154,10 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 			{Name: ServiceUserService},
 			{Name: ServiceEventDispatcher},
 			{Name: ServiceDomainRegistry},
+			{Name: ServiceDomainEngine},
+			{Name: ServiceEventPropagator},
 			{Name: "auth_middleware"},
+			{Name: "protected_middleware"},
 		},
 		// Core has no Requires — it is the root of the dependency graph.
 		Requires: nil,
@@ -232,8 +239,18 @@ func (p *Plugin) PublishedServices() map[string]any {
 		ServiceUserService:            p.userSvc,
 		ServiceEventDispatcher:        p.dispatcher,
 		ServiceDomainRegistry:         p.registry,
+		ServiceDomainEngine:           p.runtime.Engine,
+		ServiceEventPropagator:        p.eventPropagator(),
 		"auth_middleware":             p.AuthMiddleware,
+		"protected_middleware":        p.ProtectedMiddleware,
 	}
+}
+
+func (p *Plugin) eventPropagator() domain.EventPropagator {
+	if p.runtime.Propagator != nil {
+		return p.runtime.Propagator
+	}
+	return noopEventPropagator{}
 }
 
 // InitHTTPRouter constructs the server.Router after InitWithRegistry() and
@@ -261,6 +278,12 @@ func (p *Plugin) AuthMiddleware(next http.Handler) http.Handler {
 	return p.httpRouter.AuthMiddleware(next)
 }
 
+// ProtectedMiddleware exposes the complete API protection chain to HTTP
+// contributor plugins, including transparent gzip request/response handling.
+func (p *Plugin) ProtectedMiddleware(next http.Handler) http.Handler {
+	return p.httpRouter.ProtectedMiddleware(next)
+}
+
 // Start launches core workers (expiry, scrubber) and keeps the plugin alive
 // until the host cancels its context.
 //
@@ -268,38 +291,7 @@ func (p *Plugin) AuthMiddleware(next http.Handler) http.Handler {
 // (subscription lifecycle, payment privacy), so they run here — not in the
 // kernel composition root.
 func (p *Plugin) Start(ctx context.Context) error {
-	runCtx, cancel := context.WithCancel(ctx)
-	p.cancel = cancel
-	p.workersDone = make(chan struct{})
-
-	var wg sync.WaitGroup
-
-	if p.cfg.Worker.Enabled {
-		// ExpiryWorker: periodically expires overdue subscriptions and
-		// enforces device limits. Lives inside the core plugin because
-		// subscription expiry is a core business rule.
-		wkr := worker.NewExpiryWorker(
-			p.registry,
-			p.cfg,
-			p.dispatcher,
-			p.runtime.Engine,
-			slog.Default(),
-			p.runtime.Propagator,
-		)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			wkr.Run(runCtx)
-		}()
-		slog.Info("[core] Expiry Worker started", "interval", p.cfg.Worker.ExpiryInterval)
-	}
-
-	go func() {
-		wg.Wait()
-		close(p.workersDone)
-	}()
-
-	<-runCtx.Done()
+	<-ctx.Done()
 	return nil
 }
 

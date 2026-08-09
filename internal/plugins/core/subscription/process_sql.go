@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"log/slog"
-	"xraytool/internal/plugins/core/convert"
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
 	"xraytool/internal/pluginapi"
-	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/plugins/core/convert"
+	"xraytool/internal/xrayconfig"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -102,7 +102,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 
 		// If not found in active config, check template config to see if they are a blacklisted admin
 		if foundEmail == "" && cm.cfg.Paths.XrayTemplate != "" {
-			if tmplCfg, err := vpn.Read(cm.cfg.Paths.XrayTemplate); err == nil {
+			if tmplCfg, err := xrayconfig.Read(cm.cfg.Paths.XrayTemplate); err == nil {
 				if tmplInbounds, err := tmplCfg.GetInbounds(); err == nil {
 					for _, ib := range tmplInbounds {
 						if ib.HasClientList() {
@@ -321,6 +321,45 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	if !found {
 		uploadBytes, downloadBytes, _ = getTrafficBytes(cfg.Paths.StatsState, email)
 	}
+	trafficProvider, quotaProvider := cm.TrafficProviders()
+	if trafficProvider != nil {
+		usage, usageFound, usageErr := trafficProvider.Usage(ctx, email)
+		if usageErr != nil {
+			logger.Warnf("[ProcessSQL] traffic provider failed for %s: %v; using legacy state files", email, usageErr)
+		} else if usageFound {
+			uploadBytes = usage.UploadBytes
+			downloadBytes = usage.DownloadBytes
+		}
+	}
+
+	if quotaProvider != nil {
+		decision, quotaErr := quotaProvider.CheckQuota(ctx, pluginapi.Subscription{
+			ID: sub.ID, UserID: sub.UserID, Email: sub.Email, UUID: sub.UUID,
+			Status: sub.Status, MaxDevices: sub.MaxDevices, StartsAt: sub.StartsAt,
+			EndsAt: sub.EndsAt, AutoRenew: sub.AutoRenew, Metadata: sub.Metadata,
+			CreatedAt: sub.CreatedAt, UpdatedAt: sub.UpdatedAt,
+		}, pluginapi.TrafficUsage{UploadBytes: uploadBytes, DownloadBytes: downloadBytes})
+		if quotaErr != nil {
+			logger.Warnf("[ProcessSQL] traffic quota provider failed for %s: %v", email, quotaErr)
+		} else if decision.Exceeded {
+			reason := decision.Reason
+			if reason == "" {
+				reason = "traffic_quota_exceeded"
+			}
+			return &Response{
+				StatusCode: 200,
+				Headers: map[string]string{
+					"Content-Type":        "text/plain; charset=utf-8",
+					"Content-Disposition": `attachment; filename="configs.txt"`,
+					"Profile-Title":       "Torvalds VPN",
+					"X-Reject-Reason":     reason,
+					"Cache-Control":       "no-store, no-cache, must-revalidate, max-age=0",
+					"Pragma":              "no-cache",
+				},
+				Body: generateDummyVless(cm.cfg.Subscription.DummyConfigs.Expired),
+			}
+		}
+	}
 
 	requestedFormat := strings.ToLower(strings.TrimSpace(req.Query["format"]))
 	isVlessFormat := requestedFormat == "vless"
@@ -448,13 +487,12 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		return failResponse(500, "Invalid template config JSON")
 	}
 
-	// MultiEngine (and future standalone engines) can supply links through the
-	// engine-agnostic plugin API.  The legacy template conversion remains the
-	// compatibility fallback until every running installation has moved its
-	// engine into Plugin Host.  In particular, this preserves existing
-	// subscription output byte-for-byte when CacheManager has no contributor.
+	// Engines can supply native client links independently of any concrete
+	// subscription format. A format provider receives these links below; its
+	// absence intentionally falls back to the legacy Xray conversion package.
+	var pluginLinks []pluginapi.ClientLink
 	if isVlessFormat || isClashFormat {
-		pluginLinks, available, contributorErr := cm.BuildClientLinks(ctx, pluginapi.VPNUserConfig{
+		links, available, contributorErr := cm.BuildClientLinks(ctx, pluginapi.VPNUserConfig{
 			Email:      email,
 			UUID:       uuid,
 			Auth:       rawHy2Auth,
@@ -465,30 +503,37 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		if contributorErr != nil {
 			logger.Warnf("[ProcessSQL] engine client-link contributor failed for %s: %v; using legacy template", sub.ID, contributorErr)
 		} else if available {
-			if shareText := clientLinksText(pluginLinks); shareText != "" {
-				res.Headers["Content-Disposition"] = `attachment; filename="configs.txt"`
-				res.Headers["Content-Type"] = "text/plain; charset=utf-8"
+			pluginLinks = links
+		}
+	}
+
+	if isVlessFormat || isClashFormat {
+		if provider := cm.SubscriptionFormatProvider(); provider != nil {
+			formatted, err := provider.RenderSubscription(ctx, pluginapi.SubscriptionFormatRequest{
+				Format: requestedFormat, JSONConfig: jsonPayload, Links: pluginLinks,
+			})
+			if err != nil {
+				if isVlessFormat {
+					return failResponse(404, "VLESS subscription conversion failed: "+err.Error())
+				}
+				return failResponse(404, "Clash subscription conversion failed: "+err.Error())
+			}
+			if formatted.Handled {
+				res.Headers["Content-Disposition"] = formatted.ContentDisposition
+				res.Headers["Content-Type"] = formatted.ContentType
 				res.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
 				res.Headers["Pragma"] = "no-cache"
 				res.StatusCode = 200
-
-				if isVlessFormat {
-					res.Body = shareText
-					return res
-				}
-
-				clashYAML, err := convert.ShareTextToClashYAML(shareText)
-				if err == nil {
-					res.Headers["Content-Disposition"] = `attachment; filename="config.yaml"`
-					res.Headers["Content-Type"] = "text/yaml; charset=utf-8"
-					res.Body = clashYAML
-					return res
-				}
-				logger.Warnf("[ProcessSQL] engine client-link Clash conversion failed for %s: %v; using legacy template", sub.ID, err)
+				res.Body = formatted.Body
+				return res
 			}
 		}
 	}
 
+	// The compatibility fallback intentionally stays in core for callers that
+	// construct CacheManager outside Plugin Host. Normal server startup wires
+	// subscription_format_legacy above, so the conversion implementation is
+	// replaceable without changing the subscription hot path.
 	if isVlessFormat {
 		shareLinks, err := convert.XrayJSONToShareText(jsonPayload)
 		if err != nil {

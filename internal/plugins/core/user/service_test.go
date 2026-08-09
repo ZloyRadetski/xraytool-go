@@ -26,6 +26,13 @@ func newTestService(t *testing.T) (*user.Service, domain.Registry) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get test sql db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
 	if err := db.AutoMigrate(
 		&database.User{},
 		&database.Subscription{},

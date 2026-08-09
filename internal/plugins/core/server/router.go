@@ -67,6 +67,7 @@ type Router struct {
 	// injected after PluginHost.Load, so the router never imports a concrete
 	// gateway implementation.
 	paymentProviders map[string]pluginapi.PaymentProvider
+	identityProvider pluginapi.IdentityProvider
 	// registry is set on slave nodes so that sync handlers can read/write SyncEvents.
 	registry domain.Registry
 	// clusterSync is set when the optional cluster_sync plugin supports HTTP
@@ -198,6 +199,14 @@ func (r *Router) WithPaymentProviders(providers map[string]pluginapi.PaymentProv
 		}
 		r.paymentProviders[method] = provider
 	}
+	return r
+}
+
+// WithIdentityProvider injects the OTP/session provider after PluginHost.Load.
+// A nil value preserves the legacy in-process OTP cache for the non-plugin
+// server command and for backwards compatibility.
+func (r *Router) WithIdentityProvider(provider pluginapi.IdentityProvider) *Router {
+	r.identityProvider = provider
 	return r
 }
 
@@ -415,6 +424,12 @@ func (r *Router) AuthMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// ProtectedMiddleware is the standard wrapper for plugin HTTP routes. It
+// preserves the API-key and gzip behaviour of routes owned directly by core.
+func (r *Router) ProtectedMiddleware(next http.Handler) http.Handler {
+	return r.gzipMiddleware(r.AuthMiddleware(next))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

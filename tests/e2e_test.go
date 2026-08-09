@@ -574,9 +574,15 @@ func TestE2ESuite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
 		}
-		// Code might allow it or fail. Expect 400 or appropriate error logic.
-		if status == http.StatusOK {
-			t.Errorf("Allowed negative balance modification. Got 200, Resp: %s", resp)
+		if status != http.StatusOK {
+			t.Fatalf("Expected 200 for a balance deduction, got %d. Resp: %s", status, resp)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(resp), &result); err != nil {
+			t.Fatalf("Invalid balance response: %v", err)
+		}
+		if balance, ok := result["balance"].(float64); !ok || balance != 50 {
+			t.Errorf("Expected balance 50 after deduction, got %v", result["balance"])
 		}
 	})
 
@@ -626,8 +632,8 @@ func TestE2ESuite(t *testing.T) {
 		_, getResp, _ := apiRequest("GET", "/api/v1/users/telegram/10002", nil, true)
 		var userMap map[string]interface{}
 		_ = json.Unmarshal([]byte(getResp), &userMap)
-		if balance, ok := userMap["balance"].(float64); !ok || balance < 200 {
-			t.Errorf("Lost updates under concurrency: expected balance >= 200, got %v (userMap: %v)", userMap["balance"], userMap)
+		if balance, ok := userMap["balance"].(float64); !ok || balance != 150 {
+			t.Errorf("Lost updates under concurrency: expected balance 150, got %v (userMap: %v)", userMap["balance"], userMap)
 		}
 	})
 

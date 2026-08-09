@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"testing"
 
-
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -16,7 +15,7 @@ func setupTestStore(t *testing.T) *Store {
 		t.Fatalf("Failed to open db: %v", err)
 	}
 
-	if err := db.AutoMigrate(&Conversation{}, &Message{}); err != nil {
+	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
 

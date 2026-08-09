@@ -15,6 +15,7 @@ package pluginapi
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"net/http"
 	"time"
@@ -33,7 +34,19 @@ type RawConfig map[string]any
 // them in pluginapi prevents the composition root from importing an optional
 // plugin package merely to obtain a string constant.
 const (
-	ServiceClusterSyncProvider = "cluster_sync_provider"
+	ServiceClusterSyncProvider        = "cluster_sync_provider"
+	ServiceIdentityProvider           = "identity_provider"
+	ServiceSubscriptionFormatProvider = "subscription_format_provider"
+	ServiceTrafficProvider            = "traffic_provider"
+	ServiceTrafficQuotaProvider       = "traffic_quota_provider"
+)
+
+var (
+	// ErrIdentityRateLimited tells an API adapter to return a retryable 429.
+	ErrIdentityRateLimited = errors.New("identity request rate limited")
+	// ErrIdentityAttemptsExceeded tells an API adapter to return a terminal
+	// verification error after too many wrong codes.
+	ErrIdentityAttemptsExceeded = errors.New("identity verification attempts exceeded")
 )
 
 // ServiceRef declares a named service dependency or publication.
@@ -142,6 +155,24 @@ type HTTPContributor interface {
 
 	// RegisterRoutes allows the plugin to mount its handlers on the provided mux.
 	RegisterRoutes(mux *http.ServeMux)
+}
+
+// CLICommand is a self-contained plugin command exposed through
+// `xraytool plugin run`. It intentionally avoids Cobra types so that external
+// plugins can describe commands without linking to the host CLI library.
+type CLICommand struct {
+	Name  string
+	Use   string
+	Short string
+}
+
+// CLIContributor exposes self-contained operational commands. Commands that
+// require the full service graph should be modelled as an HTTP/admin plugin
+// instead; this boundary keeps CLI discovery side-effect free.
+type CLIContributor interface {
+	Plugin
+	CLICommands() []CLICommand
+	RunCLI(ctx context.Context, name string, args []string) (string, error)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -706,6 +737,72 @@ type TrafficStat struct {
 	Email string
 	Up    int64
 	Down  int64
+}
+
+// TrafficUsage is the cumulative traffic view used by subscription delivery.
+// Providers own where this data comes from (local files, a database, or a
+// remote analytics system); the subscription hot path only consumes this small
+// snapshot.
+type TrafficUsage struct {
+	UploadBytes   int64
+	DownloadBytes int64
+}
+
+// TrafficProvider supplies per-user traffic data to subscription delivery.
+// Implementations must keep this operation bounded because it is called while
+// serving a subscription. A provider may return found=false for a user that
+// has not accumulated traffic yet.
+type TrafficProvider interface {
+	Usage(ctx context.Context, email string) (usage TrafficUsage, found bool, err error)
+}
+
+// TrafficQuotaDecision is the policy result for one subscription request.
+// An empty Reason is normal; when Exceeded is true it is exposed only as the
+// diagnostic X-Reject-Reason response header.
+type TrafficQuotaDecision struct {
+	Exceeded bool
+	Reason   string
+}
+
+// TrafficQuotaProvider applies an optional traffic policy to a subscription.
+// Keeping policy separate from accounting lets installations replace storage
+// and quota rules independently.
+type TrafficQuotaProvider interface {
+	CheckQuota(ctx context.Context, subscription Subscription, usage TrafficUsage) (TrafficQuotaDecision, error)
+}
+
+// IdentityProvider owns one-time-code issuance and verification. User creation
+// and account linking deliberately stay in core; installations can replace the
+// volatile verification store (for example with Redis or an SSO bridge).
+type IdentityProvider interface {
+	IssueOTP(ctx context.Context, subject, payload string, ttl time.Duration) (code string, err error)
+	VerifyOTP(ctx context.Context, subject, code string) (valid bool, payload string, err error)
+}
+
+// SubscriptionFormatRequest contains the engine-neutral source data for a
+// client-specific subscription format. JSONConfig is retained as a fallback
+// for renderers that cannot use native engine share links.
+type SubscriptionFormatRequest struct {
+	Format     string
+	JSONConfig string
+	Links      []ClientLink
+}
+
+// SubscriptionFormatResult is a completed subscription document. Handled is
+// false when the provider deliberately does not support the requested format.
+// ContentDisposition and ContentType are copied to the HTTP response as-is.
+type SubscriptionFormatResult struct {
+	Handled            bool
+	Body               string
+	ContentDisposition string
+	ContentType        string
+}
+
+// SubscriptionFormatProvider renders optional client-specific subscription
+// formats such as VLESS text or Clash YAML. It is intentionally independent
+// from the subscription domain, authentication, and HTTP packages.
+type SubscriptionFormatProvider interface {
+	RenderSubscription(ctx context.Context, request SubscriptionFormatRequest) (SubscriptionFormatResult, error)
 }
 
 // EngineSyncResult reports what a SyncUsers call did.

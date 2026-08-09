@@ -119,7 +119,7 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 
 // hasXTLS checks if the streamSettings indicate XTLS/Vision compatibility.
 func hasXTLS(ib RawInbound) bool {
-	_, err := ib.parseSettings()
+	_, err := ib.Settings()
 	if err != nil {
 		return false
 	}

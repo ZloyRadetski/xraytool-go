@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"xraytool/internal/appconfig"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/pluginhost"
 	"xraytool/internal/pluginmanifest"
@@ -48,8 +49,78 @@ server restart.`,
 		newPluginToggleCmd(configPath, false),
 		newPluginVerifyCmd(),
 		newPluginLogsCmd(configPath),
+		newPluginCommandsCmd(configPath),
+		newPluginRunCmd(configPath),
 	)
 	return cmd
+}
+
+func newPluginCommandsCmd(configPath func() string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "commands [plugin]",
+		Short: "List self-contained commands contributed by built-in plugins",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := appconfig.Load(configPath())
+			if err != nil {
+				return err
+			}
+			factories := pluginhost.BuiltinRegistry(cfg)
+			filter := ""
+			if len(args) == 1 {
+				filter = args[0]
+			}
+			var rows []string
+			for name, factory := range factories {
+				if filter != "" && name != filter {
+					continue
+				}
+				contributor, ok := factory().(pluginapi.CLIContributor)
+				if !ok {
+					continue
+				}
+				for _, contribution := range contributor.CLICommands() {
+					rows = append(rows, fmt.Sprintf("%s %s\t%s", name, contribution.Use, contribution.Short))
+				}
+			}
+			sort.Strings(rows)
+			for _, row := range rows {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newPluginRunCmd(configPath func() string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "run <plugin> <command> [arguments...]",
+		Short: "Run a self-contained built-in plugin command",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := appconfig.Load(configPath())
+			if err != nil {
+				return err
+			}
+			factory, ok := pluginhost.BuiltinRegistry(cfg)[args[0]]
+			if !ok {
+				return fmt.Errorf("unknown built-in plugin %q", args[0])
+			}
+			contributor, ok := factory().(pluginapi.CLIContributor)
+			if !ok {
+				return fmt.Errorf("plugin %q does not contribute self-contained CLI commands", args[0])
+			}
+			result, err := contributor.RunCLI(cmd.Context(), args[1], args[2:])
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), result)
+			return err
+		},
+	}
 }
 
 func newPluginListCmd(configPath func() string) *cobra.Command {
