@@ -44,13 +44,15 @@ type Message struct {
 	Attachments       []Attachment `gorm:"foreignKey:MessageID"`
 }
 
-// Attachment stores encrypted metadata and an authenticated encrypted file.
-// File locations are derived from ID rather than stored in plaintext.
+// Attachment stores encrypted metadata and a reference to an authenticated
+// encrypted file. File locations are derived from StorageKey rather than kept
+// as plaintext paths.
 type Attachment struct {
-	ID        string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
-	MessageID *string   `gorm:"index;type:varchar(36)" json:"message_id,omitempty"`
-	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
-	Nonce     []byte    `gorm:"type:blob" json:"-"` // legacy AES-CTR attachment nonce only
+	ID         string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	MessageID  *string   `gorm:"index;type:varchar(36)" json:"message_id,omitempty"`
+	CreatedAt  time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
+	Nonce      []byte    `gorm:"type:blob" json:"-"` // legacy AES-CTR attachment nonce only
+	StorageKey string    `gorm:"index;type:varchar(36)" json:"-"`
 
 	UploaderID string `gorm:"-" json:"-"`
 	FileName   string `gorm:"-" json:"file_name"`
@@ -75,4 +77,14 @@ type Attachment struct {
 	LegacySize        int64  `gorm:"column:size;not null;default:0" json:"-"`
 	LegacyFileHash    string `gorm:"column:file_hash;type:varchar(64)" json:"-"`
 	LegacyStoragePath string `gorm:"column:storage_path;type:text;not null;default:''" json:"-"`
+}
+
+// AttachmentBlob owns one encrypted file. Its digest is a keyed HMAC scoped to
+// the uploader, so the database cannot correlate equal files across users.
+// Several Attachment records may reference the same blob.
+type AttachmentBlob struct {
+	StorageKey     string    `gorm:"primaryKey;type:varchar(36)"`
+	UploaderIDHash string    `gorm:"uniqueIndex:idx_attachment_blob_digest;type:varchar(64)"`
+	ContentDigest  string    `gorm:"uniqueIndex:idx_attachment_blob_digest;type:varchar(64)"`
+	CreatedAt      time.Time `gorm:"autoCreateTime;not null"`
 }

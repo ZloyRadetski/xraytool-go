@@ -166,6 +166,7 @@ func (s *Store) migrateAttachment(ctx context.Context, att *Attachment, mediaRoo
 		"size":                   0,
 		"file_hash":              "",
 		"storage_path":           "",
+		"storage_key":            att.ID,
 		"nonce":                  []byte{},
 	}
 	if err := s.db.WithContext(ctx).Model(&Attachment{}).Where("id = ?", att.ID).Updates(updates).Error; err != nil {

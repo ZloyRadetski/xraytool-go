@@ -42,7 +42,7 @@ func openDB(cfg DBConfig) (*gorm.DB, error) {
 	}
 
 	// AutoMigrate tables
-	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}); err != nil {
+	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}, &AttachmentBlob{}); err != nil {
 		return nil, fmt.Errorf("failed to auto migrate: %w", err)
 	}
 	if cfg.Driver == "sqlite" && cfg.SQLitePath != ":memory:" && !strings.HasPrefix(cfg.SQLitePath, "file:") {

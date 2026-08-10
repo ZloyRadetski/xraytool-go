@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,7 +22,7 @@ func setupTestStore(t *testing.T) *Store {
 		t.Fatalf("Failed to open db: %v", err)
 	}
 
-	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}); err != nil {
+	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}, &AttachmentBlob{}); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
 
@@ -35,7 +39,7 @@ func TestStore_EncryptsConversationAndAttachmentMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	att, err := s.CreateAttachment(ctx, "attachment-1", "telegram:12345", "passport.png", "image/png", 321)
+	att, err := s.CreateAttachment(ctx, "attachment-1", "attachment-1", "telegram:12345", "passport.png", "image/png", 321)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +64,126 @@ func TestStore_EncryptsConversationAndAttachmentMetadata(t *testing.T) {
 	}
 	if bytes.Contains(rawAtt.FileNameCiphertext, []byte("passport.png")) {
 		t.Fatal("attachment file name was not encrypted")
+	}
+}
+
+func TestStore_DeduplicatesAttachmentBlobPerUploader(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	const contentHash = "c1fbfbcd1c4ca0cf15d2c2e7438a2f5f5069fdef939eaca7b4790f418bb75472"
+	firstDigest := s.AttachmentContentDigest("telegram:12345", contentHash)
+	secondDigest := s.AttachmentContentDigest("telegram:67890", contentHash)
+	if firstDigest == secondDigest {
+		t.Fatal("content digest must be scoped to the uploader")
+	}
+
+	firstBlob, err := s.CreateAttachmentBlob(ctx, "blob-1", "telegram:12345", firstDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := s.FindAttachmentBlob(ctx, "telegram:12345", firstDigest)
+	if err != nil || duplicate == nil || duplicate.StorageKey != firstBlob.StorageKey {
+		t.Fatalf("expected existing blob, got %#v, %v", duplicate, err)
+	}
+	if _, err := s.CreateAttachmentBlob(ctx, "blob-2", "telegram:12345", firstDigest); err == nil {
+		t.Fatal("same uploader and file must have exactly one blob")
+	}
+	if _, err := s.CreateAttachmentBlob(ctx, "blob-2", "telegram:67890", secondDigest); err != nil {
+		t.Fatalf("another uploader must be able to store the same file independently: %v", err)
+	}
+
+	first, err := s.CreateAttachment(ctx, "attachment-1", firstBlob.StorageKey, "telegram:12345", "first.png", "image/png", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateAttachment(ctx, "attachment-2", firstBlob.StorageKey, "telegram:12345", "second.png", "image/png", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.StorageKey != second.StorageKey {
+		t.Fatalf("duplicate attachments reference different blobs: %q and %q", first.StorageKey, second.StorageKey)
+	}
+}
+
+func TestUploadAttachment_ReusesEncryptedBlobForSameUploader(t *testing.T) {
+	mediaRoot := t.TempDir()
+	p := &Plugin{
+		store: setupTestStore(t),
+		cfg: pluginConfig{Media: MediaConfig{
+			StoragePath:   mediaRoot,
+			MaxFileSizeMB: 1,
+		}},
+	}
+	upload := p.handleUploadAttachment()
+	content := []byte("same image bytes")
+
+	uploadFile := func(fileName string) string {
+		t.Helper()
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		part, err := writer.CreateFormFile("file", fileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write(content); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/support/attachments", &body)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("X-User-ID", "telegram:12345")
+		rec := httptest.NewRecorder()
+		upload(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("upload status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		var response struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.ID == "" {
+			t.Fatal("upload response has no attachment ID")
+		}
+		return response.ID
+	}
+
+	firstID := uploadFile("first.png")
+	secondID := uploadFile("second.png")
+	first, err := p.store.GetAttachment(context.Background(), firstID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.store.GetAttachment(context.Background(), secondID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.StorageKey == "" || first.StorageKey != second.StorageKey {
+		t.Fatalf("identical uploads use different storage keys: %q and %q", first.StorageKey, second.StorageKey)
+	}
+	entries, err := os.ReadDir(mediaRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != first.StorageKey+".bin" {
+		t.Fatalf("expected exactly one encrypted binary, got %#v", entries)
+	}
+
+	download := p.handleDownloadAttachment()
+	for _, id := range []string{firstID, secondID} {
+		req := httptest.NewRequest(http.MethodGet, "/support/attachments/"+id, nil)
+		req.Header.Set("X-User-ID", "telegram:12345")
+		req.SetPathValue("id", id)
+		rec := httptest.NewRecorder()
+		download(rec, req)
+		if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), content) {
+			t.Fatalf("download %s returned status %d and body %q", id, rec.Code, rec.Body.Bytes())
+		}
 	}
 }
 

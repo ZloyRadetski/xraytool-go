@@ -2,6 +2,7 @@ package support_chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -299,11 +300,43 @@ func (s *Store) hydrateAttachment(att *Attachment) error {
 	return nil
 }
 
-// CreateAttachment stores encrypted attachment metadata. The caller encrypts
-// file bytes first, using attachmentID as its distinct encryption scope.
-func (s *Store) CreateAttachment(ctx context.Context, attachmentID, uploaderID, fileName, mimeType string, size int64) (*Attachment, error) {
+// AttachmentContentDigest returns a non-reversible, sender-scoped key for
+// comparing equal file contents without exposing a plain SHA-256 in the DB.
+func (s *Store) AttachmentContentDigest(uploaderID, contentHash string) string {
+	return s.crypto.BlindIndex("attachment-content-digest:"+uploaderID, contentHash)
+}
+
+func (s *Store) FindAttachmentBlob(ctx context.Context, uploaderID, contentDigest string) (*AttachmentBlob, error) {
+	var blob AttachmentBlob
+	uploaderHash := s.crypto.BlindIndex("attachment-uploader-id", uploaderID)
+	err := s.db.WithContext(ctx).Where("uploader_id_hash = ? AND content_digest = ?", uploaderHash, contentDigest).First(&blob).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &blob, nil
+}
+
+func (s *Store) CreateAttachmentBlob(ctx context.Context, storageKey, uploaderID, contentDigest string) (*AttachmentBlob, error) {
+	blob := &AttachmentBlob{
+		StorageKey:     storageKey,
+		UploaderIDHash: s.crypto.BlindIndex("attachment-uploader-id", uploaderID),
+		ContentDigest:  contentDigest,
+		CreatedAt:      time.Now(),
+	}
+	if err := s.db.WithContext(ctx).Create(blob).Error; err != nil {
+		return nil, err
+	}
+	return blob, nil
+}
+
+// CreateAttachment stores encrypted attachment metadata. storageKey identifies
+// the shared encrypted blob and is deliberately independent of attachmentID.
+func (s *Store) CreateAttachment(ctx context.Context, attachmentID, storageKey, uploaderID, fileName, mimeType string, size int64) (*Attachment, error) {
 	att := &Attachment{
-		ID: attachmentID, UploaderID: uploaderID, FileName: fileName, MimeType: mimeType, Size: size,
+		ID: attachmentID, StorageKey: storageKey, UploaderID: uploaderID, FileName: fileName, MimeType: mimeType, Size: size,
 		CreatedAt: time.Now(), EncryptionVersion: currentEncryptionVersion, KeyVersion: s.keyVersion,
 	}
 	var err error
@@ -364,6 +397,13 @@ func (s *Store) MarkMessagesRead(ctx context.Context, convID, readerRole string)
 		Update("read_at", time.Now()).Error
 }
 
-func attachmentStoragePath(mediaRoot, attachmentID string) string {
-	return filepath.Join(mediaRoot, attachmentID+".bin")
+func attachmentStoragePath(mediaRoot, storageKey string) string {
+	return filepath.Join(mediaRoot, storageKey+".bin")
+}
+
+func attachmentStorageKey(att *Attachment) string {
+	if att.StorageKey != "" {
+		return att.StorageKey
+	}
+	return att.ID
 }

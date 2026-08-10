@@ -1,7 +1,10 @@
 package support_chat
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -39,8 +42,26 @@ func (p *Plugin) handleUploadAttachment() http.HandlerFunc {
 			mimeType = "application/octet-stream"
 		}
 
-		// New uploads deliberately do not use global deduplication: an ordinary
-		// content hash leaks whether another user uploaded the same file.
+		// Calculate a source hash first, then turn it into an HMAC scoped to the
+		// uploader. This permits deduplication for one user without leaking that
+		// another user uploaded identical content.
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, file); err != nil {
+			http.Error(w, "Failed to read file", http.StatusInternalServerError)
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "Failed to rewind file", http.StatusInternalServerError)
+			return
+		}
+		contentDigest := p.store.AttachmentContentDigest(userID, hex.EncodeToString(hasher.Sum(nil)))
+		existingBlob, err := p.store.FindAttachmentBlob(r.Context(), userID, contentDigest)
+		if err != nil {
+			p.log.Error("Failed to find attachment blob", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
 		if err := os.MkdirAll(p.cfg.Media.StoragePath, 0700); err != nil {
 			p.log.Error("Failed to create media directory", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -53,29 +74,53 @@ func (p *Plugin) handleUploadAttachment() http.HandlerFunc {
 		}
 
 		attachmentID := uuid.New().String()
-		localPath := attachmentStoragePath(p.cfg.Media.StoragePath, attachmentID)
-		outFile, err := os.OpenFile(localPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			p.log.Error("Failed to create file", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-		err = p.store.Crypto().EncryptAttachmentStream(attachmentID, outFile, file)
-		closeErr := outFile.Close()
-		if err != nil || closeErr != nil {
-			_ = os.Remove(localPath)
-			if err == nil {
-				err = closeErr
+		storageKey := ""
+		localPath := ""
+		if existingBlob != nil {
+			storageKey = existingBlob.StorageKey
+		} else {
+			storageKey = uuid.New().String()
+			localPath = attachmentStoragePath(p.cfg.Media.StoragePath, storageKey)
+			outFile, err := os.OpenFile(localPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				p.log.Error("Failed to create file", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
 			}
-			p.log.Error("Failed to encrypt/save file", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
+			err = p.store.Crypto().EncryptAttachmentStream(storageKey, outFile, file)
+			closeErr := outFile.Close()
+			if err != nil || closeErr != nil {
+				_ = os.Remove(localPath)
+				if err == nil {
+					err = closeErr
+				}
+				p.log.Error("Failed to encrypt/save file", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			if _, err := p.store.CreateAttachmentBlob(r.Context(), storageKey, userID, contentDigest); err != nil {
+				// A concurrent identical upload may have won the unique blob claim.
+				blob, findErr := p.store.FindAttachmentBlob(r.Context(), userID, contentDigest)
+				if findErr != nil || blob == nil {
+					_ = os.Remove(localPath)
+					p.log.Error("Failed to save attachment blob", "error", err)
+					http.Error(w, "Internal server error", http.StatusInternalServerError)
+					return
+				}
+				_ = os.Remove(localPath)
+				storageKey = blob.StorageKey
+				localPath = ""
+			}
 		}
 
 		// Save to DB
-		att, err := p.store.CreateAttachment(r.Context(), attachmentID, userID, handler.Filename, mimeType, handler.Size)
+		att, err := p.store.CreateAttachment(r.Context(), attachmentID, storageKey, userID, handler.Filename, mimeType, handler.Size)
 		if err != nil {
-			os.Remove(localPath)
+			// Keep a newly claimed blob intact. A concurrent identical upload may
+			// already be creating its attachment record against it; removing the
+			// file here would break that otherwise valid upload. An unreferenced
+			// blob is safe to reuse on the next identical upload.
 			p.log.Error("Failed to save attachment to db", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -132,7 +177,8 @@ func (p *Plugin) handleDownloadAttachment() http.HandlerFunc {
 			}
 		}
 
-		storagePath := attachmentStoragePath(p.cfg.Media.StoragePath, att.ID)
+		storageKey := attachmentStorageKey(att)
+		storagePath := attachmentStoragePath(p.cfg.Media.StoragePath, storageKey)
 		if att.EncryptionVersion < currentEncryptionVersion {
 			storagePath = att.LegacyStoragePath
 		}
@@ -149,7 +195,7 @@ func (p *Plugin) handleDownloadAttachment() http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 
 		if att.EncryptionVersion >= currentEncryptionVersion {
-			err = p.store.Crypto().DecryptAttachmentStream(att.ID, w, inFile)
+			err = p.store.Crypto().DecryptAttachmentStream(storageKey, w, inFile)
 		} else {
 			err = p.store.legacyAttachmentCrypto().DecryptStream("global_attachments", w, inFile, att.Nonce)
 		}
