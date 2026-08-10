@@ -357,6 +357,14 @@ type CoreProvider interface {
 	AuthMiddleware(next http.Handler) http.Handler
 }
 
+// AuthMiddlewareBinder is the small compatibility bridge between a mandatory
+// CoreProvider and the plugin that owns the HTTP router. It lets api plugins
+// preserve the historical CoreProvider.AuthMiddleware method without owning
+// router implementation inside the core plugin.
+type AuthMiddlewareBinder interface {
+	SetAuthMiddleware(func(http.Handler) http.Handler)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Extension Point 1 — AntifraudProvider
 // ─────────────────────────────────────────────────────────────────────────────

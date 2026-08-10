@@ -56,11 +56,14 @@ func TestBuiltinManifestFilesAreValid(t *testing.T) {
 func TestBuiltinManifestFilesWithoutConfigSchemaAreValid(t *testing.T) {
 	paths := []string{
 		filepath.Join("..", "plugins", "config_storage", "plugin.yaml"),
+		filepath.Join("..", "plugins", "api_server", "plugin.yaml"),
 		filepath.Join("..", "plugins", "identity_memory", "plugin.yaml"),
 		filepath.Join("..", "plugins", "subscription_format_legacy", "plugin.yaml"),
 		filepath.Join("..", "plugins", "subscription_lifecycle", "plugin.yaml"),
+		filepath.Join("..", "plugins", "subscription_runtime", "plugin.yaml"),
 		filepath.Join("..", "plugins", "support_chat", "plugin.yaml"),
 		filepath.Join("..", "plugins", "traffic_file", "plugin.yaml"),
+		filepath.Join("..", "plugins", "user_management", "plugin.yaml"),
 	}
 	for _, path := range paths {
 		path := path

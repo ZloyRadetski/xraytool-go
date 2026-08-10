@@ -1,0 +1,12 @@
+name: user_management
+kind: user_management
+version: 1.0.0
+api_version: "1"
+description: "User lifecycle service backed by the core domain registry."
+type: internal
+publishes:
+  - user_service
+requires:
+  - domain_registry
+  - domain_engine
+  - event_propagator

@@ -9,9 +9,12 @@ func TestBuiltinRegistryMinimalExcludesOptionalBuiltinPlugins(t *testing.T) {
 
 	registry := BuiltinRegistry(nil)
 	want := map[string]struct{}{
-		"core":            {},
-		"pricing_default": {},
-		"engine_xray":     {},
+		"core":                 {},
+		"user_management":      {},
+		"subscription_runtime": {},
+		"api_server":           {},
+		"pricing_default":      {},
+		"engine_xray":          {},
 	}
 
 	if len(registry) != len(want) {

@@ -1,0 +1,10 @@
+name: subscription_runtime
+kind: subscription
+version: 1.0.0
+api_version: "1"
+description: "Cached subscription delivery runtime and provider integration point."
+type: internal
+publishes:
+  - subscription_cache
+requires:
+  - domain_engine

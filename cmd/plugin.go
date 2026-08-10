@@ -728,12 +728,13 @@ func writePluginGraph(out io.Writer, path string) error {
 		return err
 	}
 
-	// Config files created before the plugins: section existed are still valid at
-	// runtime: appconfig materialises the mandatory core and the xray engine.
-	// Mirror those two invariant defaults here so graph is useful during a
-	// migration as well as for newly written configuration.
-	if _, exists := configured["core"]; !exists {
-		configured["core"] = configuredPlugin{Name: "core", Enabled: true, Source: "builtin"}
+	// Runtime materialises the mandatory foundation plugins even for older
+	// config files. Mirror those defaults here so plugin graph represents the
+	// process that start-server will actually compose.
+	for _, name := range []string{"core", "user_management", "subscription_runtime", "api_server"} {
+		if _, exists := configured[name]; !exists {
+			configured[name] = configuredPlugin{Name: name, Enabled: true, Source: "builtin"}
+		}
 	}
 	hasEngine := false
 	for name := range configured {

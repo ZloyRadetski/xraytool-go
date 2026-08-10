@@ -435,6 +435,23 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 				"device_limit_default": 3,
 			},
 		},
+		// These three plugins replace the former all-in-one core runtime while
+		// preserving its service names and HTTP contract.
+		"user_management": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"subscription_runtime": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"api_server": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
 		// Pricing is a mandatory business capability even though it is a
 		// separately replaceable plugin. The default implementation is pure and
 		// is injected into core's payment service after the host has loaded.
@@ -903,6 +920,17 @@ xray:
 # plugin configs unless an explicit plugins.<name>.config value is supplied.
 plugins:
   core:
+    enabled: true
+    source: builtin
+  # Foundation plugins split former core runtime ownership. Keep them enabled
+  # unless replacing the corresponding service with a compatible plugin.
+  user_management:
+    enabled: true
+    source: builtin
+  subscription_runtime:
+    enabled: true
+    source: builtin
+  api_server:
     enabled: true
     source: builtin
 

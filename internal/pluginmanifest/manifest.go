@@ -121,7 +121,7 @@ var (
 
 var validKinds = map[string]struct{}{
 	"core": {}, "engine": {}, "antifraud": {}, "payment": {}, "pricing": {},
-	"notification": {}, "event_sink": {}, "cluster_sync": {}, "traffic": {}, "lifecycle": {}, "storage": {}, "identity": {}, "subscription_format": {}, "support": {},
+	"notification": {}, "event_sink": {}, "cluster_sync": {}, "traffic": {}, "lifecycle": {}, "storage": {}, "identity": {}, "subscription": {}, "subscription_format": {}, "user_management": {}, "api": {}, "support": {},
 }
 
 // Validate checks the static contract a host can know before loading code.

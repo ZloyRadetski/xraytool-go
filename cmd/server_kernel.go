@@ -24,8 +24,10 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/pluginhost"
+	apiServerPlugin "xraytool/internal/plugins/api_server"
 	corePlugin "xraytool/internal/plugins/core"
 	vpn "xraytool/internal/plugins/engine_xray"
+	subscriptionRuntimePlugin "xraytool/internal/plugins/subscription_runtime"
 )
 
 func startServerKernelCmd(deps *AppDeps) *cobra.Command {
@@ -130,7 +132,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	}
 
 	// ── Step 4: Resolve the fully initialised core plugin ─────────────────────
-	core, err := getPlugin[*corePlugin.Plugin](host, "core")
+	subscriptionRuntime, err := getPlugin[*subscriptionRuntimePlugin.Plugin](host, "subscription_runtime")
 	if err != nil {
 		return err
 	}
@@ -139,12 +141,12 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	trafficProvider, trafficOK := trafficSvc.(pluginapi.TrafficProvider)
 	quotaProvider, quotaOK := quotaSvc.(pluginapi.TrafficQuotaProvider)
 	if (trafficErr == nil && trafficOK) || (quotaErr == nil && quotaOK) {
-		core.CacheManager().SetTrafficProviders(trafficProvider, quotaProvider)
+		subscriptionRuntime.CacheManager().SetTrafficProviders(trafficProvider, quotaProvider)
 		slog.Info("[KERNEL] Traffic providers wired", "usage", trafficOK, "quota", quotaOK)
 	}
 	if formatSvc, err := host.ResolveService(pluginapi.ServiceSubscriptionFormatProvider); err == nil {
 		if provider, ok := formatSvc.(pluginapi.SubscriptionFormatProvider); ok {
-			core.CacheManager().SetSubscriptionFormatProvider(provider)
+			subscriptionRuntime.CacheManager().SetSubscriptionFormatProvider(provider)
 			slog.Info("[KERNEL] Subscription format provider wired", "plugin", "subscription_format_legacy")
 		}
 	}
@@ -153,8 +155,11 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	slog.Info("[KERNEL] Plugin Host loaded", "event_sinks", len(host.EventSinks()), "payment_providers", len(host.PaymentProviders()))
 
 	// ── Step 6: Build HTTP Router ─────────────────────────────────────────────
-	core.InitHTTPRouter(vpnEngine, cfg.Server.APIKey)
-	apiRouter := core.HTTPRouter()
+	apiServer, err := getPlugin[*apiServerPlugin.Plugin](host, "api_server")
+	if err != nil {
+		return err
+	}
+	apiRouter := apiServer.Router()
 	if identitySvc, err := host.ResolveService(pluginapi.ServiceIdentityProvider); err == nil {
 		if identityProvider, ok := identitySvc.(pluginapi.IdentityProvider); ok {
 			apiRouter = apiRouter.WithIdentityProvider(identityProvider)
@@ -223,7 +228,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 
 	// ── Step 9: HTTP server ───────────────────────────────────────────────────
 	mux := http.NewServeMux()
-	mux.Handle("/", core.HTTPHandler())
+	mux.Handle("/", apiServer.HTTPHandler())
 
 	// Mount HTTP routes from any plugin that implements HTTPContributor
 	for _, meta := range host.Loaded() {

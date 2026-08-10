@@ -15,6 +15,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/pluginapi"
 	antifraudPlugin "xraytool/internal/plugins/antifraud"
+	apiServerPlugin "xraytool/internal/plugins/api_server"
 	billingPlugin "xraytool/internal/plugins/billing"
 	storagePlugin "xraytool/internal/plugins/config_storage"
 	corePlugin "xraytool/internal/plugins/core"
@@ -28,8 +29,10 @@ import (
 	referralPlugin "xraytool/internal/plugins/referral"
 	formatPlugin "xraytool/internal/plugins/subscription_format_legacy"
 	lifecyclePlugin "xraytool/internal/plugins/subscription_lifecycle"
+	subscriptionRuntimePlugin "xraytool/internal/plugins/subscription_runtime"
 	supportChatPlugin "xraytool/internal/plugins/support_chat"
 	trafficPlugin "xraytool/internal/plugins/traffic_file"
+	userManagementPlugin "xraytool/internal/plugins/user_management"
 )
 
 // BuiltinRegistry возвращает карту name → factory для всех compiled-in плагинов.
@@ -42,8 +45,11 @@ import (
 func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 	return map[string]func() pluginapi.Plugin{
 		// ── Phase 1: Mandatory core plugin ──────────────────────────────────
-		"core":           func() pluginapi.Plugin { return corePlugin.New(cfg) },
-		"config_storage": func() pluginapi.Plugin { return storagePlugin.New(cfg) },
+		"core":                 func() pluginapi.Plugin { return corePlugin.New(cfg) },
+		"user_management":      func() pluginapi.Plugin { return userManagementPlugin.New(cfg) },
+		"subscription_runtime": func() pluginapi.Plugin { return subscriptionRuntimePlugin.New(cfg) },
+		"api_server":           func() pluginapi.Plugin { return apiServerPlugin.New(cfg) },
+		"config_storage":       func() pluginapi.Plugin { return storagePlugin.New(cfg) },
 
 		// ── Phase 1.1: Optional built-in plugins ────────────────────────────
 		// Antifraud: multi-IP soft-ban, log tailing.

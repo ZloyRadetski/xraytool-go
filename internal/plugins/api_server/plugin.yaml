@@ -1,0 +1,17 @@
+name: api_server
+kind: api
+version: 1.0.0
+api_version: "1"
+description: "HTTP API routes, authentication middleware, and plugin route composition."
+type: internal
+publishes:
+  - auth_middleware
+  - protected_middleware
+  - api_http_handler
+requires:
+  - core_provider
+  - domain_registry
+  - domain_engine
+  - user_service
+  - subscription_cache
+  - event_dispatcher
