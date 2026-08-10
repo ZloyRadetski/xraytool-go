@@ -76,13 +76,13 @@ func TestBuiltinPluginSchemaOwnershipIsScoped(t *testing.T) {
 	require.True(t, db.Migrator().HasTable(&Subscription{}))
 	require.True(t, db.Migrator().HasTable(&Payment{}))
 	require.False(t, db.Migrator().HasTable(&AntifraudBan{}))
-	require.False(t, db.Migrator().HasTable(&SyncEvent{}))
+	require.False(t, db.Migrator().HasTable("sync_events"))
 
 	antifraudRunner, ok := factory("antifraud").(pluginapi.EmbeddedMigrationRunner)
 	require.True(t, ok)
 	require.NoError(t, antifraudRunner.RunEmbeddedMigrations(context.Background(), testMigrationSet("SELECT 1;")))
 	require.True(t, db.Migrator().HasTable(&AntifraudBan{}))
-	require.False(t, db.Migrator().HasTable(&SyncEvent{}))
+	require.False(t, db.Migrator().HasTable("sync_events"))
 }
 
 func TestMigrationTableNameRejectsUnsafePluginNames(t *testing.T) {

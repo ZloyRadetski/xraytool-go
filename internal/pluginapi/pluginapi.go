@@ -34,13 +34,22 @@ type RawConfig map[string]any
 // them in pluginapi prevents the composition root from importing an optional
 // plugin package merely to obtain a string constant.
 const (
-	ServiceClusterSyncProvider           = "cluster_sync_provider"
+	ServiceClusterReplicationProvider    = "cluster_replication_provider"
 	ServiceIdentityProvider              = "identity_provider"
 	ServiceSubscriptionFormatProvider    = "subscription_format_provider"
 	ServiceSubscriptionTemplateProcessor = "subscription_template_processor"
 	ServiceTrafficProvider               = "traffic_provider"
 	ServiceTrafficQuotaProvider          = "traffic_quota_provider"
 )
+
+// ReplicationFraudRelay is the narrow cross-plugin bridge used to carry
+// slave anti-fraud observations over the authenticated replication stream.
+// It replaces the former internal HTTP action without exposing transport
+// details to the antifraud plugin.
+type ReplicationFraudRelay interface {
+	ReportFraudEvents(ctx context.Context, events []FraudEvent) error
+	SetFraudEventSink(func(context.Context, string, []FraudEvent) error)
+}
 
 var (
 	// ErrIdentityRateLimited tells an API adapter to return a retryable 429.
@@ -71,7 +80,7 @@ type Metadata struct {
 
 	// Kind is the extension-point category. One of:
 	// "core" | "engine" | "antifraud" | "payment" | "pricing" |
-	// "notification" | "event_sink" | "cluster_sync"
+	// "notification" | "event_sink" | "cluster_replication"
 	Kind string
 
 	// Version is the plugin's own semver.
@@ -645,27 +654,6 @@ type EventSink interface {
 // Extension Point 6 — ClusterSyncProvider
 // ─────────────────────────────────────────────────────────────────────────────
 
-// SyncResult holds the outcome of a sync attempt for one slave.
-type SyncResult struct {
-	ServerName string
-	Success    bool
-	Error      error
-}
-
-// SlaveUserTotal is a user-level traffic aggregation from a slave node.
-type SlaveUserTotal struct {
-	Email string
-	Slave int64
-}
-
-// SlaveReport summarises the overall health of the slave cluster.
-type SlaveReport struct {
-	Enabled       bool
-	TotalServers  int
-	OKServers     int
-	FailedServers int
-}
-
 // ClusterSyncProvider is the extension point for master→slave state replication
 // and cluster-level traffic statistics. Single-node installations disable this
 // plugin entirely (enabled: false in plugins.yaml), which means no slave-related
@@ -674,24 +662,10 @@ type SlaveReport struct {
 // Required services (Metadata.Requires):
 //
 //	"subscription_repository" (from core, optional:false)
-type ClusterSyncProvider interface {
-	Plugin
-
-	// SyncAllSlaves replicates the current state to all configured slave nodes.
-	SyncAllSlaves(ctx context.Context, dryRun bool, forceFull bool) ([]SyncResult, error)
-
-	// CollectSlaveTotals aggregates per-user traffic from all reachable slaves.
-	CollectSlaveTotals() ([]SlaveUserTotal, SlaveReport)
-}
 
 // SyncState is the transport-neutral position of a node in the cluster sync
 // log. It mirrors the state persisted by the built-in cluster plugin without
 // exposing a statesync implementation to HTTP consumers.
-type SyncState struct {
-	LastEventID int64
-	StateHash   string
-	UpdatedAt   time.Time
-}
 
 // ClusterSyncHTTPProvider is an optional capability of a ClusterSyncProvider.
 // The kernel gives it to the HTTP router so slave nodes can request a snapshot
@@ -699,22 +673,11 @@ type SyncState struct {
 //
 // Keeping this separate from ClusterSyncProvider preserves compatibility with
 // providers that only implement scheduled replication and traffic collection.
-type ClusterSyncHTTPProvider interface {
-	ClusterSyncProvider
-
-	BuildSnapshot(ctx context.Context) ([]VPNUserConfig, error)
-	MasterState(ctx context.Context) (SyncState, error)
-}
 
 // ClusterCommandPropagator is the optional cluster capability used by admin
 // user handlers to broadcast legacy newuser/rmuser commands. The core HTTP
 // package never constructs slave clients directly; a loaded cluster plugin
 // owns the transport and may decline the operation when it is unavailable.
-type ClusterCommandPropagator interface {
-	ClusterSyncProvider
-
-	PropagateCommand(ctx context.Context, command string, params map[string]string) error
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extension Point 7 — EngineProvider + ClientConfigContributor

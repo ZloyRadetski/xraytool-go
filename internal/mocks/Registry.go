@@ -174,26 +174,6 @@ func (_m *Registry) Users() domain.UserRepository {
 	return r0
 }
 
-// SyncEvents provides a mock function with no fields
-func (_m *Registry) SyncEvents() domain.SyncEventRepository {
-	ret := _m.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for SyncEvents")
-	}
-
-	var r0 domain.SyncEventRepository
-	if rf, ok := ret.Get(0).(func() domain.SyncEventRepository); ok {
-		r0 = rf()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(domain.SyncEventRepository)
-		}
-	}
-
-	return r0
-}
-
 // WithTx provides a mock function with given fields: ctx, fn
 func (_m *Registry) WithTx(ctx context.Context, fn func(domain.Registry) error) error {
 	ret := _m.Called(ctx, fn)

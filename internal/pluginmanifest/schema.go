@@ -33,15 +33,15 @@ const (
 var builtinConfigSchemaFiles embed.FS
 
 var builtinConfigSchemas = map[string]string{
-	"core":              "schemas/core.schema.json",
-	"pricing_default":   "schemas/pricing_default.schema.json",
-	"payment_platega":   "schemas/payment_platega.schema.json",
-	"antifraud":         "schemas/antifraud.schema.json",
-	"mailer_resend":     "schemas/mailer_resend.schema.json",
-	"eventsink_webhook": "schemas/eventsink_webhook.schema.json",
-	"cluster_sync":      "schemas/cluster_sync.schema.json",
-	"engine_xray":       "schemas/engine_xray.schema.json",
-	"engine_singbox":    "schemas/engine_singbox.schema.json",
+	"core":                "schemas/core.schema.json",
+	"pricing_default":     "schemas/pricing_default.schema.json",
+	"payment_platega":     "schemas/payment_platega.schema.json",
+	"antifraud":           "schemas/antifraud.schema.json",
+	"mailer_resend":       "schemas/mailer_resend.schema.json",
+	"eventsink_webhook":   "schemas/eventsink_webhook.schema.json",
+	"cluster_replication": "schemas/cluster_replication.schema.json",
+	"engine_xray":         "schemas/engine_xray.schema.json",
+	"engine_singbox":      "schemas/engine_singbox.schema.json",
 }
 
 // HasBuiltinConfigSchema reports whether a compiled-in plugin has a schema

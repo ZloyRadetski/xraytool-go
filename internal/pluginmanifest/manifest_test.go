@@ -40,7 +40,7 @@ func TestBuiltinManifestFilesAreValid(t *testing.T) {
 		filepath.Join("..", "plugins", "mailer_resend", "plugin.yaml"),
 		filepath.Join("..", "plugins", "pricing_default", "plugin.yaml"),
 		filepath.Join("..", "plugins", "payment_platega", "plugin.yaml"),
-		filepath.Join("..", "plugins", "clustersync", "plugin.yaml"),
+		filepath.Join("..", "plugins", "cluster_replication", "plugin.yaml"),
 	}
 	for _, path := range paths {
 		path := path

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -21,49 +20,42 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 		Run: func(cmd *cobra.Command, _ []string) {
 			requireRoot() //nolint:errcheck
 
-			if !deps.Cfg.IsMaster() {
-				fmt.Println("ERROR|syncstates can only run on master node")
+			if !deps.Cfg.IsMaster() || deps.ReplicationService == nil {
+				fmt.Println("ERROR|cluster_replication is not configured on this master")
 				return
 			}
-
-			svc := deps.SyncSvc
-			if svc == nil {
-				fmt.Println("ERROR|cluster_sync plugin is not configured on this node")
-				return
-			}
-
-			// Self-heal: Sync UUIDs from Database to Master config before building snapshot
-			changed, err := svc.SelfHealMasterUUIDs(context.Background())
+			users, err := deps.ReplicationService.BuildSnapshot(cmd.Context())
 			if err != nil {
-				fmt.Printf("ERROR|syncing UUIDs from DB: %v\n", err)
-				// non-fatal, continue anyway
-			} else if changed {
-				fmt.Println("INFO|Self-healing complete.")
-			}
-
-			results, err := svc.SyncAllSlaves(context.Background(), dryRun, forceFull)
-			if err != nil {
-				fmt.Printf("ERROR|%v\n", err)
+				fmt.Printf("ERROR|building desired state: %v\n", err)
 				return
 			}
-
 			if dryRun {
-				fmt.Println("INFO|Dry run completed.")
+				fmt.Printf("INFO|Would reconcile %d users and append a streamed snapshot marker.\n", len(users))
+				return
 			}
-
-			for _, res := range results {
-				if res.Success {
-					fmt.Printf("  [OK] %s: Synchronized\n", res.ServerName)
-				} else {
-					fmt.Printf("  [FAIL] %s: %v\n", res.ServerName, res.Error)
-				}
+			if _, err := deps.Engine.SyncUsers(cmd.Context(), users, true); err != nil {
+				fmt.Printf("ERROR|reconciling master: %v\n", err)
+				return
 			}
-
-			fmt.Println("All slaves synchronized.")
+			changed, err := deps.ReplicationService.DetectDesiredState(cmd.Context())
+			if err != nil {
+				fmt.Printf("ERROR|recording snapshot: %v\n", err)
+				return
+			}
+			if forceFull && !changed {
+				// The durable marker is intentionally compact; connected slaves expand
+				// it into their own streamed snapshot rather than accepting a JSON blob.
+				err = deps.ReplicationService.RequestSnapshot(cmd.Context(), "manual")
+			}
+			if err != nil {
+				fmt.Printf("ERROR|recording forced snapshot: %v\n", err)
+				return
+			}
+			fmt.Println("[OK] Master reconciled; slaves will receive the next streamed snapshot over gRPC.")
 		},
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print changes without applying them")
-	cmd.Flags().BoolVar(&forceFull, "full", false, "Force full synchronization instead of hash-based delta")
+	cmd.Flags().BoolVar(&forceFull, "full", false, "Append a new streamed snapshot marker")
 	return cmd
 }

@@ -27,60 +27,29 @@ type Config struct {
 	// Plugins configures optional and mandatory application plugins. It is kept
 	// in appconfig rather than pluginhost to avoid an import cycle: pluginhost
 	// already needs appconfig to construct built-in plugins.
-	Plugins           PluginsConf           `yaml:"plugins"`
-	Server            ServerConf            `yaml:"server"`
-	Paths             PathsConf             `yaml:"paths"`
-	Xray              XrayConf              `yaml:"xray"`
-	Stats             StatsConf             `yaml:"stats"`
-	SlaveAPI          SlaveAPIConf          `yaml:"slave_api"`
-	MasterAPI         MasterAPIConf         `yaml:"master_api"`
-	Ports             PortsConf             `yaml:"ports"`
-	Logging           LoggingConf           `yaml:"logging"`
-	Webhooks          []string              `yaml:"webhooks"`
-	Worker            WorkerConf            `yaml:"worker"`
-	Database          DatabaseConf          `yaml:"database"`
-	PlategaMerchantID string                `yaml:"platega_merchant_id"`
-	PlategaSecret     string                `yaml:"platega_secret"`
-	WebhookSecret     string                `yaml:"webhook_secret"`
-	Subscription      SubscriptionConf      `yaml:"subscription"`
-	SlaveServers      map[string]SlaveEntry `yaml:"slave_servers"`
-	AntiFraud         AntiFraudConf         `yaml:"anti_fraud"`
-	Mailer            MailerConf            `yaml:"mailer"`
-	Reality           RealityConf           `yaml:"reality"`
-	BlacklistedAdmins []string              `yaml:"blacklisted_admins"`
+	Plugins           PluginsConf      `yaml:"plugins"`
+	Server            ServerConf       `yaml:"server"`
+	Paths             PathsConf        `yaml:"paths"`
+	Xray              XrayConf         `yaml:"xray"`
+	Stats             StatsConf        `yaml:"stats"`
+	Replication       ReplicationConf  `yaml:"replication"`
+	Ports             PortsConf        `yaml:"ports"`
+	Logging           LoggingConf      `yaml:"logging"`
+	Webhooks          []string         `yaml:"webhooks"`
+	Worker            WorkerConf       `yaml:"worker"`
+	Database          DatabaseConf     `yaml:"database"`
+	PlategaMerchantID string           `yaml:"platega_merchant_id"`
+	PlategaSecret     string           `yaml:"platega_secret"`
+	WebhookSecret     string           `yaml:"webhook_secret"`
+	Subscription      SubscriptionConf `yaml:"subscription"`
+	AntiFraud         AntiFraudConf    `yaml:"anti_fraud"`
+	Mailer            MailerConf       `yaml:"mailer"`
+	Reality           RealityConf      `yaml:"reality"`
+	BlacklistedAdmins []string         `yaml:"blacklisted_admins"`
 
 	// configDir is set by Load and is deliberately not serialised. It gives
 	// external plugin manifests a stable base for relative config_schema paths.
 	configDir string
-}
-
-// SlaveEntry is the declarative configuration of a cluster node. It lives in
-// appconfig rather than internal/slave so a minimal build can parse its config
-// without linking the optional cluster transport. commandruntime converts it
-// to slave.Entry only in the non-minimal compatibility path.
-type SlaveEntry struct {
-	URL    string      `json:"url" yaml:"url"`
-	Domain string      `json:"domain" yaml:"domain"`
-	Host   string      `json:"host" yaml:"host"`
-	IP     string      `json:"ip" yaml:"ip"`
-	Scheme string      `json:"scheme" yaml:"scheme"`
-	Port   interface{} `json:"port" yaml:"port"`
-	Path   string      `json:"path" yaml:"path"`
-
-	APIKey           string `json:"api_key" yaml:"api_key"`
-	APIKeyCamel      string `json:"apiKey" yaml:"apiKey"`
-	XAPIKey          string `json:"x_api_key" yaml:"x_api_key"`
-	XAPIKeyCamel     string `json:"xApiKey" yaml:"xApiKey"`
-	Token            string `json:"token" yaml:"token"`
-	APIToken         string `json:"apiToken" yaml:"apiToken"`
-	Bearer           string `json:"bearer" yaml:"bearer"`
-	BearerToken      string `json:"bearer_token" yaml:"bearer_token"`
-	BearerTokenCamel string `json:"bearerToken" yaml:"bearerToken"`
-	AuthHeader       string `json:"auth_header" yaml:"auth_header"`
-	Authorization    string `json:"authorization" yaml:"authorization"`
-
-	Insecure      bool `json:"insecure" yaml:"insecure"`
-	AllowInsecure bool `json:"allow_insecure" yaml:"allow_insecure"`
 }
 
 // PluginConf is one configured plugin instance. Config deliberately stays
@@ -147,10 +116,9 @@ type EngineConf struct {
 
 // WorkerConf holds background worker settings.
 type WorkerConf struct {
-	Enabled            bool     `yaml:"enabled"`              // defaults to true
-	ExpiryInterval     string   `yaml:"expiry_interval"`      // e.g., "5m"
-	SyncStatesInterval string   `yaml:"sync_states_interval"` // e.g., "3m"
-	ExpirationWarnings []string `yaml:"expiration_warnings"`  // e.g., ["72h", "24h", "3h", "1h"]
+	Enabled            bool     `yaml:"enabled"`             // defaults to true
+	ExpiryInterval     string   `yaml:"expiry_interval"`     // e.g., "5m"
+	ExpirationWarnings []string `yaml:"expiration_warnings"` // e.g., ["72h", "24h", "3h", "1h"]
 }
 
 // DummyConfigsConf holds custom text arrays for error dummy profiles.
@@ -274,24 +242,30 @@ type RealityConf struct {
 	KeysFilepath    string `yaml:"keys_filepath"`
 }
 
-// MasterAPIConf defines how a slave node authenticates and connects to the master.
-type MasterAPIConf struct {
-	URL      string `yaml:"url"`
-	APIKey   string `yaml:"api_key"`
-	Insecure bool   `yaml:"insecure"`
-}
-
 // StatsConf holds traffic statistics settings.
 type StatsConf struct {
 	BucketSeconds         int `yaml:"bucket_seconds"`
 	DetailedRetentionDays int `yaml:"detailed_retention_days"`
 }
 
-// SlaveAPIConf holds HTTP client settings for slave communication.
-type SlaveAPIConf struct {
-	ConnectTimeout time.Duration `yaml:"connect_timeout"`
-	RequestTimeout time.Duration `yaml:"request_timeout"`
-	RemotePath     string        `yaml:"remote_path"`
+// ReplicationConf is the complete configuration of the cluster_replication
+// plugin. Unlike the removed HTTP master_api/slave_api pair it describes one
+// authenticated mTLS stream: slaves dial the master and keep their own durable
+// inbox position.
+type ReplicationConf struct {
+	Enabled            bool     `yaml:"enabled"`
+	NodeID             string   `yaml:"node_id"`
+	ListenAddress      string   `yaml:"listen_address"`
+	MasterAddress      string   `yaml:"master_address"`
+	AllowedNodes       []string `yaml:"allowed_nodes"`
+	CAFile             string   `yaml:"ca_file"`
+	CertFile           string   `yaml:"cert_file"`
+	KeyFile            string   `yaml:"key_file"`
+	ServerName         string   `yaml:"server_name"`
+	ReconnectInterval  string   `yaml:"reconnect_interval"`
+	DriftInterval      string   `yaml:"drift_interval"`
+	MasterScanInterval string   `yaml:"master_scan_interval"`
+	StatsInterval      string   `yaml:"stats_interval"`
 }
 
 // LoggingConf holds configuration for structured logging.
@@ -336,15 +310,13 @@ func defaults() *Config {
 			BucketSeconds:         60,
 			DetailedRetentionDays: 2,
 		},
-		SlaveAPI: SlaveAPIConf{
-			ConnectTimeout: 5 * time.Second,
-			RequestTimeout: 30 * time.Second,
-			RemotePath:     "/api/v1/internal/xray/sync",
-		},
-		MasterAPI: MasterAPIConf{
-			URL:      "",
-			APIKey:   "CHANGE_ME_IN_CONFIG",
-			Insecure: false,
+		Replication: ReplicationConf{
+			Enabled:            false,
+			ListenAddress:      "0.0.0.0:9443",
+			ReconnectInterval:  "5s",
+			DriftInterval:      "1m",
+			MasterScanInterval: "30s",
+			StatsInterval:      "30s",
 		},
 		Ports: PortsConf{
 			APIServer: 8080,
@@ -358,7 +330,6 @@ func defaults() *Config {
 		Worker: WorkerConf{
 			Enabled:            true,
 			ExpiryInterval:     "5m",
-			SyncStatesInterval: "3m",
 			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
 		},
 		Reality: RealityConf{
@@ -561,12 +532,24 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 				"webhook_secret": cfg.WebhookSecret,
 			},
 		},
-		"cluster_sync": {
-			Enabled: cfg.IsMaster() && len(cfg.SlaveServers) > 0,
+		"cluster_replication": {
+			Enabled: cfg.Replication.Enabled,
 			Source:  "builtin",
 			Config: map[string]any{
-				"sync_interval": cfg.Worker.SyncStatesInterval,
-				"sync_on_start": true,
+				"mode":                 cfg.Mode,
+				"node_id":              cfg.Replication.NodeID,
+				"listen_address":       cfg.Replication.ListenAddress,
+				"master_address":       cfg.Replication.MasterAddress,
+				"allowed_nodes":        stringsToAny(cfg.Replication.AllowedNodes),
+				"ca_file":              cfg.Replication.CAFile,
+				"cert_file":            cfg.Replication.CertFile,
+				"key_file":             cfg.Replication.KeyFile,
+				"server_name":          cfg.Replication.ServerName,
+				"reconnect_interval":   cfg.Replication.ReconnectInterval,
+				"drift_interval":       cfg.Replication.DriftInterval,
+				"master_scan_interval": cfg.Replication.MasterScanInterval,
+				"stats_interval":       cfg.Replication.StatsInterval,
+				"reality_keys_path":    cfg.Reality.KeysFilepath,
 			},
 		},
 	}
@@ -957,24 +940,27 @@ stats:
   # How many days to keep detailed per-bucket data (older data is archived/summed)
   detailed_retention_days: 2
 
-slave_api:
-  # Timeout for connecting to a slave server
-  connect_timeout: 4s
-  # Total timeout for a slave API request
-  request_timeout: 15s
-  # Default API path on slave servers (can be overridden per-server in servers.json)
-  remote_path: "/api/rest/xraytool"
-
-# ============================================================
-# Master Node Access (used ONLY when mode=slave)
-# ============================================================
-master_api:
-  # Master URL (used by slave to send events/stats back)
-  url: "https://master.domain.com/api/v1/internal/xray/sync"
-  # Authentication key used to connect TO the master (must match a key in master's slave_servers OR master's server.api_key)
-  api_key: "your_master_or_slave_secret_key"
-  # Ignore self-signed certificates when connecting to master
-  insecure: false
+replication:
+  # Enable only after every node is upgraded to the gRPC replication plugin.
+  enabled: false
+  # Stable node identity; on a slave it must equal the mTLS client certificate CN.
+  node_id: ""
+  # Master only: gRPC listener. Slave only: leave it unused.
+  listen_address: "0.0.0.0:9443"
+  # Slave only: master gRPC endpoint, for example "master.example.com:9443".
+  master_address: ""
+  # Master only: certificate-CN identities permitted to connect.
+  allowed_nodes: []
+  # CA and per-node certificate/key for TLS 1.3 mutual authentication.
+  ca_file: ""
+  cert_file: ""
+  key_file: ""
+  # Optional SNI override for the master's certificate.
+  server_name: ""
+  reconnect_interval: "5s"
+  drift_interval: "1m"
+  master_scan_interval: "30s"
+  stats_interval: "30s"
 
 ports:
   # Port for the REST API server (api-server / start-server)
@@ -1040,7 +1026,6 @@ worker:
   # How often the worker checks the database for expired users and warnings
   expiry_interval: "5m"
   # How often the master synchronizes states to all slaves
-  sync_states_interval: "3m"
   # Thresholds for expiration warnings sent to the client app
   expiration_warnings:
     - "72h"
@@ -1079,11 +1064,6 @@ mailer:
   # Verified sender address (must match the domain verified in Resend)
   from_email: "noreply@yourdomain.tld"
 
-slave_servers:
-  # slave-1:
-  #   url: "https://slave.example.com/api/v1/internal/xray/sync"
-  #   api_key: "slave_1_unique_secret" # sent as X-API-Key header to the slave
-  #   insecure: false                  # skip TLS verification
 `
 
 // Load reads and parses the config file at the given path.
@@ -1104,6 +1084,10 @@ func Load(path string) (*Config, error) {
 		} else {
 			return nil, fmt.Errorf("reading config %q: %w", path, err)
 		}
+	}
+
+	if err := rejectRemovedClusterConfiguration(data); err != nil {
+		return nil, fmt.Errorf("parsing config %q: %w", path, err)
 	}
 
 	cfg := defaults()
@@ -1167,14 +1151,20 @@ func Load(path string) (*Config, error) {
 	if cfg.Stats.DetailedRetentionDays == 0 {
 		cfg.Stats.DetailedRetentionDays = defs.Stats.DetailedRetentionDays
 	}
-	if cfg.SlaveAPI.ConnectTimeout == 0 {
-		cfg.SlaveAPI.ConnectTimeout = defs.SlaveAPI.ConnectTimeout
+	if cfg.Replication.ListenAddress == "" {
+		cfg.Replication.ListenAddress = defs.Replication.ListenAddress
 	}
-	if cfg.SlaveAPI.RequestTimeout == 0 {
-		cfg.SlaveAPI.RequestTimeout = defs.SlaveAPI.RequestTimeout
+	if cfg.Replication.ReconnectInterval == "" {
+		cfg.Replication.ReconnectInterval = defs.Replication.ReconnectInterval
 	}
-	if cfg.SlaveAPI.RemotePath == "" {
-		cfg.SlaveAPI.RemotePath = defs.SlaveAPI.RemotePath
+	if cfg.Replication.DriftInterval == "" {
+		cfg.Replication.DriftInterval = defs.Replication.DriftInterval
+	}
+	if cfg.Replication.MasterScanInterval == "" {
+		cfg.Replication.MasterScanInterval = defs.Replication.MasterScanInterval
+	}
+	if cfg.Replication.StatsInterval == "" {
+		cfg.Replication.StatsInterval = defs.Replication.StatsInterval
 	}
 	if cfg.Ports.APIServer == 0 {
 		cfg.Ports.APIServer = defs.Ports.APIServer
@@ -1202,9 +1192,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Worker.ExpiryInterval == "" {
 		cfg.Worker.ExpiryInterval = defs.Worker.ExpiryInterval
-	}
-	if cfg.Worker.SyncStatesInterval == "" {
-		cfg.Worker.SyncStatesInterval = defs.Worker.SyncStatesInterval
 	}
 	if len(cfg.Worker.ExpirationWarnings) == 0 {
 		cfg.Worker.ExpirationWarnings = defs.Worker.ExpirationWarnings
@@ -1253,6 +1240,27 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func rejectRemovedClusterConfiguration(data []byte) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	root := document.Content[0]
+	for _, key := range []string{"slave_api", "master_api", "slave_servers"} {
+		if mappingValue(root, key) != nil {
+			return fmt.Errorf("%s was removed; configure the cluster_replication plugin under replication instead", key)
+		}
+	}
+	plugins := mappingValue(root, "plugins")
+	if plugins != nil && plugins.Kind == yaml.MappingNode && mappingValue(plugins, "cluster_sync") != nil {
+		return fmt.Errorf("plugins.cluster_sync was removed; configure replication instead")
+	}
+	return nil
 }
 
 // IsMaster returns true when this node is configured as master.

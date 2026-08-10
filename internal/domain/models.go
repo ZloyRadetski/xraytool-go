@@ -5,47 +5,6 @@ import (
 	"time"
 )
 
-// SyncAction describes the type of change in a SyncEvent.
-type SyncAction string
-
-const (
-	SyncActionAdd    SyncAction = "add"
-	SyncActionRemove SyncAction = "remove"
-	SyncActionUpdate SyncAction = "update"
-)
-
-// SyncEvent is an entry in the append-only changelog of VPN-user mutations.
-type SyncEvent struct {
-	ID     int64
-	Action SyncAction
-	// Payload is the serialised VPNUserConfig (or just Email for remove).
-	Payload   string
-	CreatedAt time.Time
-}
-
-// SyncState is the single-row sync position for a node.
-type SyncState struct {
-	LastEventID int64
-	StateHash   string
-	UpdatedAt   time.Time
-}
-
-// SyncCheckResult is returned by the slave in response to a ping from master.
-type SyncCheckResult struct {
-	// Match is true when the slave's state_hash == master's hash.
-	Match bool `json:"match"`
-	// LastEventID is the slave's current last_event_id (used by master to compute delta).
-	LastEventID int64 `json:"last_event_id"`
-}
-
-// SyncDeltaEvent is the wire-format element transmitted in a delta sync.
-// It mirrors SyncEvent but uses string IDs to survive JSON round-trips.
-type SyncDeltaEvent struct {
-	ID      int64      `json:"id"`
-	Action  SyncAction `json:"action"`
-	Payload string     `json:"payload"`
-}
-
 // Metadata is a flexible JSON field for platform-specific user/subscription data.
 type Metadata map[string]interface{}
 

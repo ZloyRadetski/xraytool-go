@@ -250,12 +250,6 @@ func applyBuiltinPluginSchema(db *gorm.DB, pluginName string, version int64) err
 				return fmt.Errorf("auto-migrate antifraud tables: %w", err)
 			}
 		}
-	case "cluster_sync":
-		if version == 1 {
-			if err := db.AutoMigrate(&SyncEvent{}, &SyncState{}); err != nil {
-				return fmt.Errorf("auto-migrate cluster_sync tables: %w", err)
-			}
-		}
 	}
 	return nil
 }

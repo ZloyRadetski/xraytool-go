@@ -17,6 +17,7 @@ import (
 	antifraudPlugin "xraytool/internal/plugins/antifraud"
 	apiServerPlugin "xraytool/internal/plugins/api_server"
 	billingPlugin "xraytool/internal/plugins/billing"
+	clusterReplicationPlugin "xraytool/internal/plugins/cluster_replication"
 	storagePlugin "xraytool/internal/plugins/config_storage"
 	corePlugin "xraytool/internal/plugins/core"
 	enginePlugin "xraytool/internal/plugins/engine_xray"
@@ -57,6 +58,7 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 		// Antifraud: multi-IP soft-ban, log tailing.
 		// Config keys under plugins.antifraud.config: enabled, log_path, max_ips, ...
 		"antifraud": func() pluginapi.Plugin { return antifraudPlugin.New() },
+		"cluster_replication": func() pluginapi.Plugin { return clusterReplicationPlugin.NewCLI(cfg) },
 
 		// ── Phase 1.5: Xray Engine plugin ─────────────────────────────────────
 		// engine_xray is disabled=false but its factory is passed via NewFromAdapter

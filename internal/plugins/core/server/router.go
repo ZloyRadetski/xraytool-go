@@ -70,11 +70,6 @@ type Router struct {
 	identityProvider pluginapi.IdentityProvider
 	// registry is set on slave nodes so that sync handlers can read/write SyncEvents.
 	registry domain.Registry
-	// clusterSync is set when the optional cluster_sync plugin supports HTTP
-	// snapshot/state operations. clusterCommands is its optional admin-command
-	// propagation capability.
-	clusterSync     pluginapi.ClusterSyncHTTPProvider
-	clusterCommands pluginapi.ClusterCommandPropagator
 	// antifraud hooks — nil when the module is disabled.
 	isBanned    func(email string) bool
 	forceUnban  func(context.Context, string) error
@@ -215,43 +210,6 @@ func (r *Router) paymentProvider(method string) (pluginapi.PaymentProvider, bool
 	return provider, ok
 }
 
-// WithClusterSyncProvider injects optional cluster capabilities exposed by a
-// loaded cluster_sync plugin. It is deliberately narrow: a provider can offer
-// scheduled sync only, HTTP snapshot/state endpoints only, or command
-// propagation as separate capabilities.
-func (r *Router) WithClusterSyncProvider(provider pluginapi.ClusterSyncProvider) *Router {
-	r.clusterSync = nil
-	r.clusterCommands = nil
-	if provider == nil {
-		return r
-	}
-	if syncProvider, ok := provider.(pluginapi.ClusterSyncHTTPProvider); ok {
-		r.clusterSync = syncProvider
-	}
-	if commandProvider, ok := provider.(pluginapi.ClusterCommandPropagator); ok {
-		r.clusterCommands = commandProvider
-	}
-	return r
-}
-
-// propagateClusterCommand delivers an administrative user mutation through
-// the loaded cluster plugin. A single-node installation deliberately has no
-// provider, making this a safe no-op rather than constructing a slave client
-// in the HTTP layer.
-func (r *Router) propagateClusterCommand(command string, params map[string]string) {
-	provider := r.clusterCommands
-	if provider == nil {
-		return
-	}
-	r.bgTasks.Add(1)
-	go func() {
-		defer r.bgTasks.Done()
-		if err := provider.PropagateCommand(context.Background(), command, params); err != nil {
-			r.log.Warn("cluster command propagation failed", "command", command, "err", err)
-		}
-	}()
-}
-
 // ServeHTTP implements http.Handler.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mux.ServeHTTP(w, req)
@@ -320,12 +278,9 @@ func (r *Router) registerRoutes() {
 	r.mux.Handle("GET /api/v1/admin/antifraud/state", protected(r.handleAdminAntiFraudState))
 
 	// Internal — existing single-action sync endpoint (kept for backward compat).
-	r.mux.Handle("POST /api/v1/internal/xray/sync", protected(r.handleInternalXraySync))
 
 	// ── New sync endpoints (master serves, slave pulls) ───────────────────────
 	// Master-side: slave calls these to get state info and snapshot chunks.
-	r.mux.Handle("GET /api/v1/internal/xray/sync/snapshot", protected(r.handleSyncSnapshot))
-	r.mux.Handle("GET /api/v1/internal/xray/sync/state", protected(r.handleSyncState))
 
 	// ── Catch-all ─────────────────────────────────────────────────────────────
 	r.mux.HandleFunc("/", r.handleNotFound)
@@ -406,14 +361,6 @@ func (r *Router) AuthMiddleware(next http.Handler) http.Handler {
 		key := req.Header.Get("X-API-Key")
 
 		isValid := subtle.ConstantTimeCompare([]byte(key), []byte(r.apiKey)) == 1
-		if !isValid && r.cfg != nil {
-			for _, srv := range r.cfg.SlaveServers {
-				if srv.APIKey != "" && subtle.ConstantTimeCompare([]byte(key), []byte(srv.APIKey)) == 1 {
-					isValid = true
-					break
-				}
-			}
-		}
 
 		if !isValid {
 			r.logIntruder(req, "invalid or missing X-API-Key")

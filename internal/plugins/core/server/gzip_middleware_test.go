@@ -98,7 +98,7 @@ func TestGzipMiddleware_NoCompressionWithoutHeader(t *testing.T) {
 // handler reads it.
 func TestGzipMiddleware_DecompressesRequest(t *testing.T) {
 	r := newGzipTestRouter()
-	expectedBody := `{"action":"sync-delta","payload":"hello"}`
+	expectedBody := `{"action":"compressed-test","payload":"hello"}`
 
 	// Gzip-compress the request body.
 	var buf bytes.Buffer

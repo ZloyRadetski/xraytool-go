@@ -74,6 +74,7 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Mandatory:   false,
 		Requires: []pluginapi.ServiceRef{
 			{Name: "domain_registry", Optional: false},
+			{Name: pluginapi.ServiceClusterReplicationProvider, Optional: true},
 		},
 		Publishes: []pluginapi.ServiceRef{
 			{Name: "antifraud_provider"},
@@ -97,6 +98,14 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 			return fmt.Errorf("antifraud: domain_registry has unexpected type %T", resolved)
 		}
 	}
+	reporter := p.runtime.Reporter
+	if reporter == nil && p.cfg.ReportToMaster && reg != nil {
+		if value, resolveErr := reg.Resolve(pluginapi.ServiceClusterReplicationProvider); resolveErr == nil {
+			if relay, ok := value.(pluginapi.ReplicationFraudRelay); ok {
+				reporter = replicationFraudReporter{relay: relay}
+			}
+		}
+	}
 	if registry != nil && p.runtime.Banner != nil && p.runtime.LoggerCtl != nil {
 		p.module = NewModule(
 			p.cfg,
@@ -104,7 +113,7 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 			p.runtime.Banner,
 			p.runtime.LoggerCtl,
 			p.runtime.Propagator,
-			p.runtime.Reporter,
+			reporter,
 			slog.Default(),
 		)
 		if p.banSink != nil {
@@ -119,6 +128,18 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 		)
 	}
 	return nil
+}
+
+type replicationFraudReporter struct {
+	relay pluginapi.ReplicationFraudRelay
+}
+
+func (r replicationFraudReporter) Report(events []domain.FraudEvent) error {
+	payload := make([]pluginapi.FraudEvent, len(events))
+	for index, event := range events {
+		payload[index] = pluginapi.FraudEvent{Email: event.Email, IP: event.IP}
+	}
+	return r.relay.ReportFraudEvents(context.Background(), payload)
 }
 
 // InitWithDependencies is called by the kernel after Init(), injecting the

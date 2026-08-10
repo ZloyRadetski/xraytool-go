@@ -16,20 +16,18 @@ Only modifies existing clients in the engine that match by email.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			requireRoot() //nolint:errcheck
 
-			svc := deps.SyncSvc
-			if svc == nil {
-				return fmt.Errorf("cluster_sync plugin is not configured on this node")
+			if deps.ReplicationService == nil {
+				return fmt.Errorf("cluster_replication is not configured on this master")
 			}
-			changed, err := svc.SelfHealMasterUUIDs(cmd.Context())
+			users, err := deps.ReplicationService.BuildSnapshot(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("failed to sync UUIDs: %w", err)
+				return fmt.Errorf("failed to build desired users: %w", err)
 			}
-
-			if changed {
-				fmt.Printf("[OK] Sync complete.\n")
-			} else {
-				fmt.Printf("[INFO] No clients needed updating.\n")
+			result, err := deps.Engine.SyncUsers(cmd.Context(), users, true)
+			if err != nil {
+				return fmt.Errorf("failed to sync engine: %w", err)
 			}
+			fmt.Printf("[OK] Sync complete: %d added, %d removed.\n", result.Added, result.Removed)
 
 			return nil
 		},

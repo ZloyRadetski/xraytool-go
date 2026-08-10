@@ -756,6 +756,16 @@ func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig,
 	return a.syncUsersLocked(ctx, dbUsers, removeOrphans)
 }
 
+// ReconcileUsers deliberately bypasses the cached desired-state hash. Slave
+// replication uses it to repair an edited generated config even when the
+// desired users in the database have not changed.
+func (a *Adapter) ReconcileUsers(ctx context.Context, dbUsers []domain.VPNUserConfig) (*domain.EngineSyncResult, error) {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	a.invalidateHash()
+	return a.syncUsersLocked(ctx, dbUsers, true)
+}
+
 func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
 	_ = context.WithoutCancel(ctx)
 	result := &domain.EngineSyncResult{}

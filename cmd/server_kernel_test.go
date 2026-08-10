@@ -40,10 +40,10 @@ func TestBuildPluginsConfig_UsesTypedPluginAndEngineSections(t *testing.T) {
 				Source:  "builtin",
 				Config:  map[string]any{"from_email": "noreply@example.test"},
 			},
-			"cluster_sync": {
+			"cluster_replication": {
 				Enabled: true,
 				Source:  "builtin",
-				Config:  map[string]any{"sync_interval": "3m"},
+				Config:  map[string]any{"mode": "master"},
 			},
 		},
 		Engines: appconfig.EnginesConf{Entries: map[string]appconfig.PluginConf{
@@ -60,7 +60,7 @@ func TestBuildPluginsConfig_UsesTypedPluginAndEngineSections(t *testing.T) {
 	require.True(t, plugins["core"].Enabled)
 	require.Equal(t, "value", plugins["core"].Config["core_option"])
 	require.True(t, plugins["mailer_resend"].Enabled)
-	require.True(t, plugins["cluster_sync"].Enabled)
+	require.True(t, plugins["cluster_replication"].Enabled)
 	require.True(t, plugins["engine_xray"].Enabled)
 	require.Equal(t, "127.0.0.1:10085", plugins["engine_xray"].Config["grpc_addr"])
 

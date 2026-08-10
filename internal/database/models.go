@@ -164,36 +164,3 @@ type AntifraudBan struct {
 	// Reason contains a human-readable description, e.g. "5 unique IPs in 3m (limit 3)".
 	Reason string `gorm:"type:text"`
 }
-
-// SyncEvent is an append-only changelog of VPN-user changes on the master node.
-// Each mutation (add / update / remove) is appended here inside the same
-// transaction that mutates subscriptions/bans, so event_id is the natural
-// source-of-truth for "what happened since last sync".
-//
-// On slave nodes the table is write-once too: applied events are inserted
-// so that last_event_id is queryable without a separate sync_state row.
-type SyncEvent struct {
-	// ID is the globally monotone event sequence number.
-	ID int64 `gorm:"primaryKey;autoIncrement"`
-	// Action is one of: "add", "remove", "update".
-	Action string `gorm:"type:text;not null;index"`
-	// Payload is the JSON-serialised domain.VPNUserConfig for this event.
-	Payload string `gorm:"type:text;not null"`
-	// CreatedAt is set by GORM automatically.
-	CreatedAt time.Time `gorm:"index"`
-}
-
-// SyncState stores the single-row summary of the current sync position.
-// ID is always 1 (upserted). Both master and slave maintain their own row.
-type SyncState struct {
-	// ID is always 1.
-	ID int64 `gorm:"primaryKey"`
-	// LastEventID is the highest SyncEvent.ID that has been successfully applied
-	// on this node (or published, for master).
-	LastEventID int64 `gorm:"not null;default:0"`
-	// StateHash is a rolling SHA-256 checksum maintained incrementally:
-	//   new_hash = sha256(old_hash + event_id + action + payload)
-	// An empty string means "no events yet".
-	StateHash string `gorm:"type:text;not null;default:''"`
-	UpdatedAt time.Time
-}

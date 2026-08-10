@@ -131,7 +131,7 @@ func (s *Service) GenerateClusterStats(inferredMode bool, statePath string) ([]M
 	var slaveTotals []domain.SlaveUserTotal
 	var slaveReport domain.SlaveReport
 
-	if !inferredMode && s.cfg.IsMaster {
+	if !inferredMode && s.cfg.IsMaster && s.clusterProvider != nil {
 		slaveTotals, slaveReport = s.clusterProvider.CollectSlaveTotals()
 	}
 

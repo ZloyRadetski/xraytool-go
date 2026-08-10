@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -47,27 +46,15 @@ func rotateKeysCmd(deps *AppDeps) *cobra.Command {
 			fmt.Printf("  Public Key: %s\n", keys.PublicKey)
 			fmt.Println("  Short IDs count:", len(keys.ShortIDs))
 
-			// 3. Trigger config regeneration locally on master (by syncing to Xray)
-			// Wait, calling SyncAllSlaves will sync to all slaves. But we also want to sync to master itself!
-			// Does Master run Xray? Yes, Master itself can also run Xray. The syncStatesCmd also runs self-heal.
-			// Let's run statesync propagation to all slaves.
+			// 3. The replication plugin reads the new key artifact and sends it over
+			// its mTLS stream; no HTTP push of key material is used.
 			if deps.Cfg.IsMaster() {
-				if deps.SlaveProvider != nil {
-					fmt.Println("INFO|Propagating new keys to all Slaves...")
-					results, err := deps.SlaveProvider.SyncAllSlaves(context.Background(), false, false)
-					if err != nil {
-						fmt.Printf("WARNING|Failed to sync slaves: %v\n", err)
-					} else {
-						for _, res := range results {
-							if res.Success {
-								fmt.Printf("  [OK] %s: Keys and state synchronized\n", res.ServerName)
-							} else {
-								fmt.Printf("  [FAIL] %s: %v\n", res.ServerName, res.Error)
-							}
-						}
-					}
+				if deps.ReplicationService == nil {
+					fmt.Println("WARNING|cluster_replication is not configured; keys will not be replicated")
+				} else if _, err := deps.ReplicationService.PublishArtifacts(cmd.Context(), keysPath); err != nil {
+					fmt.Printf("WARNING|Failed to publish key artifact: %v\n", err)
 				}
-				fmt.Println("INFO|Keys successfully rotated and propagated across the cluster.")
+				fmt.Println("INFO|Keys successfully rotated; connected slaves will receive the artifact.")
 			} else {
 				fmt.Println("INFO|Keys rotated locally. Note: Slaves should receive keys from Master instead of rotating locally.")
 			}

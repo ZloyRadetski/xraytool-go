@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "node_id", "ca_file", "cert_file", "key_file"],
+  "properties": {
+    "mode": {"type": "string", "enum": ["master", "slave"]},
+    "node_id": {"type": "string", "minLength": 1},
+    "listen_address": {"type": "string"},
+    "master_address": {"type": "string"},
+    "allowed_nodes": {"type": "array", "items": {"type": "string"}},
+    "ca_file": {"type": "string", "minLength": 1},
+    "cert_file": {"type": "string", "minLength": 1},
+    "key_file": {"type": "string", "minLength": 1},
+    "server_name": {"type": "string"},
+    "reconnect_interval": {"type": "string"},
+    "drift_interval": {"type": "string"},
+    "master_scan_interval": {"type": "string"},
+    "stats_interval": {"type": "string"},
+    "reality_keys_path": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"mode": {"const": "master"}}},
+      "then": {"required": ["listen_address", "allowed_nodes"]}
+    },
+    {
+      "if": {"properties": {"mode": {"const": "slave"}}},
+      "then": {"required": ["master_address"]}
+    }
+  ]
+}

@@ -26,7 +26,7 @@ func TestBuiltinRegistryMinimalExcludesOptionalBuiltinPlugins(t *testing.T) {
 			t.Errorf("minimal BuiltinRegistry does not register %q", name)
 		}
 	}
-	for _, name := range []string{"engine_singbox", "antifraud", "mailer_resend", "eventsink_webhook", "payment_platega", "cluster_sync"} {
+	for _, name := range []string{"engine_singbox", "antifraud", "mailer_resend", "eventsink_webhook", "payment_platega", "cluster_replication"} {
 		if registry[name] != nil {
 			t.Errorf("minimal BuiltinRegistry unexpectedly registers %q", name)
 		}

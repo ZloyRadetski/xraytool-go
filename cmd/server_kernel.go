@@ -108,7 +108,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			Propagator: deps.Propagator,
 		})
 	}
-	// Populate optional built-in factories (antifraud, cluster_sync, …).
+	// Populate optional built-in factories (antifraud, cluster_replication, …).
 	// configureOptionalPluginFactories is defined in server_kernel_optional.go
 	// (build tag !minimal) and builds the fraud reporter for slave nodes.
 	configureOptionalPluginFactories(factories, deps, vpnEngine, nil)
@@ -212,18 +212,9 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 				"log_path", cfg.AntiFraud.LogPath, "max_ips", cfg.AntiFraud.MaxIPs)
 		}
 
-		if csProvider, ok := host.PluginByName("cluster_sync").(pluginapi.ClusterSyncProvider); ok && csProvider != nil {
-			apiRouter.WithClusterSyncProvider(csProvider)
-			slog.Info("[KERNEL] Cluster Sync plugin wired")
-		}
-
 		// ── Sync service (slave mode) ─────────────────────────────────────────
-		if !cfg.IsMaster() {
-			apiRouter.WithSyncService(nil, deps.Registry)
-		}
-
 		// Workers are now started inside the core plugin's Start() method.
-		// SyncStates worker is managed by the clustersync plugin's Start() method.
+		// Replication workers are managed by the cluster_replication plugin.
 	}
 
 	// ── Step 9: HTTP server ───────────────────────────────────────────────────

@@ -1,0 +1,12 @@
+name: cluster_replication
+kind: cluster_replication
+version: 1.0.0
+api_version: "1"
+description: Durable mTLS gRPC master-to-slave replication with outbox, inbox and drift repair.
+type: internal
+config_schema: ../../pluginmanifest/schemas/cluster_replication.schema.json
+publishes:
+  - cluster_replication_provider
+requires:
+  - domain_registry
+  - domain_engine

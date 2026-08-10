@@ -1,15 +1,11 @@
 // Package commandruntime owns the transitional composition used by the CLI.
 //
-// The public CLI is deliberately kept free from imports of the legacy
-// antifraud/payment/slave/statesync implementations.  Server commands now use
-// PluginHost; the remaining command-line utilities still need the existing
-// domain adapters while they are migrated to plugin services.  Keeping that
-// compatibility wiring here makes the boundary explicit and gives those
-// commands one place to retire from later.
+// The public CLI is deliberately kept free from transport implementations.
+// Server commands use PluginHost; this package only assembles shared domain
+// adapters and the master-side replication publisher.
 package commandruntime
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,6 +16,7 @@ import (
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
 	"xraytool/internal/plugins/billing"
+	clusterreplication "xraytool/internal/plugins/cluster_replication"
 	"xraytool/internal/plugins/core/user"
 	vpn "xraytool/internal/plugins/engine_xray"
 )
@@ -35,32 +32,18 @@ type LoadOptions struct {
 // Dependencies are the resources exposed to CLI command handlers during the
 // migration.  Concrete legacy types are intentionally contained in this
 // bridge, not constructed by package cmd.
-//
-// SyncSvc remains exposed temporarily because older administrative commands
-// use its self-healing operation.  New server code must use the cluster_sync
-// plugin instead.
 type Dependencies struct {
-	Cfg             *appconfig.Config
-	Registry        domain.Registry
-	Engine          domain.Engine
-	Dispatcher      *events.Dispatcher
-	UserSvc         *user.Service
-	PaymentSvc      *billing.Service
-	Propagator      domain.EventPropagator
-	ClusterProvider domain.ClusterStatsProvider
-	SlaveProvider   domain.StateSyncSlaveProvider
-	SyncSvc         SyncService
+	Cfg                *appconfig.Config
+	Registry           domain.Registry
+	Engine             domain.Engine
+	Dispatcher         *events.Dispatcher
+	UserSvc            *user.Service
+	PaymentSvc         *billing.Service
+	Propagator         domain.EventPropagator
+	ReplicationService *clusterreplication.Service
+	ClusterProvider    domain.ClusterStatsProvider
 
 	cleanup []func()
-}
-
-// SyncService is the small compatibility surface used by administrative CLI
-// commands and the legacy sync worker. Keeping it as a domain-facing
-// interface lets a `-tags minimal` binary omit internal/statesync entirely.
-type SyncService interface {
-	SelfHealMasterUUIDs(context.Context) (bool, error)
-	SyncAllSlaves(context.Context, bool, bool) ([]domain.SyncResult, error)
-	PurgeOldEvents(context.Context)
 }
 
 // RunCleanup executes all registered cleanup functions exactly once.
@@ -115,8 +98,7 @@ func Load(configPath string, options LoadOptions) (*Dependencies, error) {
 	})
 
 	// Engine construction stays in this migration bridge for the non-server
-	// CLI.  The PluginHost server wraps this same instance in engine_xray,
-	// preventing a second adapter from diverging from state synchronisation.
+	// CLI. The PluginHost server reuses this same instance.
 	deps.Engine = vpn.NewAdapter(
 		cfg.Xray.APIAddr,
 		cfg.Paths.XrayConfig,
@@ -127,7 +109,7 @@ func Load(configPath string, options LoadOptions) (*Dependencies, error) {
 		slog.Default(),
 	)
 
-	configureClusterCompatibility(deps)
+	configureReplicationRuntime(deps)
 
 	if !options.PluginHostServer {
 		deps.Dispatcher = events.NewDispatcher(&events.Config{})

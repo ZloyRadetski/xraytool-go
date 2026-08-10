@@ -815,7 +815,11 @@ X-API-Key: secret
 ---
 ## ⚙️ Внутренние методы (Internal)
 
-### 32. `POST /api/v1/internal/xray/sync`
+### 32. Cluster replication (gRPC only)
+
+The historic HTTP synchronisation endpoint `POST /api/v1/internal/xray/sync` and its `/state` and `/snapshot` variants were removed. Cluster traffic now uses the `cluster_replication` plugin: a TLS 1.3 mTLS gRPC stream with durable outbox/inbox positions, framed user snapshots, configuration artifacts and automatic slave drift repair. It is not part of the public REST API. See [cluster replication](cluster_replication.md) for configuration and migration.
+
+The material below is retained only as an archival description of the removed endpoint; do not implement or call it.
 Единый роут для кластерной синхронизации и общения Master-Slave. Принимает тело JSON, где поле `action` определяет операцию.
 
 **Пример синхронизации пакета изменений (apply-batch):**
@@ -848,7 +852,7 @@ X-API-Key: secret
 ```
 *(Поддерживаемые actions: `apply-batch`, `newuser`, `rmuser`, `setexpire`, `limit`, `setlimit`, `unlimit`, `usersnapshot`, `cli-stats`, `antifraud-events`)*
 
-### 32.1. `GET /api/v1/internal/xray/sync/state`
+### 32.1. Removed historical `GET /api/v1/internal/xray/sync/state`
 
 Возвращает состояние master-узла для быстрой проверки расхождения со slave. Доступен только если подключён cluster-sync provider.
 
@@ -859,7 +863,7 @@ X-API-Key: secret
 
 Ответ `200 OK` содержит актуальные `last_event_id` и `state_hash`. Если provider не подключён, возвращается `503`.
 
-### 32.2. `GET /api/v1/internal/xray/sync/snapshot`
+### 32.2. Removed historical `GET /api/v1/internal/xray/sync/snapshot`
 
 Возвращает страницу полного снимка VPN-пользователей для slave-узла.
 

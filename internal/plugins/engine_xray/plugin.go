@@ -14,7 +14,6 @@ import (
 
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
-	
 )
 
 // pluginConfig holds parsed RawConfig for engine_xray.
@@ -236,7 +235,7 @@ func (p *Plugin) SyncUsers(ctx context.Context, dbUsers []pluginapi.VPNUserConfi
 
 // Adapter returns the underlying Adapter.
 // Used by server_kernel.go to pass the engine to code that still accepts
-// domain.Engine directly (workers, statesync, router).
+// domain.Engine directly (workers and router).
 // Removed in Phase 3 when all callers use EngineProvider via ServiceRegistry.
 func (p *Plugin) Adapter() *Adapter { return p.adapter }
 

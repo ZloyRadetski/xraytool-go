@@ -86,7 +86,7 @@ func autoMigrate(db *gorm.DB) error {
 	// Legacy commands still request one monolithic migration pass. Keep that
 	// compatibility path, but delegate to the same owner-specific schema
 	// functions used by PluginDBHandle so the table ownership cannot drift.
-	for _, pluginName := range []string{"core", "antifraud", "cluster_sync"} {
+	for _, pluginName := range []string{"core", "antifraud"} {
 		if err := applyBuiltinPluginSchema(db, pluginName, 1); err != nil {
 			return fmt.Errorf("database: auto-migrate %s failed: %w", pluginName, err)
 		}

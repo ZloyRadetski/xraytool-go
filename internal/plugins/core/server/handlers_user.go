@@ -993,9 +993,6 @@ func (r *Router) handleAdminBlockUser(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// 4. Propagate through the optional cluster_sync plugin.
-	r.propagateClusterCommand("rmuser", map[string]string{"email": sub.Email})
-
 	r.log.Warn("admin action", "action", "block", "email", email, "caller_ip", getClientIP(req))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -1243,14 +1240,6 @@ func (r *Router) unbanUserInXray(sub domain.Subscription) {
 		r.log.Error("failed to add user to engine for unban", "email", sub.Email, "err", err)
 	}
 
-	r.propagateClusterCommand("newuser", map[string]string{
-		"email":   sub.Email,
-		"uuid":    sub.UUID,
-		"subfile": subfile,
-		"expire":  expireVal,
-		"auth":    "",
-		"limit":   fmt.Sprintf("%d", limitInt),
-	})
 }
 
 // POST /api/v1/admin/users/{platform}/{id}/global-ban
@@ -1279,8 +1268,6 @@ func (r *Router) handleAdminGlobalBan(w http.ResponseWriter, req *http.Request) 
 			r.log.Warn("global-ban: engine remove failed", "email", sub.Email, "err", err)
 		}
 
-		// Optional cluster propagation is owned by the cluster_sync plugin.
-		r.propagateClusterCommand("rmuser", map[string]string{"email": sub.Email})
 	}
 
 	r.log.Warn("admin action", "action", "global-ban", "id", idStr, "caller_ip", getClientIP(req))
@@ -1377,7 +1364,6 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 			r.log.Error("failed to remove user from engine", "email", sub.Email, "err", err)
 		}
 
-		r.propagateClusterCommand("rmuser", map[string]string{"email": sub.Email})
 	}
 
 	r.log.Warn("admin action", "action", "delete-user", "id", idStr, "caller_ip", getClientIP(req))

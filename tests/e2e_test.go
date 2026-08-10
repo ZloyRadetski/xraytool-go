@@ -123,8 +123,6 @@ paths:
   hy2_config_yaml: %q
   geoip_dat: %q
   geosite_dat: %q
-master_api:
-  api_key: "%s"
 ports:
   api_server: 18080
 database:
@@ -143,7 +141,7 @@ plugins:
 `,
 		apiKey, xrayConfigAbs, statsStateAbs, inferredStatsAbs,
 		jsonSubAbs, routingAbs, routingRuAbs,
-		hy2ConfigAbs, geoipAbs, geositeAbs, apiKey, tempDBPath)
+		hy2ConfigAbs, geoipAbs, geositeAbs, tempDBPath)
 
 	if err := os.WriteFile(configYamlPath, []byte(yamlContent), 0644); err != nil {
 		fmt.Printf("Failed to write config_e2e.yaml: %v\n", err)

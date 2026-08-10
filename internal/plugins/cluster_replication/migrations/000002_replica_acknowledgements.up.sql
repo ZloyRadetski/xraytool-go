@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS cluster_replication_replicas (
+  node_id TEXT PRIMARY KEY,
+  acknowledged_revision INTEGER NOT NULL DEFAULT 0,
+  connected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

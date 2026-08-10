@@ -109,6 +109,14 @@ type StaticClientSynchronizer interface {
 	ApplyStaticClientSnapshot(ctx context.Context, inbounds []StaticInboundClients) error
 }
 
+// DriftReconciler restores the managed part of an engine configuration from a
+// known desired state. It is intentionally separate from Engine: replication
+// uses it on slave nodes to repair manual edits without making every caller pay
+// for a forced configuration rewrite.
+type DriftReconciler interface {
+	ReconcileUsers(ctx context.Context, users []VPNUserConfig) (*EngineSyncResult, error)
+}
+
 // Engine combines all the granular interfaces.
 type Engine interface {
 	UserMutator

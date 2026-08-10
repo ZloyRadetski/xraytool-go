@@ -170,10 +170,6 @@ xray:
 stats:
   bucket_seconds: 0
   detailed_retention_days: 0
-slave_api:
-  connect_timeout: 0s
-  request_timeout: 0s
-  remote_path: ""
 ports:
   api_server: 0
 logging:
@@ -192,7 +188,6 @@ subscription:
 	defs := defaults()
 	if cfg.Paths.XrayConfig != defs.Paths.XrayConfig ||
 		cfg.Stats.BucketSeconds != defs.Stats.BucketSeconds ||
-		cfg.SlaveAPI.ConnectTimeout != defs.SlaveAPI.ConnectTimeout ||
 		cfg.Ports.APIServer != defs.Ports.APIServer ||
 		cfg.Logging.Level != defs.Logging.Level ||
 		cfg.Paths.InferredStats != defs.Paths.InferredStats ||
@@ -203,8 +198,6 @@ subscription:
 		cfg.Paths.GeositeDat != defs.Paths.GeositeDat ||
 		cfg.Xray.APIAddr != defs.Xray.APIAddr ||
 		cfg.Stats.DetailedRetentionDays != defs.Stats.DetailedRetentionDays ||
-		cfg.SlaveAPI.RequestTimeout != defs.SlaveAPI.RequestTimeout ||
-		cfg.SlaveAPI.RemotePath != defs.SlaveAPI.RemotePath ||
 		cfg.Logging.Format != defs.Logging.Format ||
 		len(cfg.Subscription.UserAgentWhitelist) != len(defs.Subscription.UserAgentWhitelist) ||
 		len(cfg.Subscription.UserAgentNoChecks) != len(defs.Subscription.UserAgentNoChecks) {
@@ -231,6 +224,17 @@ paths:
 	}
 	if cfg.Paths.VlessSubscriptionTemplate != "/legacy/vless.txt" {
 		t.Errorf("Expected legacy vless template to migrate, got %s", cfg.Paths.VlessSubscriptionTemplate)
+	}
+}
+
+func TestLoadRejectsRemovedHTTPSyncConfiguration(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "removed-cluster-config.yaml")
+	if err := os.WriteFile(tmpFile, []byte("master_api:\n  url: https://example.test/api/v1/internal/xray/sync\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(tmpFile)
+	if err == nil || !strings.Contains(err.Error(), "master_api was removed") {
+		t.Fatalf("expected removed master_api error, got %v", err)
 	}
 }
 
