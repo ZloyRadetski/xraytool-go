@@ -62,11 +62,7 @@ v2-шаблоны не используются, а legacy JSON-массивы �
         "sampling": 1
       },
       "strategy": {
-        "type": "leastLoad",
-        "baselines": ["1s"],
-        "expected": 2,
-        "max_rtt": "1s",
-        "tolerance": 0.1
+        "type": "leastPing"
       },
       "fallback": "direct"
     }
@@ -142,4 +138,4 @@ xraytool --config config.yaml subscription render --input configs_v2.json --form
 
 Команды только читают шаблон и ничего не записывают. Валидация проверяет
 ссылки, повторяющиеся ID, структуру outbound, минимальное число участников и
-поддерживаемую стратегию `leastLoad`.
+поддерживаемые стратегии `leastPing` и `leastLoad`.

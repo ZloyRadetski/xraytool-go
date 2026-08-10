@@ -57,9 +57,17 @@ func TestCompileV2BuildsNativeProfiles(t *testing.T) {
 	if len(outbounds) != 3 {
 		t.Fatalf("balancer outbounds = %d, want 3 including direct", len(outbounds))
 	}
+	inbounds, ok := balancer["inbounds"].([]any)
+	if !ok || len(inbounds) != 2 {
+		t.Fatalf("balancer must contain standard client inbounds: %#v", balancer["inbounds"])
+	}
 	first := outbounds[0].(map[string]any)
 	if first["tag"] == "source-tag" || !strings.HasPrefix(first["tag"].(string), "ab_eu_auto_nl_1_") {
 		t.Fatalf("member tag was not isolated: %#v", first["tag"])
+	}
+	strategy := routing["balancers"].([]any)[0].(map[string]any)["strategy"].(map[string]any)
+	if strategy["type"] != "leastPing" {
+		t.Fatalf("default strategy = %#v, want leastPing", strategy)
 	}
 }
 
@@ -99,6 +107,67 @@ func TestCompileV2AllowsBalancerWithOnlyInlineServers(t *testing.T) {
 	}
 	if !result.IsV2 || result.ProfileCount != 1 {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	var profiles []map[string]any
+	if err := stdjson.Unmarshal([]byte(result.JSON), &profiles); err != nil {
+		t.Fatalf("compiled JSON: %v", err)
+	}
+	inbounds, ok := profiles[0]["inbounds"].([]any)
+	if !ok || len(inbounds) != 2 {
+		t.Fatalf("inline auto-balancer must contain fallback inbounds: %#v", profiles[0]["inbounds"])
+	}
+}
+
+func TestCompileV2BalancerKeepsBaseProfileInbounds(t *testing.T) {
+	input := `{
+  "version": 2,
+  "servers": {
+    "one": {"name": "One", "config": {"inbounds": [{"tag": "mixed-in", "protocol": "mixed", "port": 10808}], "dns": {"queryStrategy": "UseIPv4"}, "outbounds": [` + vlessOutbound + `, {"protocol": "freedom", "tag": "direct"}, {"protocol": "blackhole", "tag": "block"}], "routing": {"domainStrategy": "IPIfNonMatch", "rules": [{"type": "field", "domain": ["geosite:private"], "outboundTag": "direct"}, {"type": "field", "outboundTag": "proxy"}]}}},
+    "two": {"name": "Two", "outbound": ` + vlessOutbound + `}
+  },
+  "subscription": [{"type": "auto_balancer", "id": "mixed", "name": "Mixed", "members": [{"ref": "one"}, {"ref": "two"}]}]
+}`
+	result, err := Compile(input)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	var profiles []map[string]any
+	if err := stdjson.Unmarshal([]byte(result.JSON), &profiles); err != nil {
+		t.Fatalf("compiled JSON: %v", err)
+	}
+	inbounds := profiles[0]["inbounds"].([]any)
+	if len(inbounds) != 1 || inbounds[0].(map[string]any)["tag"] != "mixed-in" {
+		t.Fatalf("balancer must retain base inbounds: %#v", inbounds)
+	}
+	if _, ok := profiles[0]["dns"].(map[string]any); !ok {
+		t.Fatalf("balancer must retain base DNS: %#v", profiles[0])
+	}
+	outbounds := profiles[0]["outbounds"].([]any)
+	if len(outbounds) != 4 || outbounds[2].(map[string]any)["tag"] != "direct" || outbounds[3].(map[string]any)["tag"] != "block" {
+		t.Fatalf("balancer must retain support outbounds: %#v", outbounds)
+	}
+	routing := profiles[0]["routing"].(map[string]any)
+	if routing["domainStrategy"] != "IPIfNonMatch" {
+		t.Fatalf("balancer must retain routing options: %#v", routing)
+	}
+	rules := routing["rules"].([]any)
+	if rules[0].(map[string]any)["outboundTag"] != "direct" || rules[1].(map[string]any)["balancerTag"] != "autobalancer_mixed" {
+		t.Fatalf("balancer must preserve direct rules and redirect proxy rules: %#v", rules)
+	}
+}
+
+func TestCompileV2RejectsLeastPingSettings(t *testing.T) {
+	input := `{
+  "version": 2,
+  "servers": {
+    "one": {"name": "One", "outbound": ` + vlessOutbound + `},
+    "two": {"name": "Two", "outbound": ` + vlessOutbound + `}
+  },
+  "subscription": [{"type": "auto_balancer", "id": "invalid", "name": "Invalid", "members": [{"ref": "one"}, {"ref": "two"}], "strategy": {"type": "leastPing", "expected": 2}}]
+}`
+	_, err := Compile(input)
+	if err == nil || !strings.Contains(err.Error(), "leastPing does not support strategy settings") {
+		t.Fatalf("Compile error = %v, want leastPing settings error", err)
 	}
 }
 

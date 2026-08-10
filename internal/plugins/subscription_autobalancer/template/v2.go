@@ -277,7 +277,7 @@ func compileBalancer(path string, item subscriptionItem, servers map[string]serv
 	memberIDs := make(map[string]struct{}, len(item.Members))
 	memberTags := make([]string, 0, len(item.Members))
 	resolvedMembers := make([]server, 0, len(item.Members))
-	outbounds := make([]any, 0, len(item.Members)+1)
+	outbounds := make([]any, 0, len(item.Members)+4)
 	for index, itemMember := range item.Members {
 		memberPath := fmt.Sprintf("%s.members[%d]", path, index)
 		value, err := resolveMember(memberPath, itemMember, servers)
@@ -299,7 +299,6 @@ func compileBalancer(path string, item subscriptionItem, servers map[string]serv
 		outbounds = append(outbounds, outbound)
 		resolvedMembers = append(resolvedMembers, value)
 	}
-	outbounds = append(outbounds, map[string]any{"protocol": "freedom", "tag": "direct"})
 
 	probe := item.Probe
 	if probe.URL == "" {
@@ -319,33 +318,172 @@ func compileBalancer(path string, item subscriptionItem, servers map[string]serv
 	if err != nil {
 		return nil, nil, err
 	}
+	profile, err := baseProfileForBalancer(path, resolvedMembers)
+	if err != nil {
+		return nil, nil, err
+	}
 	balancerTag := "autobalancer_" + item.ID
-	return map[string]any{
-		"remarks": item.Name,
-		"burstObservatory": map[string]any{
-			"subjectSelector": memberTags,
-			"pingConfig": map[string]any{
-				"destination": probe.URL,
-				"interval":    probe.Interval,
-				"timeout":     probe.Timeout,
-				"sampling":    probe.Sampling,
+	for _, outbound := range supportingOutbounds(profile) {
+		outbounds = append(outbounds, outbound)
+	}
+	if !hasOutboundTag(outbounds, "direct") {
+		outbounds = append(outbounds, map[string]any{"protocol": "freedom", "tag": "direct"})
+	}
+	routing, err := routingForBalancer(path, profile, balancerTag, memberTags, strategy)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Auto-balancers must be complete Xray client configurations.  In
+	// particular, clients such as INCY recognize the profile as a full
+	// configuration only when both inbounds and outbounds are present.  Reuse
+	// the first member's client settings where possible so DNS, policy and
+	// inbounds stay aligned with the source server profile.
+	profile["remarks"] = item.Name
+	profile["burstObservatory"] = map[string]any{
+		"subjectSelector": memberTags,
+		"pingConfig": map[string]any{
+			"destination": probe.URL,
+			"interval":    probe.Interval,
+			"timeout":     probe.Timeout,
+			"sampling":    probe.Sampling,
+		},
+	}
+	profile["outbounds"] = outbounds
+	profile["routing"] = routing
+	return profile, resolvedMembers, nil
+}
+
+// baseProfileForBalancer produces a full Xray configuration for an
+// auto-balancer.  Referenced servers usually carry a complete config, which
+// lets the balancer preserve the source DNS, policy and inbound definitions.
+// Inline outbounds have no such base, so use the standard client inbounds.
+func baseProfileForBalancer(path string, members []server) (map[string]any, error) {
+	for _, value := range members {
+		if len(value.Config) == 0 {
+			continue
+		}
+		profile, err := decodeObject(path+" base config for member "+value.ID, value.Config)
+		if err != nil {
+			return nil, err
+		}
+		if !hasInbounds(profile) {
+			profile["inbounds"] = defaultBalancerInbounds()
+		}
+		return profile, nil
+	}
+	return map[string]any{"inbounds": defaultBalancerInbounds()}, nil
+}
+
+func hasInbounds(profile map[string]any) bool {
+	inbounds, ok := profile["inbounds"].([]any)
+	return ok && len(inbounds) > 0
+}
+
+func defaultBalancerInbounds() []any {
+	return []any{
+		map[string]any{
+			"listen":   "127.0.0.1",
+			"port":     10808,
+			"protocol": "socks",
+			"settings": map[string]any{
+				"auth": "noauth",
+				"udp":  true,
 			},
+			"tag": "socks-in",
 		},
-		"outbounds": outbounds,
-		"routing": map[string]any{
-			"balancers": []any{map[string]any{
-				"tag":         balancerTag,
-				"selector":    memberTags,
-				"fallbackTag": "direct",
-				"strategy":    strategy,
-			}},
-			"rules": []any{map[string]any{
-				"type":        "field",
-				"network":     "tcp,udp",
-				"balancerTag": balancerTag,
-			}},
+		map[string]any{
+			"listen":   "127.0.0.1",
+			"port":     10809,
+			"protocol": "http",
+			"settings": map[string]any{
+				"auth": "noauth",
+				"udp":  true,
+			},
+			"tag": "http-in",
 		},
-	}, resolvedMembers, nil
+	}
+}
+
+// supportingOutbounds retains the direct, block and DNS outbounds from the
+// base profile.  Routing rules may refer to those tags, while the source
+// proxy outbound is deliberately replaced by the isolated balancer members.
+func supportingOutbounds(profile map[string]any) []any {
+	rawOutbounds, _ := profile["outbounds"].([]any)
+	result := make([]any, 0, len(rawOutbounds))
+	for _, raw := range rawOutbounds {
+		outbound, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		protocol, _ := outbound["protocol"].(string)
+		if !isNonProxyProtocol(protocol) {
+			continue
+		}
+		copy, err := cloneObject(outbound)
+		if err == nil {
+			result = append(result, copy)
+		}
+	}
+	return result
+}
+
+func hasOutboundTag(outbounds []any, tag string) bool {
+	for _, raw := range outbounds {
+		outbound, ok := raw.(map[string]any)
+		if ok && outbound["tag"] == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func routingForBalancer(path string, profile map[string]any, balancerTag string, memberTags []string, strategy map[string]any) (map[string]any, error) {
+	routing := make(map[string]any)
+	if raw, ok := profile["routing"].(map[string]any); ok {
+		copy, err := cloneObject(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s base routing: %w", path, err)
+		}
+		routing = copy
+	}
+
+	rawRules, _ := routing["rules"].([]any)
+	rules := make([]any, 0, len(rawRules)+1)
+	hasBalancerRule := false
+	for index, raw := range rawRules {
+		rule, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s base routing.rules[%d] must be an object", path, index)
+		}
+		copy, err := cloneObject(rule)
+		if err != nil {
+			return nil, fmt.Errorf("%s base routing.rules[%d]: %w", path, index, err)
+		}
+		if outboundTag, ok := copy["outboundTag"].(string); ok && outboundTag != "direct" && outboundTag != "block" && outboundTag != "dns-out" {
+			delete(copy, "outboundTag")
+			copy["balancerTag"] = balancerTag
+			hasBalancerRule = true
+		} else if _, ok := copy["balancerTag"]; ok {
+			copy["balancerTag"] = balancerTag
+			hasBalancerRule = true
+		}
+		rules = append(rules, copy)
+	}
+	if !hasBalancerRule {
+		rules = append(rules, map[string]any{
+			"type":        "field",
+			"network":     "tcp,udp",
+			"balancerTag": balancerTag,
+		})
+	}
+	routing["rules"] = rules
+	routing["balancers"] = []any{map[string]any{
+		"tag":         balancerTag,
+		"selector":    memberTags,
+		"fallbackTag": "direct",
+		"strategy":    strategy,
+	}}
+	return routing, nil
 }
 
 func profileProxyOutbounds(profile map[string]any) []map[string]any {
@@ -457,10 +595,21 @@ func selectedProxyOutbound(path string, profile map[string]any, tag string) (map
 
 func compiledStrategy(path string, value balancerStrategy) (map[string]any, error) {
 	if value.Type == "" {
-		value.Type = "leastLoad"
+		value.Type = "leastPing"
 	}
-	if value.Type != "leastLoad" {
-		return nil, fmt.Errorf("%s.type currently supports only \"leastLoad\"", path)
+	switch value.Type {
+	case "leastPing":
+		// Xray uses the observation results directly and selects the member
+		// with the lowest RTT. Strategy settings belong to leastLoad only.
+		if len(value.Baselines) != 0 || value.Expected != 0 || value.MaxRTT != "" || value.Tolerance != nil {
+			return nil, fmt.Errorf("%s leastPing does not support strategy settings", path)
+		}
+		return map[string]any{"type": value.Type}, nil
+	case "leastLoad":
+		// leastLoad remains available for templates that explicitly need
+		// stability-based rather than minimum-latency selection.
+	default:
+		return nil, fmt.Errorf("%s.type must be \"leastPing\" or \"leastLoad\", got %q", path, value.Type)
 	}
 	if len(value.Baselines) == 0 {
 		value.Baselines = []string{"1s"}
