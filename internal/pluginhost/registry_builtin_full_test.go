@@ -10,7 +10,7 @@ func TestBuiltinRegistryIncludesDefaultBuiltinPlugins(t *testing.T) {
 	registry := BuiltinRegistry(nil)
 	want := []string{
 		"core",
-		"user_management", "subscription_runtime", "api_server",
+		"user_management", "subscription_runtime", "subscription_autobalancer", "api_server",
 		"pricing_default",
 		"engine_xray",
 

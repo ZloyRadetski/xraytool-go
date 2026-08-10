@@ -1,0 +1,8 @@
+name: subscription_autobalancer
+kind: subscription
+version: 1.0.0
+api_version: "1"
+description: Compiles v2 subscription templates and native Xray auto-balancers.
+type: internal
+publishes:
+  - subscription_template_processor

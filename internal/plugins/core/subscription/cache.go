@@ -30,6 +30,7 @@ type CacheManager struct {
 	trafficProvider         pluginapi.TrafficProvider
 	trafficQuotaProvider    pluginapi.TrafficQuotaProvider
 	formatProvider          pluginapi.SubscriptionFormatProvider
+	templateProcessor       pluginapi.SubscriptionTemplateProcessor
 
 	// Cached Data
 	xrayConfig  xrayconfig.RawConfig
@@ -343,6 +344,23 @@ func (c *CacheManager) SubscriptionFormatProvider() pluginapi.SubscriptionFormat
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.formatProvider
+}
+
+// SetSubscriptionTemplateProcessor installs the optional plugin which owns
+// high-level subscription source formats. The cache itself remains agnostic to
+// every concrete format and simply exposes the processor to delivery code.
+func (c *CacheManager) SetSubscriptionTemplateProcessor(processor pluginapi.SubscriptionTemplateProcessor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.templateProcessor = processor
+}
+
+// SubscriptionTemplateProcessor returns the currently configured source
+// template processor, if any.
+func (c *CacheManager) SubscriptionTemplateProcessor() pluginapi.SubscriptionTemplateProcessor {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.templateProcessor
 }
 
 func (c *CacheManager) refreshRealityKeys() {

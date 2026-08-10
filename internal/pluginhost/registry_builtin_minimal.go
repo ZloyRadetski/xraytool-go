@@ -10,6 +10,7 @@ import (
 	corePlugin "xraytool/internal/plugins/core"
 	enginePlugin "xraytool/internal/plugins/engine_xray"
 	pricingPlugin "xraytool/internal/plugins/pricing_default"
+	autoBalancerPlugin "xraytool/internal/plugins/subscription_autobalancer"
 	subscriptionRuntimePlugin "xraytool/internal/plugins/subscription_runtime"
 	userManagementPlugin "xraytool/internal/plugins/user_management"
 )
@@ -19,11 +20,12 @@ import (
 // plugins in this build.
 func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 	return map[string]func() pluginapi.Plugin{
-		"core":                 func() pluginapi.Plugin { return corePlugin.New(cfg) },
-		"user_management":      func() pluginapi.Plugin { return userManagementPlugin.New(cfg) },
-		"subscription_runtime": func() pluginapi.Plugin { return subscriptionRuntimePlugin.New(cfg) },
-		"api_server":           func() pluginapi.Plugin { return apiServerPlugin.New(cfg) },
-		"pricing_default":      func() pluginapi.Plugin { return pricingPlugin.New() },
-		"engine_xray":          func() pluginapi.Plugin { return enginePlugin.New() },
+		"core":                      func() pluginapi.Plugin { return corePlugin.New(cfg) },
+		"user_management":           func() pluginapi.Plugin { return userManagementPlugin.New(cfg) },
+		"subscription_runtime":      func() pluginapi.Plugin { return subscriptionRuntimePlugin.New(cfg) },
+		"subscription_autobalancer": func() pluginapi.Plugin { return autoBalancerPlugin.New() },
+		"api_server":                func() pluginapi.Plugin { return apiServerPlugin.New(cfg) },
+		"pricing_default":           func() pluginapi.Plugin { return pricingPlugin.New() },
+		"engine_xray":               func() pluginapi.Plugin { return enginePlugin.New() },
 	}
 }

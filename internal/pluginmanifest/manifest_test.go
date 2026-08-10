@@ -61,6 +61,7 @@ func TestBuiltinManifestFilesWithoutConfigSchemaAreValid(t *testing.T) {
 		filepath.Join("..", "plugins", "subscription_format_legacy", "plugin.yaml"),
 		filepath.Join("..", "plugins", "subscription_lifecycle", "plugin.yaml"),
 		filepath.Join("..", "plugins", "subscription_runtime", "plugin.yaml"),
+		filepath.Join("..", "plugins", "subscription_autobalancer", "plugin.yaml"),
 		filepath.Join("..", "plugins", "support_chat", "plugin.yaml"),
 		filepath.Join("..", "plugins", "traffic_file", "plugin.yaml"),
 		filepath.Join("..", "plugins", "user_management", "plugin.yaml"),

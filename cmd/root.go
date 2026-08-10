@@ -70,6 +70,7 @@ func NewRootCmd() *cobra.Command {
 		startServerCmd(deps),
 		kernelServerAlias,
 		convertCmd(deps),
+		subscriptionCmd(deps),
 		migrateLegacyDBCmd(deps),
 		syncXrayCmd(deps),
 		applyBatchCmd(deps),

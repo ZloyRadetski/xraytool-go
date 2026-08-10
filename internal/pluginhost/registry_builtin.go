@@ -27,6 +27,7 @@ import (
 	pricingPlugin "xraytool/internal/plugins/pricing_default"
 	promoPlugin "xraytool/internal/plugins/promo"
 	referralPlugin "xraytool/internal/plugins/referral"
+	autoBalancerPlugin "xraytool/internal/plugins/subscription_autobalancer"
 	formatPlugin "xraytool/internal/plugins/subscription_format_legacy"
 	lifecyclePlugin "xraytool/internal/plugins/subscription_lifecycle"
 	subscriptionRuntimePlugin "xraytool/internal/plugins/subscription_runtime"
@@ -45,11 +46,12 @@ import (
 func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 	return map[string]func() pluginapi.Plugin{
 		// ── Phase 1: Mandatory core plugin ──────────────────────────────────
-		"core":                 func() pluginapi.Plugin { return corePlugin.New(cfg) },
-		"user_management":      func() pluginapi.Plugin { return userManagementPlugin.New(cfg) },
-		"subscription_runtime": func() pluginapi.Plugin { return subscriptionRuntimePlugin.New(cfg) },
-		"api_server":           func() pluginapi.Plugin { return apiServerPlugin.New(cfg) },
-		"config_storage":       func() pluginapi.Plugin { return storagePlugin.New(cfg) },
+		"core":                      func() pluginapi.Plugin { return corePlugin.New(cfg) },
+		"user_management":           func() pluginapi.Plugin { return userManagementPlugin.New(cfg) },
+		"subscription_runtime":      func() pluginapi.Plugin { return subscriptionRuntimePlugin.New(cfg) },
+		"subscription_autobalancer": func() pluginapi.Plugin { return autoBalancerPlugin.New() },
+		"api_server":                func() pluginapi.Plugin { return apiServerPlugin.New(cfg) },
+		"config_storage":            func() pluginapi.Plugin { return storagePlugin.New(cfg) },
 
 		// ── Phase 1.1: Optional built-in plugins ────────────────────────────
 		// Antifraud: multi-IP soft-ban, log tailing.

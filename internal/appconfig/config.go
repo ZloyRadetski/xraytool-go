@@ -435,7 +435,7 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 				"device_limit_default": 3,
 			},
 		},
-		// These three plugins replace the former all-in-one core runtime while
+		// These foundation plugins replace the former all-in-one core runtime while
 		// preserving its service names and HTTP contract.
 		"user_management": {
 			Enabled: true,
@@ -443,6 +443,11 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 			Config:  map[string]any{},
 		},
 		"subscription_runtime": {
+			Enabled: true,
+			Source:  "builtin",
+			Config:  map[string]any{},
+		},
+		"subscription_autobalancer": {
 			Enabled: true,
 			Source:  "builtin",
 			Config:  map[string]any{},
@@ -928,6 +933,9 @@ plugins:
     enabled: true
     source: builtin
   subscription_runtime:
+    enabled: true
+    source: builtin
+  subscription_autobalancer:
     enabled: true
     source: builtin
   api_server:

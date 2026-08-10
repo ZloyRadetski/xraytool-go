@@ -731,7 +731,7 @@ func writePluginGraph(out io.Writer, path string) error {
 	// Runtime materialises the mandatory foundation plugins even for older
 	// config files. Mirror those defaults here so plugin graph represents the
 	// process that start-server will actually compose.
-	for _, name := range []string{"core", "user_management", "subscription_runtime", "api_server"} {
+	for _, name := range []string{"core", "user_management", "subscription_runtime", "subscription_autobalancer", "api_server"} {
 		if _, exists := configured[name]; !exists {
 			configured[name] = configuredPlugin{Name: name, Enabled: true, Source: "builtin"}
 		}

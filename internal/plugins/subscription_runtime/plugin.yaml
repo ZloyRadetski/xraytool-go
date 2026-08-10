@@ -8,3 +8,4 @@ publishes:
   - subscription_cache
 requires:
   - domain_engine
+  - subscription_template_processor

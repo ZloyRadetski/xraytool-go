@@ -486,12 +486,32 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		logger.Errorf("[ProcessSQL] Invalid template config JSON for sub %s", sub.ID)
 		return failResponse(500, "Invalid template config JSON")
 	}
+	deliveryJSON := jsonPayload
+	formatJSON := jsonPayload
+	templateHandled := false
+	if processor := cm.SubscriptionTemplateProcessor(); processor != nil {
+		processed, processErr := processor.ProcessSubscriptionTemplate(ctx, jsonPayload)
+		if processErr != nil {
+			logger.Errorf("[ProcessSQL] Subscription template processor failed for sub %s: %v", sub.ID, processErr)
+			return failResponse(500, "Subscription template processing failed: "+processErr.Error())
+		}
+		if processed.Handled {
+			if strings.TrimSpace(processed.JSONConfig) == "" {
+				return failResponse(500, "Subscription template processor returned empty JSON config")
+			}
+			deliveryJSON = processed.JSONConfig
+			templateHandled = true
+			if strings.TrimSpace(processed.ExportJSONConfig) != "" {
+				formatJSON = processed.ExportJSONConfig
+			}
+		}
+	}
 
 	// Engines can supply native client links independently of any concrete
 	// subscription format. A format provider receives these links below; its
 	// absence intentionally falls back to the legacy Xray conversion package.
 	var pluginLinks []pluginapi.ClientLink
-	if isVlessFormat || isClashFormat {
+	if (isVlessFormat || isClashFormat) && !templateHandled {
 		links, available, contributorErr := cm.BuildClientLinks(ctx, pluginapi.VPNUserConfig{
 			Email:      email,
 			UUID:       uuid,
@@ -510,7 +530,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	if isVlessFormat || isClashFormat {
 		if provider := cm.SubscriptionFormatProvider(); provider != nil {
 			formatted, err := provider.RenderSubscription(ctx, pluginapi.SubscriptionFormatRequest{
-				Format: requestedFormat, JSONConfig: jsonPayload, Links: pluginLinks,
+				Format: requestedFormat, JSONConfig: formatJSON, Links: pluginLinks,
 			})
 			if err != nil {
 				if isVlessFormat {
@@ -535,7 +555,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	// subscription_format_legacy above, so the conversion implementation is
 	// replaceable without changing the subscription hot path.
 	if isVlessFormat {
-		shareLinks, err := convert.XrayJSONToShareText(jsonPayload)
+		shareLinks, err := convert.XrayJSONToShareText(formatJSON)
 		if err != nil {
 			return failResponse(404, "VLESS subscription conversion failed: "+err.Error())
 		}
@@ -550,7 +570,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	}
 
 	if isClashFormat {
-		clashYAML, err := convert.XrayJSONToClashYAML(jsonPayload)
+		clashYAML, err := convert.XrayJSONToClashYAML(formatJSON)
 		if err != nil {
 			return failResponse(404, "Clash subscription conversion failed: "+err.Error())
 		}
@@ -565,6 +585,6 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	}
 
 	res.StatusCode = 200
-	res.Body = jsonPayload
+	res.Body = deliveryJSON
 	return res
 }

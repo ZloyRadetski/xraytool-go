@@ -14,6 +14,7 @@ import (
 	"xraytool/internal/database"
 	"xraytool/internal/events"
 	vpn "xraytool/internal/plugins/engine_xray"
+	autoBalancerPlugin "xraytool/internal/plugins/subscription_autobalancer"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -207,6 +208,54 @@ func TestProcessSQL_RealityRotationPlaceholders(t *testing.T) {
 	assert.Equal(t, 200, res.StatusCode)
 	assert.Contains(t, res.Body, `"pbk": "mock-pub"`)
 	assert.Contains(t, res.Body, `"sid": "mock-sid"`)
+}
+
+func TestProcessSQLCompilesV2AutoBalancerTemplate(t *testing.T) {
+	db := setupTestDB(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+		os.Remove("test_xray_config_balancer.json")
+	}()
+
+	os.WriteFile("test_xray_config_balancer.json", []byte(`{}`), 0644) //nolint:errcheck
+	db.Create(&database.User{ID: "u-balancer", Username: "u-balancer", IsBlocked: false})
+	db.Create(&database.Subscription{
+		ID: "sub-balancer", UserID: "u-balancer", Email: "balancer@example.com", Status: "active",
+		UUID: "11111111-2222-3333-4444-555555555555", MaxDevices: 5,
+	})
+
+	cfg := &appconfig.Config{
+		Paths: appconfig.PathsConf{XrayConfig: "test_xray_config_balancer.json"},
+		Subscription: appconfig.SubscriptionConf{
+			UserAgentWhitelist: []string{"testclient"},
+			UserAgentNoChecks:  []string{"testclient"},
+		},
+	}
+	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm.SetSubscriptionTemplateProcessor(autoBalancerPlugin.New())
+	cm.subTemplate = `{
+  "version": 2,
+  "servers": {
+    "nl": {"name":"Netherlands", "outbound":{"protocol":"vless","settings":{"vnext":[{"address":"nl.example.com","port":443,"users":[{"id":"{UUID}","encryption":"none"}]}]}}},
+    "de": {"name":"Germany", "outbound":{"protocol":"vless","settings":{"vnext":[{"address":"de.example.com","port":443,"users":[{"id":"{UUID}","encryption":"none"}]}]}}}
+  },
+  "subscription": [
+    {"type":"server","ref":"nl"},
+    {"type":"server","ref":"de"},
+    {"type":"auto_balancer","id":"eu","name":"Europe auto","members":[{"ref":"nl"},{"ref":"de"}]}
+  ]
+}`
+
+	res := ProcessSQL(context.Background(), database.NewRegistry(db), cm, events.NewDispatcher(&events.Config{}), &Request{
+		Query: map[string]string{"id": "sub-balancer", "hwid": "device-a"}, UserAgent: "TestClient/1.0", Headers: map[string]string{},
+	}, func(string) bool { return false })
+
+	assert.Equal(t, 200, res.StatusCode)
+	assert.Contains(t, res.Body, `"remarks": "Europe auto"`)
+	assert.Contains(t, res.Body, `"autobalancer_eu"`)
+	assert.Contains(t, res.Body, `"11111111-2222-3333-4444-555555555555"`)
+	assert.NotContains(t, res.Body, `"version": 2`)
 }
 
 func TestProcessSQL_InferredTrafficStats(t *testing.T) {

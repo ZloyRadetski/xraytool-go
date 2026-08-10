@@ -34,11 +34,12 @@ type RawConfig map[string]any
 // them in pluginapi prevents the composition root from importing an optional
 // plugin package merely to obtain a string constant.
 const (
-	ServiceClusterSyncProvider        = "cluster_sync_provider"
-	ServiceIdentityProvider           = "identity_provider"
-	ServiceSubscriptionFormatProvider = "subscription_format_provider"
-	ServiceTrafficProvider            = "traffic_provider"
-	ServiceTrafficQuotaProvider       = "traffic_quota_provider"
+	ServiceClusterSyncProvider           = "cluster_sync_provider"
+	ServiceIdentityProvider              = "identity_provider"
+	ServiceSubscriptionFormatProvider    = "subscription_format_provider"
+	ServiceSubscriptionTemplateProcessor = "subscription_template_processor"
+	ServiceTrafficProvider               = "traffic_provider"
+	ServiceTrafficQuotaProvider          = "traffic_quota_provider"
 )
 
 var (
@@ -811,6 +812,26 @@ type SubscriptionFormatResult struct {
 // from the subscription domain, authentication, and HTTP packages.
 type SubscriptionFormatProvider interface {
 	RenderSubscription(ctx context.Context, request SubscriptionFormatRequest) (SubscriptionFormatResult, error)
+}
+
+// SubscriptionTemplateResult separates the complete JSON profile set delivered
+// to Xray clients from the endpoint-only representation used by portable
+// formats. A template plugin sets Handled only when it recognises the source
+// document; legacy templates therefore continue through the normal path.
+type SubscriptionTemplateResult struct {
+	Handled          bool
+	JSONConfig       string
+	ExportJSONConfig string
+	ProfileCount     int
+	BalancerCount    int
+}
+
+// SubscriptionTemplateProcessor is an optional source-template extension
+// point. Implementations may introduce higher-level JSON source formats (for
+// example an auto-balancer definition) without coupling subscription runtime
+// or format renderers to that format.
+type SubscriptionTemplateProcessor interface {
+	ProcessSubscriptionTemplate(ctx context.Context, jsonConfig string) (SubscriptionTemplateResult, error)
 }
 
 // EngineSyncResult reports what a SyncUsers call did.

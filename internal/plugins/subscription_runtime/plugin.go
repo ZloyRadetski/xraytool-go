@@ -32,6 +32,7 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		},
 		Requires: []pluginapi.ServiceRef{
 			{Name: core.ServiceDomainEngine},
+			{Name: pluginapi.ServiceSubscriptionTemplateProcessor},
 		},
 	}
 }
@@ -49,6 +50,15 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 		return fmt.Errorf("subscription_runtime: %s has unexpected type %T", core.ServiceDomainEngine, engineValue)
 	}
 	p.cache = subscription.NewCacheManager(p.cfg, engine)
+	processorValue, err := reg.Resolve(pluginapi.ServiceSubscriptionTemplateProcessor)
+	if err != nil {
+		return err
+	}
+	processor, ok := processorValue.(pluginapi.SubscriptionTemplateProcessor)
+	if !ok || processor == nil {
+		return fmt.Errorf("subscription_runtime: %s has unexpected type %T", pluginapi.ServiceSubscriptionTemplateProcessor, processorValue)
+	}
+	p.cache.SetSubscriptionTemplateProcessor(processor)
 	p.cache.Refresh()
 	return nil
 }
