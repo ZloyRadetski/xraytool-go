@@ -38,6 +38,7 @@ non_existent_config.yaml
 config*.json
 config*.template.json
 /config*.yaml
+/config*.yaml
 
 # Файлы логов
 *.log

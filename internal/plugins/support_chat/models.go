@@ -1,42 +1,78 @@
 package support_chat
 
-import (
-	"time"
-)
+import "time"
 
-// Conversation represents a support chat between a user and admins.
+const currentEncryptionVersion uint16 = 2
+
+// Conversation contains operational metadata plus encrypted user-facing data.
+// The legacy columns stay mapped only to read and clear records created before
+// encrypted metadata was introduced; new records write empty placeholders to
+// them so existing NOT NULL database constraints remain compatible.
 type Conversation struct {
-	ID        string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
-	UserID    string    `gorm:"index;type:varchar(36);not null" json:"user_id"`
-	Subject   string    `gorm:"type:text" json:"subject"`
-	Status    string    `gorm:"index;type:varchar(20);not null;default:'open'" json:"status"`
-	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
-	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
+	ID        string     `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	UserID    string     `gorm:"-" json:"user_id"`
+	Subject   string     `gorm:"-" json:"subject"`
+	Status    string     `gorm:"index;type:varchar(20);not null;default:'open'" json:"status"`
+	CreatedAt time.Time  `gorm:"autoCreateTime;not null" json:"created_at"`
+	UpdatedAt time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+
+	UserIDCiphertext  []byte `gorm:"type:blob" json:"-"`
+	UserIDNonce       []byte `gorm:"type:blob" json:"-"`
+	UserIDHash        string `gorm:"index;type:varchar(64)" json:"-"`
+	SubjectCiphertext []byte `gorm:"type:blob" json:"-"`
+	SubjectNonce      []byte `gorm:"type:blob" json:"-"`
+	EncryptionVersion uint16 `gorm:"not null;default:0" json:"-"`
+	KeyVersion        uint16 `gorm:"not null;default:0" json:"-"`
+
+	LegacyUserID  string `gorm:"column:user_id;type:varchar(36);not null;default:''" json:"-"`
+	LegacySubject string `gorm:"column:subject;type:text" json:"-"`
 }
 
-// Message represents an encrypted message in a conversation.
+// Message stores an encrypted message body. Sender role and delivery metadata
+// remain queryable to preserve unread counters and chronological rendering.
 type Message struct {
-	ID             string    `gorm:"primaryKey;type:varchar(36)"`
-	ConversationID string    `gorm:"index;type:varchar(36);not null"`
-	SenderRole     string    `gorm:"type:varchar(20);not null"` // 'client' or 'admin'
-	Ciphertext     []byte    `gorm:"type:blob;not null"`
-	Nonce          []byte    `gorm:"type:blob;not null"`
-	ReadAt         *time.Time `gorm:"index"`
-	CreatedAt      time.Time `gorm:"autoCreateTime;not null"`
-	Attachments    []Attachment `gorm:"foreignKey:MessageID"`
+	ID                string       `gorm:"primaryKey;type:varchar(36)"`
+	ConversationID    string       `gorm:"index;type:varchar(36);not null"`
+	SenderRole        string       `gorm:"type:varchar(20);not null"`
+	Ciphertext        []byte       `gorm:"type:blob;not null"`
+	Nonce             []byte       `gorm:"type:blob;not null"`
+	EncryptionVersion uint16       `gorm:"not null;default:0"`
+	KeyVersion        uint16       `gorm:"not null;default:0"`
+	ReadAt            *time.Time   `gorm:"index"`
+	CreatedAt         time.Time    `gorm:"autoCreateTime;not null"`
+	Attachments       []Attachment `gorm:"foreignKey:MessageID"`
 }
 
-// Attachment represents a file (image/video) attached to a message.
+// Attachment stores encrypted metadata and an authenticated encrypted file.
+// File locations are derived from ID rather than stored in plaintext.
 type Attachment struct {
-	ID          string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
-	MessageID   *string   `gorm:"index;type:varchar(36)" json:"message_id,omitempty"` // null until linked
-	UploaderID  string    `gorm:"index;type:varchar(128);not null" json:"-"`          // user_id or admin who uploaded it
-	FileName    string    `gorm:"type:text;not null" json:"file_name"`
-	MimeType    string    `gorm:"type:varchar(128);not null" json:"mime_type"`
-	Size        int64     `gorm:"not null" json:"size"`
-	FileHash    string    `gorm:"index;type:varchar(64)" json:"-"`
-	StoragePath string    `gorm:"type:text;not null" json:"-"`
-	Nonce       []byte    `gorm:"type:blob;not null" json:"-"`
-	CreatedAt   time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
+	ID        string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	MessageID *string   `gorm:"index;type:varchar(36)" json:"message_id,omitempty"`
+	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
+	Nonce     []byte    `gorm:"type:blob" json:"-"` // legacy AES-CTR attachment nonce only
+
+	UploaderID string `gorm:"-" json:"-"`
+	FileName   string `gorm:"-" json:"file_name"`
+	MimeType   string `gorm:"-" json:"mime_type"`
+	Size       int64  `gorm:"-" json:"size"`
+
+	UploaderIDCiphertext []byte `gorm:"type:blob" json:"-"`
+	UploaderIDNonce      []byte `gorm:"type:blob" json:"-"`
+	UploaderIDHash       string `gorm:"index;type:varchar(64)" json:"-"`
+	FileNameCiphertext   []byte `gorm:"type:blob" json:"-"`
+	FileNameNonce        []byte `gorm:"type:blob" json:"-"`
+	MimeTypeCiphertext   []byte `gorm:"type:blob" json:"-"`
+	MimeTypeNonce        []byte `gorm:"type:blob" json:"-"`
+	SizeCiphertext       []byte `gorm:"type:blob" json:"-"`
+	SizeNonce            []byte `gorm:"type:blob" json:"-"`
+	EncryptionVersion    uint16 `gorm:"not null;default:0" json:"-"`
+	KeyVersion           uint16 `gorm:"not null;default:0" json:"-"`
+
+	LegacyUploaderID  string `gorm:"column:uploader_id;type:varchar(128);not null;default:''" json:"-"`
+	LegacyFileName    string `gorm:"column:file_name;type:text;not null;default:''" json:"-"`
+	LegacyMimeType    string `gorm:"column:mime_type;type:varchar(128);not null;default:''" json:"-"`
+	LegacySize        int64  `gorm:"column:size;not null;default:0" json:"-"`
+	LegacyFileHash    string `gorm:"column:file_hash;type:varchar(64)" json:"-"`
+	LegacyStoragePath string `gorm:"column:storage_path;type:text;not null;default:''" json:"-"`
 }

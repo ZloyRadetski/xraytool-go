@@ -1,13 +1,9 @@
 package support_chat
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -43,66 +39,41 @@ func (p *Plugin) handleUploadAttachment() http.HandlerFunc {
 			mimeType = "application/octet-stream"
 		}
 
-		// Calculate file hash
-		hasher := sha256.New()
-		if _, err := io.Copy(hasher, file); err != nil {
-			http.Error(w, "Failed to read file", http.StatusInternalServerError)
+		// New uploads deliberately do not use global deduplication: an ordinary
+		// content hash leaks whether another user uploaded the same file.
+		if err := os.MkdirAll(p.cfg.Media.StoragePath, 0700); err != nil {
+			p.log.Error("Failed to create media directory", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		fileHash := hex.EncodeToString(hasher.Sum(nil))
-
-		// Rewind file for encryption if needed
-		if seeker, ok := file.(io.Seeker); ok {
-			seeker.Seek(0, io.SeekStart)
+		if err := os.Chmod(p.cfg.Media.StoragePath, 0700); err != nil {
+			p.log.Error("Failed to protect media directory", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
-		var size int64
-		var localPath string
-		var nonce []byte
-
-		existing, err := p.store.FindAttachmentByHash(r.Context(), fileHash)
-		if err == nil && existing != nil {
-			// Deduplicate: use existing file on disk
-			localPath = existing.StoragePath
-			nonce = existing.Nonce
-			size = existing.Size
-		} else {
-			// New file: prepare storage and encrypt
-			err = os.MkdirAll(p.cfg.Media.StoragePath, 0755)
-			if err != nil {
-				p.log.Error("Failed to create media directory", "error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
+		attachmentID := uuid.New().String()
+		localPath := attachmentStoragePath(p.cfg.Media.StoragePath, attachmentID)
+		outFile, err := os.OpenFile(localPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			p.log.Error("Failed to create file", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		err = p.store.Crypto().EncryptAttachmentStream(attachmentID, outFile, file)
+		closeErr := outFile.Close()
+		if err != nil || closeErr != nil {
+			_ = os.Remove(localPath)
+			if err == nil {
+				err = closeErr
 			}
-
-			fileName := uuid.New().String() + ".bin"
-			localPath = filepath.Join(p.cfg.Media.StoragePath, fileName)
-			outFile, err := os.Create(localPath)
-			if err != nil {
-				p.log.Error("Failed to create file", "error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			nonce, err = p.store.Crypto().EncryptStream("global_attachments", outFile, file)
-			outFile.Close()
-			if err != nil {
-				os.Remove(localPath)
-				p.log.Error("Failed to encrypt/save file", "error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			fi, _ := os.Stat(localPath)
-			if fi != nil {
-				size = fi.Size()
-			} else {
-				size = handler.Size
-			}
+			p.log.Error("Failed to encrypt/save file", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
 		// Save to DB
-		att, err := p.store.CreateAttachment(r.Context(), userID, handler.Filename, mimeType, size, localPath, nonce, fileHash)
+		att, err := p.store.CreateAttachment(r.Context(), attachmentID, userID, handler.Filename, mimeType, handler.Size)
 		if err != nil {
 			os.Remove(localPath)
 			p.log.Error("Failed to save attachment to db", "error", err)
@@ -161,7 +132,11 @@ func (p *Plugin) handleDownloadAttachment() http.HandlerFunc {
 			}
 		}
 
-		inFile, err := os.Open(att.StoragePath)
+		storagePath := attachmentStoragePath(p.cfg.Media.StoragePath, att.ID)
+		if att.EncryptionVersion < currentEncryptionVersion {
+			storagePath = att.LegacyStoragePath
+		}
+		inFile, err := os.Open(storagePath)
 		if err != nil {
 			p.log.Error("Failed to open media file", "error", err)
 			http.Error(w, "File missing", http.StatusNotFound)
@@ -171,9 +146,13 @@ func (p *Plugin) handleDownloadAttachment() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", att.MimeType)
 		w.Header().Set("Content-Disposition", `inline; filename="`+strings.ReplaceAll(att.FileName, `"`, `\"`)+`"`)
-		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Header().Set("Cache-Control", "no-store")
 
-		err = p.store.Crypto().DecryptStream("global_attachments", w, inFile, att.Nonce)
+		if att.EncryptionVersion >= currentEncryptionVersion {
+			err = p.store.Crypto().DecryptAttachmentStream(att.ID, w, inFile)
+		} else {
+			err = p.store.legacyAttachmentCrypto().DecryptStream("global_attachments", w, inFile, att.Nonce)
+		}
 		if err != nil {
 			p.log.Error("Failed to stream decrypted file", "error", err)
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
@@ -16,8 +17,14 @@ func openDB(cfg DBConfig) (*gorm.DB, error) {
 
 	switch cfg.Driver {
 	case "sqlite":
-		if err := os.MkdirAll(filepath.Dir(cfg.SQLitePath), 0755); err != nil {
-			return nil, fmt.Errorf("failed to create sqlite dir: %w", err)
+		localFile := cfg.SQLitePath != ":memory:" && !strings.HasPrefix(cfg.SQLitePath, "file:")
+		if localFile {
+			if err := os.MkdirAll(filepath.Dir(cfg.SQLitePath), 0700); err != nil {
+				return nil, fmt.Errorf("failed to create sqlite dir: %w", err)
+			}
+			if err := os.Chmod(filepath.Dir(cfg.SQLitePath), 0700); err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("protect sqlite dir: %w", err)
+			}
 		}
 		// Enable foreign keys for sqlite
 		dialector = sqlite.Open(cfg.SQLitePath + "?_fk=1")
@@ -37,6 +44,11 @@ func openDB(cfg DBConfig) (*gorm.DB, error) {
 	// AutoMigrate tables
 	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}); err != nil {
 		return nil, fmt.Errorf("failed to auto migrate: %w", err)
+	}
+	if cfg.Driver == "sqlite" && cfg.SQLitePath != ":memory:" && !strings.HasPrefix(cfg.SQLitePath, "file:") {
+		if err := os.Chmod(cfg.SQLitePath, 0600); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("protect sqlite database: %w", err)
+		}
 	}
 
 	return db, nil

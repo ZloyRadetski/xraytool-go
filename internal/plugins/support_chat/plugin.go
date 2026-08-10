@@ -13,7 +13,8 @@ import (
 
 // Provider implements the SupportChatProvider interface (publishes service).
 type Provider struct {
-	db *gorm.DB
+	db     *gorm.DB
+	crypto *Crypto
 }
 
 // UnreadCount returns the number of unread messages for a user.
@@ -23,9 +24,13 @@ func (p *Provider) UnreadCount(ctx context.Context, userID string) (int, error) 
 	}
 
 	var count int64
+	if p.crypto == nil {
+		return 0, fmt.Errorf("support_chat: crypto not initialised")
+	}
+	userIDHash := p.crypto.BlindIndex("conversation-user-id", userID)
 	err := p.db.WithContext(ctx).Model(&Message{}).
 		Joins("JOIN conversations ON conversations.id = messages.conversation_id").
-		Where("conversations.user_id = ? AND messages.read_at IS NULL AND messages.sender_role = ?", userID, "admin").
+		Where("(conversations.user_id_hash = ? OR (conversations.encryption_version < ? AND conversations.user_id = ?)) AND messages.read_at IS NULL AND messages.sender_role = ?", userIDHash, currentEncryptionVersion, userID, "admin").
 		Count(&count).Error
 
 	return int(count), err
@@ -74,20 +79,37 @@ func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg plugi
 	}
 	p.cfg = cfg
 
-	// Open isolated database
+	crypto, err := NewCrypto(cfg.MasterKey)
+	if err != nil {
+		return fmt.Errorf("support_chat: crypto error: %w", err)
+	}
+	legacyCryptos := make([]*Crypto, 0, len(cfg.LegacyMasterKeys))
+	for _, legacyMasterKey := range cfg.LegacyMasterKeys {
+		legacyCrypto, err := NewCrypto(legacyMasterKey)
+		if err != nil {
+			return fmt.Errorf("support_chat: legacy key config error: %w", err)
+		}
+		legacyCryptos = append(legacyCryptos, legacyCrypto)
+	}
+
+	// Open isolated database only after all key material has been validated.
 	db, err := openDB(cfg.Database)
 	if err != nil {
 		return fmt.Errorf("support_chat: db error: %w", err)
 	}
 	p.db = db
-	p.provider.db = db // Inject DB to provider
-
-	// Init Crypto & Store
-	crypto, err := NewCrypto(cfg.MasterKey)
-	if err != nil {
-		return fmt.Errorf("support_chat: crypto error: %w", err)
+	p.provider.db = db
+	p.provider.crypto = crypto
+	p.store = NewStore(db, crypto, WithLegacyCryptos(legacyCryptos...), WithKeyVersion(cfg.KeyVersion))
+	if cfg.MigrateLegacyData {
+		stats, err := p.store.MigrateLegacyData(ctx, cfg.Media.StoragePath)
+		if err != nil {
+			return fmt.Errorf("support_chat: migrate legacy data: %w", err)
+		}
+		if stats.Conversations+stats.Messages+stats.Attachments > 0 {
+			p.log.Info("support_chat: encrypted legacy data", "conversations", stats.Conversations, "messages", stats.Messages, "attachments", stats.Attachments)
+		}
 	}
-	p.store = NewStore(db, crypto)
 
 	// Resolve UserRepository
 	userRepo, err := reg.Resolve("user_repository")

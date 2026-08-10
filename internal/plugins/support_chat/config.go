@@ -2,20 +2,26 @@ package support_chat
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"xraytool/internal/pluginapi"
 )
 
 type pluginConfig struct {
-	Database         DBConfig
-	MasterKey        string
-	RetentionDays    int
-	MaxOpenPerUser   int
-	WebSocketEnabled bool
-	WSPingInterval   time.Duration
-	WSPongTimeout    time.Duration
-	Media            MediaConfig
+	Database          DBConfig
+	MasterKey         string
+	MasterKeyFile     string
+	LegacyMasterKeys  []string
+	KeyVersion        uint16
+	MigrateLegacyData bool
+	RetentionDays     int
+	MaxOpenPerUser    int
+	WebSocketEnabled  bool
+	WSPingInterval    time.Duration
+	WSPongTimeout     time.Duration
+	Media             MediaConfig
 }
 
 type MediaConfig struct {
@@ -31,11 +37,13 @@ type DBConfig struct {
 
 func parseConfig(raw pluginapi.RawConfig) (pluginConfig, error) {
 	cfg := pluginConfig{
-		RetentionDays:    90,
-		MaxOpenPerUser:   3,
-		WebSocketEnabled: true,
-		WSPingInterval:   30 * time.Second,
-		WSPongTimeout:    10 * time.Second,
+		KeyVersion:        1,
+		MigrateLegacyData: true,
+		RetentionDays:     90,
+		MaxOpenPerUser:    3,
+		WebSocketEnabled:  true,
+		WSPingInterval:    30 * time.Second,
+		WSPongTimeout:     10 * time.Second,
 		Database: DBConfig{
 			Driver:     "sqlite",
 			SQLitePath: "data/support_chat.db",
@@ -52,8 +60,32 @@ func parseConfig(raw pluginapi.RawConfig) (pluginConfig, error) {
 
 	if mk, ok := raw["master_key"].(string); ok && mk != "" {
 		cfg.MasterKey = mk
-	} else {
-		return cfg, fmt.Errorf("master_key is required and must not be empty")
+	}
+	if path, ok := raw["master_key_file"].(string); ok && strings.TrimSpace(path) != "" {
+		cfg.MasterKeyFile = path
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return cfg, fmt.Errorf("read master_key_file: %w", err)
+		}
+		cfg.MasterKey = strings.TrimSpace(string(data))
+	}
+	if cfg.MasterKey == "" {
+		return cfg, fmt.Errorf("master_key or master_key_file is required and must not be empty")
+	}
+	if values, ok := raw["legacy_master_keys"].([]any); ok {
+		for _, value := range values {
+			if key, ok := value.(string); ok && strings.TrimSpace(key) != "" {
+				cfg.LegacyMasterKeys = append(cfg.LegacyMasterKeys, strings.TrimSpace(key))
+			}
+		}
+	}
+	if v, ok := raw["key_version"].(float64); ok && v > 0 && v <= 65535 {
+		cfg.KeyVersion = uint16(v)
+	} else if v, ok := raw["key_version"].(int); ok && v > 0 && v <= 65535 {
+		cfg.KeyVersion = uint16(v)
+	}
+	if v, ok := raw["migrate_legacy_data"].(bool); ok {
+		cfg.MigrateLegacyData = v
 	}
 
 	if dbMap, ok := raw["database"].(map[string]any); ok {

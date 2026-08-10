@@ -499,11 +499,12 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 			Config:  map[string]any{},
 		},
 		"support_chat": {
-			Enabled: true,
+			// Support chat requires a deployment-specific encryption key. It is
+			// deliberately opt-in so a new installation never starts with a
+			// shared development key.
+			Enabled: false,
 			Source:  "builtin",
-			Config: map[string]any{
-				"master_key": "dGVzdF9rZXlfdGVzdF9rZXlfdGVzdF9rZXlfdGVzdF9rZXk=",
-			},
+			Config:  map[string]any{},
 		},
 		"antifraud": {
 			Enabled: cfg.AntiFraud.Enabled,
