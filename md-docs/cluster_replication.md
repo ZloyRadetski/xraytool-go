@@ -1,18 +1,18 @@
-# Cluster replication
+# Репликация кластера
 
-`cluster_replication` is the only master/slave replication mechanism in xraytool. It replaces the removed `cluster_sync` plugin and the HTTP endpoints under `/api/v1/internal/xray/sync`.
+`cluster_replication` — единственный механизм репликации master/slave в xraytool. Он заменяет удалённый плагин `cluster_sync` и HTTP-эндпоинты `/api/v1/internal/xray/sync`.
 
-The master is the only source of truth. Slaves establish a long-lived gRPC connection to it using TLS 1.3 mutual authentication. Each slave writes an inbox record before acknowledging an event, so reconnects safely replay unacknowledged data. Initialisation and forced recovery use a streamed snapshot: every user and configuration artifact is sent as a separate frame rather than as one large JSON request.
+Master — единственный источник истины. Slave устанавливают с ним постоянное gRPC-соединение с взаимной аутентификацией TLS 1.3. Каждый slave сохраняет запись во входящем журнале до подтверждения события, поэтому при переподключении безопасно получает неподтверждённые данные повторно. Для первоначальной и принудительной синхронизации используется потоковый снимок: каждый пользователь и артефакт конфигурации передаётся отдельным кадром, а не огромным JSON-запросом.
 
-## Cutover
+## Переход на новую схему
 
-Upgrade every node to the same xraytool release, install certificates, update the configuration on each node, then start the master and slaves. There is no compatibility mode with the old HTTP synchronisation protocol. `master_api`, `slave_api`, `slave_servers`, and `plugins.cluster_sync` are rejected by configuration loading.
+Обновите xraytool до одной версии на всех узлах, установите сертификаты, обновите конфигурацию каждого узла, затем запустите master и slave. Режима совместимости со старой HTTP-синхронизацией нет. Наличие `master_api`, `slave_api`, `slave_servers` или `plugins.cluster_sync` приведёт к ошибке загрузки конфигурации.
 
-Keep the old database backup until the rollout is confirmed. The old `sync_events` and `sync_states` tables are not dropped automatically; they are unused by the new plugin and remain only to avoid destructive migration behaviour.
+Сохраните резервную копию старой БД до подтверждения успешного перехода. Старые таблицы `sync_events` и `sync_states` автоматически не удаляются: новый плагин их не использует, но их сохранение предотвращает разрушительную миграцию.
 
-## Configuration
+## Конфигурация
 
-On the master:
+На master:
 
 ```yaml
 mode: master
@@ -29,7 +29,7 @@ replication:
   drift_interval: "1m"
 ```
 
-On a slave:
+На slave:
 
 ```yaml
 mode: slave
@@ -37,7 +37,7 @@ replication:
   enabled: true
   node_id: slave-ru-1
   master_address: "master.example.com:9443"
-  server_name: "master.example.com" # optional SNI override
+  server_name: "master.example.com" # необязательное переопределение SNI
   ca_file: "/etc/xraytool/replication/ca.pem"
   cert_file: "/etc/xraytool/replication/slave-ru-1.pem"
   key_file: "/etc/xraytool/replication/slave-ru-1-key.pem"
@@ -46,12 +46,91 @@ replication:
   stats_interval: "30s"
 ```
 
-The common name (CN) in each slave certificate must equal `node_id`, and the master must list that value in `allowed_nodes`. Certificate and key files should be readable only by the xraytool service account.
+Common Name (CN) сертификата каждого slave должен в точности совпадать с его `node_id`, а master должен содержать это значение в `allowed_nodes`. Файлы сертификата и ключа должны быть доступны для чтения только учётной записи, от которой работает xraytool.
 
-## Behaviour and operations
+## Выпуск сертификатов
 
-- Master-side engine mutations create compact durable outbox records. A periodic desired-state digest additionally catches database changes made outside the engine path and emits a streamed resnapshot marker. The master retains events until every configured slave has acknowledged them; a lagging node whose retained history is unavailable receives a fresh stream snapshot.
-- Static template clients and Reality keys are configuration artifacts. They are transmitted only through the mTLS stream; Reality keys are written atomically with mode `0600` on a slave.
-- Slave traffic totals are reported over the same stream and retained by node on the master, so cluster statistics no longer poll the removed HTTP endpoint.
-- A slave persists the desired user projection. Its drift loop rebuilds managed engine state from that projection, so a manually deleted user in one inbound is restored; slave edits never flow back to the master.
-- Plugin operations are available through `xraytool plugin run cluster_replication status` and `xraytool plugin run cluster_replication snapshot` on a master. `snapshot` appends a compact marker; connected slaves pull the expanded stream themselves.
+Для репликации используйте собственный закрытый CA: публичный сертификат Let's Encrypt не подходит для аутентификации slave-узлов. Создавайте и храните закрытый ключ CA на рабочем месте администратора или выделенном CA-сервере, но никогда не на production-узле xraytool. Идентификаторы ниже соответствуют примеру конфигурации в этом репозитории.
+
+### Windows (PowerShell)
+
+Выполните эти команды в PowerShell на своём Windows-компьютере. Они используют OpenSSL из Git for Windows. Если файла `C:\Program Files\Git\usr\bin\openssl.exe` нет, установите Git for Windows либо OpenSSL for Windows, затем укажите фактический путь к `openssl.exe` в первой строке.
+
+```powershell
+$openssl = 'C:\Program Files\Git\usr\bin\openssl.exe'
+if (-not (Test-Path -LiteralPath $openssl)) { throw 'openssl.exe не найден' }
+& $openssl version
+
+$certDir = Join-Path $env:USERPROFILE 'xraytool-ca'
+New-Item -ItemType Directory -Force -Path $certDir | Out-Null
+Set-Location $certDir
+
+& $openssl genrsa -out ca-key.pem 4096
+& $openssl req -x509 -new -sha256 -days 3650 -key ca-key.pem -out ca.pem -subj '/CN=xraytool-replication-ca'
+
+@"
+basicConstraints=CA:FALSE
+keyUsage=digitalSignature
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:hokey.tvaldsforge.online
+"@ | Set-Content -Path master.ext -Encoding ascii
+& $openssl genrsa -out nld-master-key.pem 3072
+& $openssl req -new -key nld-master-key.pem -out nld-master.csr -subj '/CN=nld-master'
+& $openssl x509 -req -sha256 -days 825 -in nld-master.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out nld-master.pem -extfile master.ext
+
+@"
+basicConstraints=CA:FALSE
+keyUsage=digitalSignature
+extendedKeyUsage=clientAuth
+"@ | Set-Content -Path client.ext -Encoding ascii
+& $openssl genrsa -out msk-slave-key.pem 3072
+& $openssl req -new -key msk-slave-key.pem -out msk-slave.csr -subj '/CN=msk-slave'
+& $openssl x509 -req -sha256 -days 825 -in msk-slave.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out msk-slave.pem -extfile client.ext
+
+& $openssl genrsa -out fld-slave-key.pem 3072
+& $openssl req -new -key fld-slave-key.pem -out fld-slave.csr -subj '/CN=fld-slave'
+& $openssl x509 -req -sha256 -days 825 -in fld-slave.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out fld-slave.pem -extfile client.ext
+
+& $openssl verify -CAfile ca.pem nld-master.pem msk-slave.pem fld-slave.pem
+```
+
+В итоге сертификаты будут в `%USERPROFILE%\xraytool-ca`. `ca-key.pem` и файлы `*-key.pem` никому не отправляйте и не добавляйте в Git.
+
+### Linux/macOS
+
+```bash
+# Выполняется на защищённой машине CA.
+umask 077
+openssl genrsa -out ca-key.pem 4096
+openssl req -x509 -new -sha256 -days 3650 -key ca-key.pem -out ca.pem \
+  -subj "/CN=xraytool-replication-ca"
+
+# Сертификат master обязан содержать точное публичное DNS-имя,
+# которое используют slave.
+openssl genrsa -out nld-master-key.pem 3072
+openssl req -new -key nld-master-key.pem -out nld-master.csr \
+  -subj "/CN=nld-master" -addext "subjectAltName=DNS:hokey.tvaldsforge.online"
+printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:hokey.tvaldsforge.online\n' > master.ext
+openssl x509 -req -sha256 -days 825 -in nld-master.csr -CA ca.pem -CAkey ca-key.pem \
+  -CAcreateserial -out nld-master.pem -extfile master.ext
+
+# Выпустите отдельный клиентский сертификат для каждого slave.
+# Его CN должен совпадать с node_id.
+openssl genrsa -out msk-slave-key.pem 3072
+openssl req -new -key msk-slave-key.pem -out msk-slave.csr -subj "/CN=msk-slave"
+printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=clientAuth\n' > client.ext
+openssl x509 -req -sha256 -days 825 -in msk-slave.csr -CA ca.pem -CAkey ca-key.pem \
+  -CAcreateserial -out msk-slave.pem -extfile client.ext
+
+# Повторите предыдущие три команды, заменив msk-slave на fld-slave.
+```
+
+Скопируйте `ca.pem` и соответствующую пару сертификат/ключ в `/etc/xraytool/replication/` на каждый узел. Закрытый ключ должен иметь права `0600` и принадлежать учётной записи xraytool. Никогда не копируйте `ca-key.pem` на сервер. После установки файлов и ограничения доступа к TCP-порту `9443` IP-адресами slave измените `replication.enabled` на `true` на всех узлах и перезапустите xraytool.
+
+## Работа и команды
+
+- Изменения в движке на master создают компактные постоянные записи исходящего журнала. Периодическая проверка целевого состояния дополнительно обнаруживает изменения БД, сделанные вне движка, и создаёт маркер потокового переснимка. Master хранит события, пока каждый настроенный slave не подтвердит их получение; отставший узел, для которого история уже недоступна, получит новый потоковый снимок.
+- Статические клиенты шаблона и ключи Reality — артефакты конфигурации. Они передаются только по mTLS-потоку; ключи Reality на slave записываются атомарно с правами `0600`.
+- Суммарный трафик slave передаётся по тому же потоку и сохраняется на master по `node_id`, поэтому статистика кластера больше не опрашивает удалённый HTTP-эндпоинт.
+- Slave сохраняет целевое состояние пользователей. Его цикл обнаружения расхождений восстанавливает управляемое состояние движка из этой проекции: вручную удалённый пользователь в одном inbound будет восстановлен, а правки на slave никогда не попадут обратно на master.
+- На master доступны команды `xraytool plugin run cluster_replication status` и `xraytool plugin run cluster_replication snapshot`. `snapshot` добавляет компактный маркер, а подключённые slave сами получают развёрнутый потоковый снимок.
