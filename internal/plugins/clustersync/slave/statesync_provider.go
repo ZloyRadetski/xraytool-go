@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"xraytool/internal/domain"
@@ -62,6 +63,23 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool, forc
 		return nil, fmt.Errorf("failed to get master state: %w", err)
 	}
 
+	// Static/template clients are not represented by the subscription event
+	// log. Build their snapshot once and send it to every slave before the
+	// regular ping/delta/full protocol. The slave-side operation is idempotent,
+	// so this adds no Xray rebuild when the template has not changed.
+	staticClients, staticSupported, err := p.syncSvc.BuildStaticClientSnapshot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("build static client snapshot: %w", err)
+	}
+	var staticPayload string
+	if staticSupported && !dryRun {
+		encoded, err := json.Marshal(staticClients)
+		if err != nil {
+			return nil, fmt.Errorf("marshal static client snapshot: %w", err)
+		}
+		staticPayload = string(encoded)
+	}
+
 	servers, err := p.registry.Servers()
 	if err != nil || len(servers) == 0 {
 		return nil, fmt.Errorf("no slave servers configured")
@@ -79,7 +97,7 @@ func (p *stateSyncProvider) SyncAllSlaves(ctx context.Context, dryRun bool, forc
 
 			var syncErr error
 			if !dryRun {
-				syncErr = p.syncOneSlave(ctx, srvName, entry, masterState, forceFull)
+				syncErr = p.syncOneSlave(ctx, srvName, entry, masterState, forceFull, staticSupported, staticPayload)
 			}
 
 			mu.Lock()
@@ -103,8 +121,16 @@ func (p *stateSyncProvider) syncOneSlave(
 	entry Entry,
 	masterState domain.SyncState,
 	forceFull bool,
+	staticSupported bool,
+	staticPayload string,
 ) error {
 	log := p.log.With("slave", name)
+
+	if staticSupported {
+		if err := p.syncStaticClients(entry, staticPayload); err != nil {
+			return fmt.Errorf("sync static clients: %w", err)
+		}
+	}
 
 	if forceFull {
 		log.Info("statesync: force full sync requested")
@@ -153,6 +179,23 @@ func (p *stateSyncProvider) syncOneSlave(
 	log.Warn("statesync: delta unavailable — falling back to full-sync",
 		"slave_event_id", slaveID, "master_event_id", masterState.LastEventID)
 	return p.triggerFullSync(ctx, name, entry, masterState)
+}
+
+// syncStaticClients sends the master template's config-only clients. It runs
+// before every state check because static entries have no DB event and must be
+// reconciled even when both nodes have the same event cursor.
+func (p *stateSyncProvider) syncStaticClients(entry Entry, payload string) error {
+	_, err := p.registry.client.Call(entry, "sync-static-clients", map[string]string{
+		"payload": payload,
+	})
+	// During a rolling upgrade an older slave does not know this action yet.
+	// Keep the existing user delta/full-sync path working; once that slave is
+	// updated, its static clients are picked up on the very next interval.
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unknown action") {
+		p.log.Warn("statesync: slave does not support static client sync yet")
+		return nil
+	}
+	return err
 }
 
 // sendDelta transmits an ordered list of events to the slave.

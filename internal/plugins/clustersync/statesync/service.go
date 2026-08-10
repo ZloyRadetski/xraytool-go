@@ -110,6 +110,16 @@ func (s *Service) SelfHealMasterUUIDs(ctx context.Context) (bool, error) {
 		dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
 	}
 
+	// A template-aware engine needs to see static config-only clients before
+	// reconciling database users. This is a no-op for engines that do not
+	// support static client snapshots. For direct-config Xray installations it
+	// also establishes the protected static set before removeOrphans is used.
+	if staticSyncer, ok := staticClientSyncer(s.engine); ok {
+		if _, err := staticSyncer.StaticClientSnapshot(ctx, dbUsers); err != nil {
+			return false, fmt.Errorf("failed to read static clients: %w", err)
+		}
+	}
+
 	result, err := s.engine.SyncUsers(ctx, dbUsers, true)
 	if err != nil {
 		return false, fmt.Errorf("failed to sync master users: %w", err)
@@ -117,6 +127,34 @@ func (s *Service) SelfHealMasterUUIDs(ctx context.Context) (bool, error) {
 
 	changed := result.Added > 0 || result.Removed > 0
 	return changed, nil
+}
+
+// BuildStaticClientSnapshot returns config-only clients for transport to
+// slaves. The boolean is false when the selected engine has no static-client
+// capability, so existing non-Xray engines retain their current sync flow.
+func (s *Service) BuildStaticClientSnapshot(ctx context.Context) ([]domain.StaticInboundClients, bool, error) {
+	staticSyncer, ok := staticClientSyncer(s.engine)
+	if !ok {
+		return nil, false, nil
+	}
+
+	managedUsers, err := s.BuildSnapshot(ctx)
+	if err != nil {
+		return nil, true, err
+	}
+	snapshot, err := staticSyncer.StaticClientSnapshot(ctx, managedUsers)
+	if err != nil {
+		return nil, true, err
+	}
+	return snapshot, true, nil
+}
+
+func staticClientSyncer(engine domain.Engine) (domain.StaticClientSynchronizer, bool) {
+	if probe, ok := engine.(interface{ SupportsStaticClientSync() bool }); ok && !probe.SupportsStaticClientSync() {
+		return nil, false
+	}
+	syncer, ok := engine.(domain.StaticClientSynchronizer)
+	return syncer, ok
 }
 
 // AppendEvent writes a sync event to the master's event log.

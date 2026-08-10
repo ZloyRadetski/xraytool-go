@@ -1143,6 +1143,20 @@ func shouldBypassProtection(ctx context.Context) bool {
 func (a *Adapter) getProtectedTemplateUsers(dbEmails map[string]bool) map[string]bool {
 	protected := make(map[string]bool)
 	if a.templatePath == "" {
+		// Direct-config deployments do not have a template from which static
+		// clients can be recovered. Their last filtered static snapshot serves
+		// as the protected set, so a cluster self-heal does not delete clients
+		// that were explicitly hardcoded in config.json.
+		if staticClients, err := a.readStaticClientState(); err == nil {
+			for _, clients := range staticClients {
+				for _, client := range clients {
+					email := client.Email()
+					if email != "" && (dbEmails == nil || !dbEmails[email]) {
+						protected[email] = true
+					}
+				}
+			}
+		}
 		return protected
 	}
 

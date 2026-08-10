@@ -106,3 +106,34 @@ func (e *EventAwareEngine) logUpdateForEmail(ctx context.Context, email string) 
 	}
 	return nil // If user is not in snapshot (e.g., deleted), no update needed.
 }
+
+// StaticClientSnapshot forwards the optional static-client capability through
+// the event-aware wrapper. Static template entries are not subscription
+// mutations, therefore they intentionally do not create sync events.
+func (e *EventAwareEngine) StaticClientSnapshot(ctx context.Context, managedUsers []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
+	syncer, ok := e.Engine.(domain.StaticClientSynchronizer)
+	if !ok {
+		return nil, fmt.Errorf("engine does not support static client snapshots")
+	}
+	return syncer.StaticClientSnapshot(ctx, managedUsers)
+}
+
+// ApplyStaticClientSnapshot forwards the optional static-client capability
+// through the event-aware wrapper for slave nodes.
+func (e *EventAwareEngine) ApplyStaticClientSnapshot(ctx context.Context, inbounds []domain.StaticInboundClients) error {
+	syncer, ok := e.Engine.(domain.StaticClientSynchronizer)
+	if !ok {
+		return fmt.Errorf("engine does not support static client snapshots")
+	}
+	return syncer.ApplyStaticClientSnapshot(ctx, inbounds)
+}
+
+// SupportsStaticClientSync lets the synchronisation service distinguish an
+// EventAwareEngine wrapper around a capable Xray adapter from one around an
+// engine that has no static/template concept.
+func (e *EventAwareEngine) SupportsStaticClientSync() bool {
+	_, ok := e.Engine.(domain.StaticClientSynchronizer)
+	return ok
+}
+
+var _ domain.StaticClientSynchronizer = (*EventAwareEngine)(nil)

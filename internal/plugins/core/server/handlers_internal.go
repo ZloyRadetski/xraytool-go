@@ -9,8 +9,8 @@ import (
 
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/stats"
 	"xraytool/internal/plugins/core/user"
+	"xraytool/internal/stats"
 )
 
 type internalSyncRequest struct {
@@ -32,7 +32,7 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.Email == "" && body.Action != "sync-users" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" && body.Action != "sync-ping" && body.Action != "sync-delta" && body.Action != "sync-full-trigger" {
+	if body.Email == "" && body.Action != "sync-users" && body.Action != "cli-stats" && body.Action != "antifraud-events" && body.Action != "sync-keys" && body.Action != "sync-ping" && body.Action != "sync-delta" && body.Action != "sync-full-trigger" && body.Action != "sync-static-clients" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
@@ -130,6 +130,30 @@ func (r *Router) handleInternalXraySync(w http.ResponseWriter, req *http.Request
 
 	case "sync-full-trigger":
 		r.handleSyncFullTrigger(w, req, body)
+		return
+
+	case "sync-static-clients":
+		var inbounds []domain.StaticInboundClients
+		if err := json.Unmarshal([]byte(body.Payload), &inbounds); err != nil {
+			r.log.Error("internal sync: invalid static client snapshot", "err", err)
+			writeError(w, http.StatusBadRequest, "invalid static client snapshot")
+			return
+		}
+
+		staticSyncer, ok := r.engine.(domain.StaticClientSynchronizer)
+		if !ok {
+			// Do not block database synchronisation on an engine that has no
+			// template/static-client concept (for example, a non-Xray provider).
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "skipped": true})
+			return
+		}
+		if err := staticSyncer.ApplyStaticClientSnapshot(req.Context(), inbounds); err != nil {
+			r.log.Error("internal sync: failed to apply static clients", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to apply static clients")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "inbounds": len(inbounds)})
 		return
 
 	case "cli-stats":
