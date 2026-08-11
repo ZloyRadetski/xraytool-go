@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -130,6 +131,9 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	if gormDB, ok := database.GormDB(deps.Registry); ok {
 		hostOpts = append(hostOpts, pluginhost.WithPluginDBFactory(database.NewPluginDBFactory(gormDB)))
 	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Logging.Level), "none") {
+		hostOpts = append(hostOpts, pluginhost.WithExternalLogsDisabled(true))
+	}
 
 	host = pluginhost.New(
 		pluginsCfg,
@@ -162,7 +166,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		}
 	}
 
-	notificationProviders := host.NotificationProviders("email")
+	notificationProviders := append(host.NotificationProviders("email"), host.NotificationProviders("telegram")...)
 	if len(notificationProviders) > 0 {
 		apiRouter = apiRouter.WithNotificationProviders(notificationProviders...)
 	}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/hmac"
 	"testing"
 	"time"
 )
@@ -61,6 +62,35 @@ func TestRequestOTP_Email(t *testing.T) {
 	_, err = requestOTP(id, 5*time.Minute)
 	if err != ErrMaxRequestsReached {
 		t.Fatalf("expected ErrMaxRequestsReached, got %v", err)
+	}
+}
+
+func TestRequestOTPStoresOnlyHMAC(t *testing.T) {
+	id := "hmac@example.com"
+	otpCache.delete(id)
+
+	code, err := requestOTP(id, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("requestOTP() error = %v", err)
+	}
+
+	entry := otpCache.get(id)
+	if entry == nil {
+		t.Fatal("OTP entry was not stored")
+	}
+	entry.mu.Lock()
+	stored := append([]byte(nil), entry.codeHMAC...)
+	entry.mu.Unlock()
+	t.Cleanup(func() { otpCache.delete(id) })
+
+	if len(stored) == 0 {
+		t.Fatal("OTP HMAC was not stored")
+	}
+	if hmac.Equal(stored, []byte(code)) {
+		t.Fatal("OTP entry contains the raw code")
+	}
+	if !hmac.Equal(stored, otpCodeHMAC(code)) {
+		t.Fatal("stored OTP HMAC does not verify the issued code")
 	}
 }
 

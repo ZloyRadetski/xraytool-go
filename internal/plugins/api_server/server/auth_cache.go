@@ -2,7 +2,9 @@ package server
 
 import (
 	"container/list"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/big"
@@ -21,7 +23,7 @@ type otpEntry struct {
 	mu           sync.Mutex
 	identifier   string
 	payload      string
-	code         string
+	codeHMAC     []byte
 	expiresAt    time.Time
 	attempts     int
 	requestCount int
@@ -131,6 +133,26 @@ func (c *otpLRUCache) sweepExpired() {
 // exhaust memory before the 10-minute sweeper runs.
 var otpCache = newOTPLRUCache(10_000)
 
+// otpHMACKey is process-local and intentionally never persisted. Restarting the
+// process invalidates outstanding codes, which is acceptable for short-lived
+// authentication challenges and prevents a database or memory snapshot from
+// containing reusable OTP values.
+var otpHMACKey = newOTPHMACKey()
+
+func newOTPHMACKey() []byte {
+	key := make([]byte, sha256.Size)
+	if _, err := rand.Read(key); err != nil {
+		panic("unable to generate OTP HMAC key: " + err.Error())
+	}
+	return key
+}
+
+func otpCodeHMAC(code string) []byte {
+	mac := hmac.New(sha256.New, otpHMACKey)
+	_, _ = mac.Write([]byte(code))
+	return mac.Sum(nil)
+}
+
 // generateOTPCode generates a cryptographically random 6-digit code.
 func generateOTPCode() string {
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
@@ -174,11 +196,12 @@ func requestOTPWithPayload(identifier, payload string, ttl time.Duration) (strin
 	}
 
 	entry.payload = payload
-	entry.code = generateOTPCode()
+	code := generateOTPCode()
+	entry.codeHMAC = otpCodeHMAC(code)
 	entry.expiresAt = now.Add(ttl)
 	entry.requestCount++
 
-	return entry.code, nil
+	return code, nil
 }
 
 // verifyOTP checks the code for the given identifier.
@@ -202,7 +225,7 @@ func verifyOTP(identifier, code string) (bool, string, error) {
 		return false, "", nil
 	}
 
-	if entry.code == code {
+	if hmac.Equal(entry.codeHMAC, otpCodeHMAC(code)) {
 		payload := entry.payload
 		entry.mu.Unlock()
 		otpCache.delete(identifier)

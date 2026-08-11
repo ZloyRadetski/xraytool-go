@@ -83,7 +83,7 @@ type externalPlugin struct {
 	restartedStarts sync.WaitGroup
 }
 
-func newExternalPlugin(name string, entry PluginEntry, log *slog.Logger) *externalPlugin {
+func newExternalPlugin(name string, entry PluginEntry, log *slog.Logger, logsDisabled bool) *externalPlugin {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -91,7 +91,7 @@ func newExternalPlugin(name string, entry PluginEntry, log *slog.Logger) *extern
 		name:     name,
 		entry:    entry,
 		log:      log.With("plugin", name, "source", "external"),
-		logs:     newExternalLogSink(name, entry.LogPath),
+		logs:     newExternalLogSink(name, entry.LogPath, logsDisabled),
 		banState: newExternalBanState(),
 	}
 }
@@ -565,7 +565,7 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 		return errors.New("external plugin Restart context must not be nil")
 	}
 	p.opMu.Lock()
-	
+
 	p.mu.Lock()
 	if p.stopping {
 		p.mu.Unlock()
@@ -605,7 +605,7 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 	p.remote = nil
 	p.prepared = false
 	p.mu.Unlock()
-	
+
 	// Release the outer opMu during the backoff sleep so that Shutdown (which
 	// takes opMu to Stop the plugin) doesn't deadlock.
 	p.opMu.Unlock()
@@ -625,7 +625,7 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 			return fmt.Errorf("external plugin %q restart backoff: %w", p.name, ctx.Err())
 		}
 	}
-	
+
 	// Re-acquire opMu before continuing the restart process.
 	p.opMu.Lock()
 	defer p.opMu.Unlock()

@@ -512,6 +512,10 @@ type Host struct {
 	// antifraud plugin on their hot path.
 	banCache *LocalBanCache
 
+	// externalLogsDisabled suppresses stdout/stderr capture from external
+	// plugins. It is set by the application logging.level=none policy.
+	externalLogsDisabled bool
+
 	mu    sync.RWMutex
 	state hostState
 }
@@ -697,7 +701,7 @@ func (h *Host) Load(ctx context.Context) (err error) {
 				return errors.New("plugin \"core\" is mandatory and cannot use source \"external\"")
 			}
 			candidates = append(candidates, candidate{
-				name: name, entry: entry, plugin: newExternalPlugin(name, entry, h.log),
+				name: name, entry: entry, plugin: newExternalPlugin(name, entry, h.log, h.externalLogsDisabled),
 			})
 		default:
 			return fmt.Errorf("plugin %q has unsupported source %q; supported sources are %q and %q",

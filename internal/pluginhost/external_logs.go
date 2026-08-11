@@ -69,14 +69,18 @@ func (t *logTail) lines(maxLines int) []string {
 // A failure to open the file must never make a third-party plugin fail to
 // start, so persistent writes are intentionally best-effort.
 type externalLogSink struct {
-	tail *logTail
-	path string
+	tail     *logTail
+	path     string
+	disabled bool
 
 	mu   sync.Mutex
 	file *os.File
 }
 
-func newExternalLogSink(pluginName, configuredPath string) *externalLogSink {
+func newExternalLogSink(pluginName, configuredPath string, disabled bool) *externalLogSink {
+	if disabled {
+		return &externalLogSink{disabled: true}
+	}
 	path := strings.TrimSpace(configuredPath)
 	if path == "" {
 		path, _ = ExternalLogPath(pluginName)
@@ -89,6 +93,9 @@ func newExternalLogSink(pluginName, configuredPath string) *externalLogSink {
 
 func (s *externalLogSink) Write(data []byte) (int, error) {
 	if s == nil {
+		return len(data), nil
+	}
+	if s.disabled {
 		return len(data), nil
 	}
 	_, _ = s.tail.Write(data)

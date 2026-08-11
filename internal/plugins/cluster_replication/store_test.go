@@ -205,6 +205,39 @@ func TestStoreAggregatesReportedSlaveStatistics(t *testing.T) {
 	require.Equal(t, []domain.SlaveUserTotal{{Email: "traffic@example.test", Slave: 150}}, totals)
 }
 
+type trafficStateWriterStub struct {
+	received []pluginapi.TrafficSnapshot
+}
+
+func (*trafficStateWriterStub) LocalTrafficSnapshot(context.Context) ([]pluginapi.TrafficSnapshot, error) {
+	return nil, nil
+}
+
+func (s *trafficStateWriterStub) SyncClusterTraffic(_ context.Context, totals []pluginapi.TrafficSnapshot) error {
+	s.received = append([]pluginapi.TrafficSnapshot(nil), totals...)
+	return nil
+}
+
+func TestPluginSyncMasterTrafficWritesReplicaTotals(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.ReplaceReplicaStats(context.Background(), "slave-a", []statsPoint{
+		{Email: "traffic@example.test", Total: 150},
+	}))
+	writer := &trafficStateWriterStub{}
+	plugin := New()
+	plugin.trafficSnapshot = writer
+
+	err := plugin.syncMasterTraffic(context.Background(), &Service{store: store}, Config{
+		AllowedNodes:  []string{"slave-a"},
+		StatsInterval: "30s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []pluginapi.TrafficSnapshot{{
+		Email: "traffic@example.test",
+		Usage: pluginapi.TrafficUsage{DownloadBytes: 150},
+	}}, writer.received)
+}
+
 func TestStorePersistsFraudEventsUntilExplicitAcknowledgement(t *testing.T) {
 	store := newTestStore(t)
 	occurredAt := time.Now().UTC().Add(-time.Second)

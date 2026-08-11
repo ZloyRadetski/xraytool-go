@@ -1,6 +1,25 @@
 package pluginhost
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestDisabledExternalLogSinkDiscardsOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "external.log")
+	sink := newExternalLogSink("example", path, true)
+
+	if _, err := sink.Write([]byte("plugin secret output\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if got := sink.lines(0); len(got) != 0 {
+		t.Fatalf("disabled sink retained log lines: %v", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("disabled sink created a log file: %v", err)
+	}
+}
 
 func TestLogTailKeepsCompleteRecentLines(t *testing.T) {
 	tail := newLogTail(10)

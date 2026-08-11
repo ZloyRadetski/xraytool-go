@@ -168,7 +168,9 @@ func (p *Plugin) Start(ctx context.Context) error {
 	p.mu.Unlock()
 
 	if config.Mode == "master" {
-		stop, err := startMasterTransport(ctx, service, config, log, fraudSink)
+		stop, err := startMasterTransport(ctx, service, config, log, fraudSink, func(syncCtx context.Context) error {
+			return p.syncMasterTraffic(syncCtx, service, config)
+		})
 		if err != nil {
 			return err
 		}
@@ -204,14 +206,39 @@ func (p *Plugin) runMasterLoop(ctx context.Context, service *Service, config Con
 	run()
 	ticker := time.NewTicker(config.scanEvery())
 	defer ticker.Stop()
+	statsTicker := time.NewTicker(config.statsEvery())
+	defer statsTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			run()
+		case <-statsTicker.C:
+			if err := p.syncMasterTraffic(ctx, service, config); err != nil && ctx.Err() == nil {
+				log.Warn("replication traffic sync failed", "err", err)
+			}
 		}
 	}
+}
+
+func (p *Plugin) syncMasterTraffic(ctx context.Context, service *Service, config Config) error {
+	p.mu.RLock()
+	provider := p.trafficSnapshot
+	p.mu.RUnlock()
+	writer, ok := provider.(pluginapi.TrafficClusterStateWriter)
+	if !ok || writer == nil {
+		return nil
+	}
+	totals, _ := service.store.CollectReplicaStats(ctx, config.AllowedNodes, config.statsEvery()*3)
+	snapshots := make([]pluginapi.TrafficSnapshot, 0, len(totals))
+	for _, total := range totals {
+		snapshots = append(snapshots, pluginapi.TrafficSnapshot{
+			Email: total.Email,
+			Usage: pluginapi.TrafficUsage{DownloadBytes: total.Slave},
+		})
+	}
+	return writer.SyncClusterTraffic(ctx, snapshots)
 }
 
 func (p *Plugin) runSlaveLoop(ctx context.Context, service *Service, config Config, log *slog.Logger) {

@@ -109,6 +109,21 @@ worker:
 	}
 }
 
+func TestLoadAllowsNoneLoggingLevel(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tmpFile, []byte("logging:\n  level: none\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Logging.Level != "none" {
+		t.Fatalf("Logging.Level = %q, want none", cfg.Logging.Level)
+	}
+}
+
 func TestIsMaster(t *testing.T) {
 	cfg := &Config{Mode: "master"}
 	if !cfg.IsMaster() {

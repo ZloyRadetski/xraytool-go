@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"xraytool/internal/domain"
 	"xraytool/internal/plugins/user_management/service"
 
@@ -16,6 +17,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
+	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/api_server/server"
 	vpn "xraytool/internal/plugins/engine_xray"
 	"xraytool/internal/plugins/subscription_runtime/runtime"
@@ -25,6 +27,20 @@ var (
 	testDB  *gorm.DB
 	testReg domain.Registry
 )
+
+type testNotificationProvider struct{}
+
+func (testNotificationProvider) Metadata() pluginapi.Metadata {
+	return pluginapi.Metadata{Name: "test-notifications", Kind: "notification", APIVersion: "1"}
+}
+func (testNotificationProvider) Init(context.Context, pluginapi.RawConfig, pluginapi.ServiceResolver) error {
+	return nil
+}
+func (testNotificationProvider) Start(context.Context) error                        { return nil }
+func (testNotificationProvider) Stop(context.Context) error                         { return nil }
+func (testNotificationProvider) Health(context.Context) error                       { return nil }
+func (testNotificationProvider) Channels() []string                                 { return []string{"email", "telegram"} }
+func (testNotificationProvider) Send(context.Context, pluginapi.Notification) error { return nil }
 
 func TestMain(m *testing.M) {
 	db, _ := database.NewConnection(database.Config{Driver: "sqlite", SQLitePath: ":memory:", Silent: true, AutoMigrate: true})
@@ -54,7 +70,8 @@ func newTestRouter(t *testing.T) *server.Router {
 	cm := subscription.NewCacheManager(cfg, engine)
 	dispatcher := events.NewDispatcher(&events.Config{})
 	userSvc := user.NewService(testReg, user.Config{IsMaster: true, Domain: cfg.Server.Domain}, engine, nil, slog.Default())
-	return server.New(cfg, "test-api-key", cm, engine, userSvc, dispatcher, slog.Default(), testReg)
+	return server.New(cfg, "test-api-key", cm, engine, userSvc, dispatcher, slog.Default(), testReg).
+		WithNotificationProviders(testNotificationProvider{})
 }
 
 func do(r *server.Router, method, path, body string, apiKey string) *httptest.ResponseRecorder {

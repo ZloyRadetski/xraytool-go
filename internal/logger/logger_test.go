@@ -2,7 +2,9 @@ package logger
 
 import (
 	"bytes"
+	"context"
 	json "github.com/goccy/go-json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,5 +96,39 @@ func TestLoggerJSONFormat(t *testing.T) {
 	}
 	if m["message"] != "test json log 42" {
 		t.Errorf("Unexpected message: %v", m["message"])
+	}
+}
+
+func TestLoggerNoneDisablesEveryLevelWithoutCreatingAFile(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "disabled.log")
+	cfg := &appconfig.Config{
+		Logging: appconfig.LoggingConf{
+			Level:    "none",
+			FilePath: tmpFile,
+			Format:   "json",
+		},
+	}
+
+	if err := Init(cfg); err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+	t.Cleanup(Close)
+
+	if defaultLogger.level != LevelNone {
+		t.Fatalf("level = %v, want %v", defaultLogger.level, LevelNone)
+	}
+	if defaultLogger.file != nil {
+		t.Fatal("level=none must not open a log file")
+	}
+	if LevelEnabled(LevelError) {
+		t.Fatal("errors must be disabled when logging.level is none")
+	}
+	if slog.Default().Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("slog errors must be disabled when logging.level is none")
+	}
+
+	Errorf("this message must be discarded")
+	if _, err := os.Stat(tmpFile); !os.IsNotExist(err) {
+		t.Fatalf("disabled logger created a file: %v", err)
 	}
 }

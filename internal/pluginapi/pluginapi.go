@@ -762,6 +762,14 @@ type TrafficSnapshotProvider interface {
 	LocalTrafficSnapshot(ctx context.Context) ([]TrafficSnapshot, error)
 }
 
+// TrafficClusterStateWriter accepts the latest cumulative traffic totals from
+// slave nodes. A traffic backend that supports clustered accounting uses this
+// to publish its merged state for subscription delivery without exposing its
+// storage implementation to the replication plugin.
+type TrafficClusterStateWriter interface {
+	SyncClusterTraffic(ctx context.Context, slaveTotals []TrafficSnapshot) error
+}
+
 // TrafficQuotaDecision is the policy result for one subscription request.
 // An empty Reason is normal; when Exceeded is true it is exposed only as the
 // diagnostic X-Reject-Reason response header.

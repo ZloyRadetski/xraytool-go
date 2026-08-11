@@ -4,6 +4,7 @@ import (
 	"fmt"
 	json "github.com/goccy/go-json"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ const (
 	LevelInfo
 	LevelWarn
 	LevelError
+	LevelNone
 )
 
 func (l Level) String() string {
@@ -32,6 +34,8 @@ func (l Level) String() string {
 		return "WARN"
 	case LevelError:
 		return "ERROR"
+	case LevelNone:
+		return "NONE"
 	default:
 		return "INFO"
 	}
@@ -57,6 +61,14 @@ func Init(cfg *appconfig.Config) error {
 	defaultLogger.mu.Lock()
 	defer defaultLogger.mu.Unlock()
 
+	// Close the previous destination before selecting a new one. This also
+	// guarantees that level=none never leaves an earlier log file open.
+	if defaultLogger.file != nil {
+		_ = defaultLogger.file.Close()
+		defaultLogger.file = nil
+	}
+	defaultLogger.out = os.Stdout
+
 	// Parse level
 	switch strings.ToLower(cfg.Logging.Level) {
 	case "debug":
@@ -67,6 +79,8 @@ func Init(cfg *appconfig.Config) error {
 		defaultLogger.level = LevelWarn
 	case "error":
 		defaultLogger.level = LevelError
+	case "none", "off":
+		defaultLogger.level = LevelNone
 	default:
 		defaultLogger.level = LevelInfo
 	}
@@ -78,10 +92,10 @@ func Init(cfg *appconfig.Config) error {
 		defaultLogger.format = "console"
 	}
 
-	// Close previous file if any
-	if defaultLogger.file != nil {
-		defaultLogger.file.Close()
-		defaultLogger.file = nil
+	if defaultLogger.level == LevelNone {
+		defaultLogger.out = io.Discard
+		configureSlog(defaultLogger.out, defaultLogger.level, defaultLogger.format)
+		return nil
 	}
 
 	// Setup output destination
@@ -89,12 +103,14 @@ func Init(cfg *appconfig.Config) error {
 		dir := filepath.Dir(cfg.Logging.FilePath)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			defaultLogger.out = os.Stdout
+			configureSlog(defaultLogger.out, defaultLogger.level, defaultLogger.format)
 			return fmt.Errorf("failed to create log directory: %w", err)
 		}
 
 		f, err := os.OpenFile(cfg.Logging.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			defaultLogger.out = os.Stdout
+			configureSlog(defaultLogger.out, defaultLogger.level, defaultLogger.format)
 			return fmt.Errorf("failed to open log file: %w", err)
 		}
 
@@ -104,7 +120,37 @@ func Init(cfg *appconfig.Config) error {
 		defaultLogger.out = os.Stdout
 	}
 
+	configureSlog(defaultLogger.out, defaultLogger.level, defaultLogger.format)
 	return nil
+}
+
+// configureSlog applies the same logging policy to the standard library logger
+// used by Plugin Host components. Keeping it here makes logging.level=none
+// disable both legacy logger calls and structured slog calls.
+func configureSlog(out io.Writer, level Level, format string) {
+	opts := &slog.HandlerOptions{Level: slogLevel(level)}
+	if strings.ToLower(format) == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(out, opts)))
+		return
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(out, opts)))
+}
+
+func slogLevel(level Level) slog.Level {
+	switch level {
+	case LevelDebug:
+		return slog.LevelDebug
+	case LevelWarn:
+		return slog.LevelWarn
+	case LevelError:
+		return slog.LevelError
+	case LevelNone:
+		// slog handlers only emit records at or above the configured level.
+		// A value above all standard levels disables the handler completely.
+		return slog.Level(100)
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func (l *Logger) log(level Level, format string, args ...interface{}) {
@@ -159,8 +205,9 @@ func Close() {
 	defaultLogger.mu.Lock()
 	defer defaultLogger.mu.Unlock()
 	if defaultLogger.file != nil {
-		defaultLogger.file.Close()
+		_ = defaultLogger.file.Close()
 		defaultLogger.file = nil
-		defaultLogger.out = os.Stdout
 	}
+	defaultLogger.out = os.Stdout
+	configureSlog(defaultLogger.out, LevelInfo, "console")
 }

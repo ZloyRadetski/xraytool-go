@@ -271,7 +271,7 @@ type ReplicationConf struct {
 
 // LoggingConf holds configuration for structured logging.
 type LoggingConf struct {
-	Level    string `yaml:"level"`     // "debug", "info", "warn", "error"
+	Level    string `yaml:"level"`     // "debug", "info", "warn", "error", "none"
 	FilePath string `yaml:"file_path"` // path to write logs, empty for stdout only
 	Format   string `yaml:"format"`    // "json" or "console"
 }
@@ -968,7 +968,7 @@ ports:
   api_server: 8080
 
 logging:
-  # Logging level: "debug", "info", "warn", "error" (default: "info")
+  # Logging level: "debug", "info", "warn", "error" or "none" (default: "info")
   level: "info"
   # Log file path (leave empty for stdout/console only)
   file_path: "/var/log/xraytool/xraytool.log"

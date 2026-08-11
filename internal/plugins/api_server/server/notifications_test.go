@@ -41,7 +41,9 @@ func TestSendOTPNotification_UsesInjectedProviders(t *testing.T) {
 	provider := &notificationProviderStub{name: "email-test", sent: make(chan pluginapi.Notification, 1)}
 	router := (&Router{log: slog.Default()}).WithNotificationProviders(provider)
 
-	router.sendOTPNotification("person@example.test", "123456")
+	if !router.sendOTPNotification("email", "person@example.test", "123456") {
+		t.Fatal("expected an injected provider to accept email OTP delivery")
+	}
 
 	select {
 	case notification := <-provider.sent:
@@ -63,4 +65,11 @@ func TestNewWithOptions_UsesNoLegacyMailerFallback(t *testing.T) {
 	}}
 	router := NewWithOptions(cfg, "key", nil, nil, nil, nil, slog.Default(), nil, Options{DisableLegacyMailer: true})
 	require.Empty(t, router.notificationProviders)
+}
+
+func TestSendOTPNotificationWithoutProviderDoesNotFallBackToLogs(t *testing.T) {
+	router := &Router{log: slog.Default()}
+	if router.sendOTPNotification("email", "person@example.test", "123456") {
+		t.Fatal("OTP delivery without a provider must fail closed")
+	}
 }

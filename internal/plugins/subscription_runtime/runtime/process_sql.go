@@ -59,7 +59,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	// 3. Load Subscription and User from Database
 	subPtr, err := reg.Subscriptions().FindByClientIdentifier(ctx, clientId)
 	if err != nil {
-		logger.Errorf("[ProcessSQL] DB error fetching subscription %s: %v", clientId, err)
+		logger.Errorf("[ProcessSQL] DB error fetching subscription")
 		return failResponse(500, "Database error")
 	}
 
@@ -120,7 +120,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		sub = *subPtr
 		userPtr, err := reg.Users().FindByID(ctx, sub.UserID)
 		if err != nil {
-			logger.Errorf("[ProcessSQL] DB error fetching user for sub %s: %v", sub.ID, err)
+			logger.Errorf("[ProcessSQL] DB error fetching subscription user")
 			return failResponse(404, "User not found")
 		}
 		user = *userPtr
@@ -210,7 +210,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 			deviceLimitReached, err = reg.Devices().TrackDevice(ctx, sub.ID, hwid, deviceModel, deviceOs, req.UserAgent, deviceLimit)
 
 			if err != nil {
-				logger.Errorf("[ProcessSQL] SQL error in device check for subscription %s: %v", sub.ID, err)
+				logger.Errorf("[ProcessSQL] SQL error in device check")
 				return failResponse(500, "database error")
 			}
 
@@ -279,7 +279,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	if trafficProvider != nil {
 		usage, usageFound, usageErr := trafficProvider.Usage(ctx, email)
 		if usageErr != nil {
-			logger.Warnf("[ProcessSQL] traffic provider failed for %s: %v; using legacy state files", email, usageErr)
+			logger.Warnf("[ProcessSQL] traffic provider failed; using legacy state files")
 		} else if usageFound {
 			uploadBytes = usage.UploadBytes
 			downloadBytes = usage.DownloadBytes
@@ -294,7 +294,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 			CreatedAt: sub.CreatedAt, UpdatedAt: sub.UpdatedAt,
 		}, pluginapi.TrafficUsage{UploadBytes: uploadBytes, DownloadBytes: downloadBytes})
 		if quotaErr != nil {
-			logger.Warnf("[ProcessSQL] traffic quota provider failed for %s: %v", email, quotaErr)
+			logger.Warnf("[ProcessSQL] traffic quota provider failed")
 		} else if decision.Exceeded {
 			reason := decision.Reason
 			if reason == "" {
@@ -437,7 +437,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 
 	// Validate JSON payload
 	if !json.Valid([]byte(jsonPayload)) {
-		logger.Errorf("[ProcessSQL] Invalid template config JSON for sub %s", sub.ID)
+		logger.Errorf("[ProcessSQL] Invalid template config JSON")
 		return failResponse(500, "Invalid template config JSON")
 	}
 	deliveryJSON := jsonPayload
@@ -446,7 +446,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	if processor := cm.SubscriptionTemplateProcessor(); processor != nil {
 		processed, processErr := processor.ProcessSubscriptionTemplate(ctx, jsonPayload)
 		if processErr != nil {
-			logger.Errorf("[ProcessSQL] Subscription template processor failed for sub %s: %v", sub.ID, processErr)
+			logger.Errorf("[ProcessSQL] Subscription template processor failed")
 			return failResponse(500, "Subscription template processing failed: "+processErr.Error())
 		}
 		if processed.Handled {
@@ -475,7 +475,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 			MaxDevices: deviceLimit,
 		})
 		if contributorErr != nil {
-			logger.Warnf("[ProcessSQL] engine client-link contributor failed for %s: %v; using legacy template", sub.ID, contributorErr)
+			logger.Warnf("[ProcessSQL] engine client-link contributor failed; using legacy template")
 		} else if available {
 			pluginLinks = links
 		}

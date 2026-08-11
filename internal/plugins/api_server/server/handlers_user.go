@@ -341,6 +341,10 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid email address")
 			return
 		}
+		if !r.hasNotificationProvider("email") {
+			writeError(w, http.StatusServiceUnavailable, "email OTP delivery is not configured")
+			return
+		}
 
 		// Find or auto-create the user account.
 		_, err := r.findOrCreateWebUser(email, body.ReferredByCode)
@@ -361,9 +365,10 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		// Delivery is asynchronous, whether it is handled by a plugin or by the
-		// temporary legacy-mailer fallback.
-		r.sendOTPNotification(email, code)
+		if !r.sendOTPNotification("email", email, code) {
+			writeError(w, http.StatusServiceUnavailable, "email OTP delivery is not configured")
+			return
+		}
 
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
@@ -372,6 +377,10 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 	// ── Telegram flow (backwards-compatible) ──────────────────────────────────
 	if body.TelegramID == 0 {
 		writeError(w, http.StatusBadRequest, "telegram_id or (platform=web + email) is required")
+		return
+	}
+	if !r.hasNotificationProvider("telegram") {
+		writeError(w, http.StatusServiceUnavailable, "telegram OTP delivery is not configured")
 		return
 	}
 
@@ -393,13 +402,9 @@ func (r *Router) handleRequestCode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if r.dispatcher != nil {
-		r.dispatcher.Dispatch("auth.request_code", map[string]interface{}{
-			"telegram_id": body.TelegramID,
-			"code":        code,
-		}, nil)
-	} else {
-		r.log.Warn("request_code: dispatcher is nil, cannot send webhook")
+	if !r.sendOTPNotification("telegram", tgIDStr, code) {
+		writeError(w, http.StatusServiceUnavailable, "telegram OTP delivery is not configured")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

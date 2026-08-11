@@ -38,8 +38,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -406,17 +404,15 @@ func getClientIP(r *http.Request) string {
 	return remoteIP
 }
 
-// logIntruder logs a security warning and dumps the request.
+// logIntruder records only the minimum data needed to investigate an invalid
+// request. Query values and headers may contain subscription secrets, API keys,
+// cookies or credentials, so they are deliberately never logged.
 func (r *Router) logIntruder(req *http.Request, reason string) {
-	ip := getClientIP(req)
-	dump, _ := httputil.DumpRequest(req, false)
-	dumpStr := string(dump)
-	// Mask sensitive headers in logs
-	dumpStr = regexp.MustCompile(`(?i)(X-API-Key|X-Secret):\s*[^\r\n]+`).ReplaceAllString(dumpStr, "$1: ***")
 	r.log.Warn("INTRUDER",
 		"reason", reason,
-		"ip", ip,
-		"dump", strings.TrimSpace(dumpStr),
+		"ip", getClientIP(req),
+		"method", req.Method,
+		"path", req.URL.Path,
 	)
 }
 

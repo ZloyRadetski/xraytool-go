@@ -24,7 +24,7 @@ func VerifyExternalPlugin(ctx context.Context, name, executable string, args []s
 		Source:  "external",
 		Exec:    executable,
 		Args:    append([]string(nil), args...),
-	}, nil)
+	}, nil, false)
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), externalPluginRPCTimeout)
 		defer cancel()

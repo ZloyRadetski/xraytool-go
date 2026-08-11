@@ -41,9 +41,9 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 	if isBot {
-		r.log.Debug("Incoming SQL subscription request", "ip", remoteAddr, "ua", req.UserAgent(), "url", req.URL.String())
+		r.log.Debug("Incoming SQL subscription request", "ip", remoteAddr, "ua", req.UserAgent(), "path", req.URL.Path)
 	} else {
-		r.log.Info("Incoming SQL subscription request", "ip", remoteAddr, "ua", req.UserAgent(), "url", req.URL.String())
+		r.log.Info("Incoming SQL subscription request", "ip", remoteAddr, "ua", req.UserAgent(), "path", req.URL.Path)
 	}
 
 	// 4. Build subscription request payload

@@ -158,6 +158,7 @@ type replicationServer struct {
 	config    Config
 	log       *slog.Logger
 	fraudSink func(context.Context, string, []pluginapi.FraudEvent) error
+	onStats   func(context.Context) error
 }
 
 func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) error {
@@ -221,6 +222,11 @@ func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) e
 				if storeErr := s.service.store.ReplaceReplicaStats(stream.Context(), hello.NodeID, points); storeErr != nil {
 					receiveDone <- fmt.Errorf("store replication statistics: %w", storeErr)
 					return
+				}
+				if s.onStats != nil {
+					if syncErr := s.onStats(stream.Context()); syncErr != nil {
+						s.log.Warn("replication traffic sync failed", "node", hello.NodeID, "err", syncErr)
+					}
 				}
 				continue
 			}
@@ -456,7 +462,7 @@ func peerCommonName(ctx context.Context) (string, bool) {
 	return tlsInfo.State.PeerCertificates[0].Subject.CommonName, true
 }
 
-func startMasterTransport(ctx context.Context, service *Service, config Config, log *slog.Logger, fraudSink func(context.Context, string, []pluginapi.FraudEvent) error) (func() error, error) {
+func startMasterTransport(ctx context.Context, service *Service, config Config, log *slog.Logger, fraudSink func(context.Context, string, []pluginapi.FraudEvent) error, onStats func(context.Context) error) (func() error, error) {
 	tlsConfig, err := serverTLSConfig(config)
 	if err != nil {
 		return nil, err
@@ -466,7 +472,7 @@ func startMasterTransport(ctx context.Context, service *Service, config Config, 
 		return nil, fmt.Errorf("listen replication gRPC: %w", err)
 	}
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
-	protocol.RegisterReplicationServer(server, &replicationServer{service: service, config: config, log: log, fraudSink: fraudSink})
+	protocol.RegisterReplicationServer(server, &replicationServer{service: service, config: config, log: log, fraudSink: fraudSink, onStats: onStats})
 	go func() {
 		if serveErr := server.Serve(listener); serveErr != nil && serveErr != grpc.ErrServerStopped {
 			log.Error("replication gRPC server stopped", "err", serveErr)

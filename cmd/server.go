@@ -3,7 +3,6 @@ package cmd
 import (
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"path/filepath"
 	"strings"
 
@@ -51,13 +50,7 @@ func getClientIP(r *http.Request) string {
 }
 
 func logIntruder(r *http.Request, reason string) {
-	ip := getClientIP(r)
-	dump, err := httputil.DumpRequest(r, false)
-	dumpStr := "request dump unavailable"
-	if err == nil {
-		dumpStr = string(dump)
-	}
-	logger.Warnf("\n[!!!] INTRUDER ALERT | %s\nIP: %s\n--- Request Dump ---\n%s\n--------------------\n", reason, ip, dumpStr)
+	logger.Warnf("[INTRUDER] reason=%s ip=%s method=%s path=%s", reason, getClientIP(r), r.Method, r.URL.Path)
 }
 
 //nolint:unused

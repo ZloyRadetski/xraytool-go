@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	json "github.com/goccy/go-json"
+	"time"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
@@ -133,6 +134,59 @@ func (p *Plugin) LocalTrafficSnapshot(_ context.Context) ([]pluginapi.TrafficSna
 	return snapshot, nil
 }
 
+// SyncClusterTraffic writes the master-visible cumulative state used by
+// subscription delivery. Replica totals contain a combined counter, so they
+// are retained in the download field for compatibility with the historical
+// cli-stats representation.
+func (p *Plugin) SyncClusterTraffic(_ context.Context, slaveTotals []pluginapi.TrafficSnapshot) error {
+	if p == nil || p.cfg == nil {
+		return fmt.Errorf("traffic_file: app config is required")
+	}
+	if !p.cfg.IsMaster() || p.cfg.Paths.InferredStats == "" {
+		return nil
+	}
+	if p.engine == nil {
+		return fmt.Errorf("traffic_file: domain_engine is unavailable")
+	}
+
+	service := NewService(Config{
+		StatsStatePath:           p.cfg.Paths.StatsState,
+		DetailedRetentionSeconds: p.cfg.DetailedRetentionSeconds(),
+	}, p.engine, nil)
+	if err := service.UpdateLocalStorage(); err != nil {
+		return fmt.Errorf("update local traffic state: %w", err)
+	}
+	state, err := Load(p.cfg.Paths.StatsState, p.cfg.DetailedRetentionSeconds())
+	if err != nil {
+		return fmt.Errorf("load local traffic state: %w", err)
+	}
+
+	inferred := defaultState()
+	for email, user := range state.Users {
+		if user == nil {
+			continue
+		}
+		inferred.Users[email] = &UserState{
+			CumulativeUp:   user.CumulativeUp,
+			CumulativeDown: user.CumulativeDown,
+		}
+	}
+	for _, total := range slaveTotals {
+		if total.Email == "" {
+			continue
+		}
+		user := inferred.Users[total.Email]
+		if user == nil {
+			user = &UserState{}
+			inferred.Users[total.Email] = user
+		}
+		user.CumulativeUp += total.Usage.UploadBytes
+		user.CumulativeDown += total.Usage.DownloadBytes
+	}
+	inferred.LastSampleTS = time.Now().Unix()
+	return Save(p.cfg.Paths.InferredStats, inferred)
+}
+
 // CheckQuota keeps historical behaviour: traffic was reported but never used
 // to block a subscription. Alternative quota plugins can publish the same
 // service and enforce an installation-specific policy.
@@ -168,4 +222,5 @@ var _ pluginapi.ServiceProvider = (*Plugin)(nil)
 var _ pluginapi.TrafficProvider = (*Plugin)(nil)
 var _ pluginapi.TrafficQuotaProvider = (*Plugin)(nil)
 var _ pluginapi.TrafficSnapshotProvider = (*Plugin)(nil)
+var _ pluginapi.TrafficClusterStateWriter = (*Plugin)(nil)
 var _ pluginapi.CLIContributor = (*Plugin)(nil)
