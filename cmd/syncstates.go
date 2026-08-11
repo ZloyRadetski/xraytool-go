@@ -41,6 +41,14 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 				fmt.Printf("ERROR|reconciling master: %v\n", err)
 				return
 			}
+			// Publish the freshly projected static-client artifact before adding a
+			// snapshot marker. The marker's streamed snapshot must already contain
+			// master-only hardcoded users, otherwise a newly connected slave could
+			// rebuild from its own empty template first and receive them later.
+			if _, err := deps.ReplicationService.PublishArtifacts(cmd.Context(), deps.Cfg.Reality.KeysFilepath); err != nil {
+				fmt.Printf("ERROR|publishing replication artifacts: %v\n", err)
+				return
+			}
 			changed, err := deps.ReplicationService.DetectDesiredState(cmd.Context())
 			if err != nil {
 				fmt.Printf("ERROR|recording snapshot: %v\n", err)
