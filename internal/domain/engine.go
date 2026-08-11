@@ -2,8 +2,6 @@ package domain
 
 import (
 	"context"
-
-	json "github.com/goccy/go-json"
 )
 
 // VPNUserConfig is the domain-agnostic representation of a VPN user for the engine.
@@ -76,37 +74,24 @@ type StateSyncer interface {
 	ListUsers(ctx context.Context) ([]VPNUserConfig, error)
 }
 
-// ConfigRegenerator regenerates the xray config from a template and DB users,
-// then syncs the running xray process via hot-add/hot-remove.
+// ConfigRegenerator regenerates the xray config from a template and desired
+// user snapshot, then syncs the running process via hot-add/hot-remove.
 type ConfigRegenerator interface {
-	// SyncUsers regenerates config.json from template + dbUsers, then diffs
+	// SyncUsers regenerates config.json from template + users, then diffs
 	// against the running xray process:
-	//   - Users in dbUsers but not in xray → hot-added via gRPC.
-	//   - Users in xray but not in dbUsers → hot-removed (if removeOrphans).
+	//   - Users in users but not in xray → hot-added via gRPC.
+	//   - Users in xray but not in users → hot-removed (if removeOrphans).
 	// The config file is completely regenerated before the diff.
-	SyncUsers(ctx context.Context, dbUsers []VPNUserConfig, removeOrphans bool) (*EngineSyncResult, error)
+	SyncUsers(ctx context.Context, users []VPNUserConfig, removeOrphans bool) (*EngineSyncResult, error)
 }
 
-// StaticInboundClients is an opaque, field-preserving static client list for
-// one inbound. It is deliberately kept separate from VPNUserConfig: clients
-// written directly into an engine template may contain protocol-specific
-// fields that xraytool does not own and must not discard during replication.
-type StaticInboundClients struct {
-	InboundTag string          `json:"inbound_tag"`
-	Protocol   string          `json:"protocol"`
-	Clients    json.RawMessage `json:"clients"`
-}
-
-// StaticClientSynchronizer is an optional engine capability used by cluster
-// synchronisation. Engines that support static/template clients can export
-// and apply their exact JSON while ordinary database-managed users continue
-// through ConfigRegenerator.
-//
-// managedUsers identifies the current database-owned users, so a direct
-// config source can exclude them from the static snapshot.
-type StaticClientSynchronizer interface {
-	StaticClientSnapshot(ctx context.Context, managedUsers []VPNUserConfig) ([]StaticInboundClients, error)
-	ApplyStaticClientSnapshot(ctx context.Context, inbounds []StaticInboundClients) error
+// TemplateUserSnapshotter is an optional capability for engines whose
+// template contains hardcoded users. It reads the template without modifying
+// it and converts those users into the same snapshot representation that is
+// used for database users. managedUsers lets an implementation prefer the
+// database version when an email exists in both places.
+type TemplateUserSnapshotter interface {
+	TemplateUserSnapshot(ctx context.Context, managedUsers []VPNUserConfig) ([]VPNUserConfig, error)
 }
 
 // DriftReconciler restores the managed part of an engine configuration from a

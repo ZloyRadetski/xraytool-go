@@ -92,4 +92,24 @@ func (e *PublishingEngine) UnbanUser(ctx context.Context, email string) error {
 	return e.service.PublishCurrentUser(ctx, email)
 }
 
+// TemplateUserSnapshot is intentionally transparent through the publishing
+// wrapper. It only reads a template; replication publishes the resulting users
+// as normal snapshot records, not as a separate configuration artifact.
+func (e *PublishingEngine) TemplateUserSnapshot(ctx context.Context, managedUsers []domain.VPNUserConfig) ([]domain.VPNUserConfig, error) {
+	snapshotter, ok := e.Engine.(domain.TemplateUserSnapshotter)
+	if !ok {
+		return nil, fmt.Errorf("template user snapshot is unavailable")
+	}
+	return snapshotter.TemplateUserSnapshot(ctx, managedUsers)
+}
+
+func (e *PublishingEngine) SupportsTemplateUserSnapshot() bool {
+	if probe, ok := e.Engine.(interface{ SupportsTemplateUserSnapshot() bool }); ok {
+		return probe.SupportsTemplateUserSnapshot()
+	}
+	_, ok := e.Engine.(domain.TemplateUserSnapshotter)
+	return ok
+}
+
 var _ domain.Engine = (*PublishingEngine)(nil)
+var _ domain.TemplateUserSnapshotter = (*PublishingEngine)(nil)

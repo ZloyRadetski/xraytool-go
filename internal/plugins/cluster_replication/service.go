@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	artifactStaticClients = "static_clients"
-	artifactRealityKeys   = "reality_keys"
+	artifactRealityKeys          = "reality_keys"
+	legacyStaticClientsArtifact  = "static_clients"
+	legacyStaticClientsDigestKey = "master_artifact_digest_static_clients"
 )
 
 type userPayload struct {
@@ -69,6 +70,28 @@ func (s *Service) BuildSnapshot(ctx context.Context) ([]domain.VPNUserConfig, er
 			continue
 		}
 		users = append(users, vpn.SubscriptionToVPNUserConfig(subscription))
+	}
+	if snapshotter, ok := templateUserSnapshotter(s.engine); ok {
+		templateUsers, snapshotErr := snapshotter.TemplateUserSnapshot(ctx, users)
+		if snapshotErr != nil {
+			return nil, fmt.Errorf("build template user snapshot: %w", snapshotErr)
+		}
+		seen := make(map[string]struct{}, len(users)+len(templateUsers))
+		for _, user := range users {
+			if user.Email != "" {
+				seen[user.Email] = struct{}{}
+			}
+		}
+		for _, user := range templateUsers {
+			if user.Email == "" {
+				continue
+			}
+			if _, exists := seen[user.Email]; exists {
+				continue
+			}
+			seen[user.Email] = struct{}{}
+			users = append(users, user)
+		}
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i].Email < users[j].Email })
 	return users, nil
@@ -188,22 +211,13 @@ func desiredDigest(users []domain.VPNUserConfig) (string, error) {
 }
 
 func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string) (int, error) {
-	users, err := s.BuildSnapshot(ctx)
-	if err != nil {
-		return 0, err
+	if err := s.store.DeleteArtifact(ctx, legacyStaticClientsArtifact); err != nil {
+		return 0, fmt.Errorf("remove obsolete static client artifact: %w", err)
+	}
+	if err := s.store.DeleteMeta(ctx, legacyStaticClientsDigestKey); err != nil {
+		return 0, fmt.Errorf("remove obsolete static client digest: %w", err)
 	}
 	artifacts := make(map[string][]byte)
-	if synchronizer, ok := staticClientSynchronizer(s.engine); ok {
-		clients, snapshotErr := synchronizer.StaticClientSnapshot(ctx, users)
-		if snapshotErr != nil {
-			return 0, fmt.Errorf("build static client artifact: %w", snapshotErr)
-		}
-		payload, marshalErr := json.Marshal(clients)
-		if marshalErr != nil {
-			return 0, marshalErr
-		}
-		artifacts[artifactStaticClients] = payload
-	}
 	if path := strings.TrimSpace(realityKeysPath); path != "" {
 		payload, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -245,12 +259,12 @@ func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string) 
 	return published, nil
 }
 
-func staticClientSynchronizer(engine domain.Engine) (domain.StaticClientSynchronizer, bool) {
-	if probe, ok := engine.(interface{ SupportsStaticClientSync() bool }); ok && !probe.SupportsStaticClientSync() {
+func templateUserSnapshotter(engine domain.Engine) (domain.TemplateUserSnapshotter, bool) {
+	if probe, ok := engine.(interface{ SupportsTemplateUserSnapshot() bool }); ok && !probe.SupportsTemplateUserSnapshot() {
 		return nil, false
 	}
-	synchronizer, ok := engine.(domain.StaticClientSynchronizer)
-	return synchronizer, ok
+	snapshotter, ok := engine.(domain.TemplateUserSnapshotter)
+	return snapshotter, ok
 }
 
 func (s *Service) ApplyEvent(ctx context.Context, masterID string, event Event, realityKeysPath string) error {
@@ -318,18 +332,15 @@ func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64,
 		return fmt.Errorf("decode replication artifact body: %w", err)
 	}
 	switch payload.Kind {
-	case artifactStaticClients:
-		synchronizer, ok := staticClientSynchronizer(s.engine)
-		if !ok {
-			return fmt.Errorf("selected engine cannot apply static client artifact")
+	case legacyStaticClientsArtifact:
+		// A mixed-version cluster can still deliver a previously journaled
+		// artifact. Ignore it safely: hardcoded users now arrive in ordinary
+		// snapshot user frames and no sidecar is recreated.
+		s.log.Warn("ignoring obsolete static-client replication artifact")
+		if err := s.store.DeleteArtifact(ctx, legacyStaticClientsArtifact); err != nil {
+			return fmt.Errorf("remove obsolete static client artifact: %w", err)
 		}
-		var clients []domain.StaticInboundClients
-		if err := json.Unmarshal(data, &clients); err != nil {
-			return fmt.Errorf("decode static client artifact: %w", err)
-		}
-		if err := synchronizer.ApplyStaticClientSnapshot(ctx, clients); err != nil {
-			return fmt.Errorf("apply static client artifact: %w", err)
-		}
+		return nil
 	case artifactRealityKeys:
 		path := strings.TrimSpace(realityKeysPath)
 		if path == "" {

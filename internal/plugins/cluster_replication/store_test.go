@@ -68,6 +68,47 @@ type reconcileEngine struct {
 	added int
 }
 
+type snapshotSubscriptionRepository struct {
+	domain.SubscriptionRepository
+	items []domain.Subscription
+}
+
+func (r snapshotSubscriptionRepository) FindAll(context.Context) ([]domain.Subscription, error) {
+	return append([]domain.Subscription(nil), r.items...), nil
+}
+
+type snapshotUserRepository struct{ domain.UserRepository }
+
+func (snapshotUserRepository) FindAll(context.Context) ([]domain.User, error) { return nil, nil }
+
+type snapshotBanRepository struct{ domain.AntifraudBanRepository }
+
+func (snapshotBanRepository) FindActive(context.Context) ([]domain.AntifraudBan, error) {
+	return nil, nil
+}
+
+type snapshotRegistry struct {
+	domain.Registry
+	subscriptions domain.SubscriptionRepository
+}
+
+func (r snapshotRegistry) Subscriptions() domain.SubscriptionRepository { return r.subscriptions }
+func (snapshotRegistry) Users() domain.UserRepository                   { return snapshotUserRepository{} }
+func (snapshotRegistry) AntifraudBans() domain.AntifraudBanRepository {
+	return snapshotBanRepository{}
+}
+
+type templateSnapshotEngine struct {
+	vpn.NoopEngine
+	users   []domain.VPNUserConfig
+	managed []domain.VPNUserConfig
+}
+
+func (e *templateSnapshotEngine) TemplateUserSnapshot(_ context.Context, managed []domain.VPNUserConfig) ([]domain.VPNUserConfig, error) {
+	e.managed = append([]domain.VPNUserConfig(nil), managed...)
+	return append([]domain.VPNUserConfig(nil), e.users...), nil
+}
+
 func (e *reconcileEngine) AddUser(_ context.Context, user domain.VPNUserConfig) error {
 	e.added++
 	e.users = append(e.users, user)
@@ -86,6 +127,27 @@ func TestReconcileUsersUsesForcedDriftRepair(t *testing.T) {
 
 	require.NoError(t, service.reconcileUsers(context.Background(), users))
 	require.Equal(t, users, engine.users)
+}
+
+func TestBuildSnapshotAddsTemplateUsersAsRegularUsers(t *testing.T) {
+	engine := &templateSnapshotEngine{users: []domain.VPNUserConfig{
+		{Email: "ops@example.test", UUID: "ops-id"},
+		{Email: "db@example.test", UUID: "must-not-override-db"},
+	}}
+	registry := snapshotRegistry{subscriptions: snapshotSubscriptionRepository{items: []domain.Subscription{
+		{ID: "sub-1", Email: "db@example.test", UUID: "db-id", Status: "active"},
+		{ID: "sub-2", Email: "inactive@example.test", UUID: "inactive-id", Status: "inactive"},
+	}}}
+	service := NewService(registry, engine, newTestStore(t), nil)
+
+	users, err := service.BuildSnapshot(context.Background())
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	require.Equal(t, []string{"db@example.test", "ops@example.test"}, []string{users[0].Email, users[1].Email})
+	require.Equal(t, "db-id", users[0].UUID, "database users win on email collision")
+	require.Equal(t, "ops-id", users[1].UUID)
+	require.Len(t, engine.managed, 1)
+	require.Equal(t, "db@example.test", engine.managed[0].Email)
 }
 
 func TestReconcileSlaveUsesPersistedDesiredProjection(t *testing.T) {

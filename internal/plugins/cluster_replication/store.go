@@ -206,6 +206,10 @@ func (s *Store) PutMeta(ctx context.Context, key, value string) error {
 	return s.db.WithContext(ctx).Save(&row).Error
 }
 
+func (s *Store) DeleteMeta(ctx context.Context, key string) error {
+	return s.db.WithContext(ctx).Where("key = ?", key).Delete(&metaRow{}).Error
+}
+
 func (s *Store) AlreadyApplied(ctx context.Context, masterID string, revision int64) (bool, error) {
 	var count int64
 	if err := s.db.WithContext(ctx).Model(&inboxRow{}).Where("master_id = ? AND revision = ?", masterID, revision).Count(&count).Error; err != nil {
@@ -564,6 +568,10 @@ func (s *Store) PutArtifact(ctx context.Context, kind string, payload []byte, re
 		Checksum: checksum(kind, payload),
 		Revision: revision,
 	}).Error
+}
+
+func (s *Store) DeleteArtifact(ctx context.Context, kind string) error {
+	return s.db.WithContext(ctx).Where("kind = ?", kind).Delete(&artifactRow{}).Error
 }
 
 func (s *Store) Artifacts(ctx context.Context) ([]Event, error) {

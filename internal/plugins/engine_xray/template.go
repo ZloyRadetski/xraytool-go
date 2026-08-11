@@ -8,39 +8,19 @@ import (
 	"xraytool/internal/domain"
 )
 
-// MergeUsers merges DB users into the template config, preserving static
-// (non-DB) clients like reverse-proxy and admin accounts.
+// MergeUsers writes one desired user snapshot into the template's structural
+// skeleton. It never changes the template object passed by the caller.
 //
-// Algorithm for every inbound that has a client list:
-//  1. Read existing clients from the template.
-//  2. Separate:
-//     - static: clients whose email is NOT in dbUsers → keep as-is.
-//     - dynamic: generate fresh client objects from dbUsers via BuildClient.
-//  3. Final clients = static + dynamic (DB always wins on collision).
+// For every inbound with a client list, email-bearing template clients are
+// replaced by fresh clients built from users. Anonymous entries are retained
+// because they cannot be represented by VPNUserConfig.
 //
 // The returned RawConfig is a fully populated xray config ready to write to disk.
-func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig, blacklistedAdmins []string) (RawConfig, error) {
+func MergeUsers(template RawConfig, users []domain.VPNUserConfig) (RawConfig, error) {
 	// Clone the template map to prevent side-effects on the caller's template object.
 	cloned := make(RawConfig, len(template))
 	for k, v := range template {
 		cloned[k] = v
-	}
-
-	// Build DB email index.
-	dbEmails := make(map[string]domain.VPNUserConfig, len(dbUsers))
-	for _, u := range dbUsers {
-		if u.Email == "" {
-			continue
-		}
-		dbEmails[u.Email] = u
-	}
-
-	// Build blacklist lookup map.
-	blacklist := make(map[string]bool, len(blacklistedAdmins))
-	for _, email := range blacklistedAdmins {
-		if email != "" {
-			blacklist[email] = true
-		}
 	}
 
 	inbounds, err := cloned.GetInbounds()
@@ -58,25 +38,16 @@ func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig, blacklistedA
 			return nil, fmt.Errorf("merge: inbound %q: read clients: %w", ib.Tag(), err)
 		}
 
-		// 1. Keep clients whose email is NOT in DB and NOT in blacklist — they're static.
+		// Preserve only anonymous records that cannot participate in a snapshot.
 		var static []RawClient
 		for _, c := range existing {
-			email := c.Email()
-			if email == "" {
-				// Empty-email clients are always kept (malformed/edge-case).
-				static = append(static, c)
-				continue
-			}
-			if blacklist[email] {
-				continue
-			}
-			if _, isDB := dbEmails[email]; !isDB {
+			if c.Email() == "" {
 				static = append(static, c)
 			}
 		}
 
-		// 2. Build dynamic clients from DB users, scoped to this inbound.
-		dynamic, err := buildDynamicClients(ib, dbUsers)
+		// Build the complete desired client list, scoped to this inbound.
+		dynamic, err := buildDynamicClients(ib, users)
 		if err != nil {
 			return nil, fmt.Errorf("merge: inbound %q: build dynamic clients: %w", ib.Tag(), err)
 		}
@@ -93,12 +64,12 @@ func MergeUsers(template RawConfig, dbUsers []domain.VPNUserConfig, blacklistedA
 	return cloned, nil
 }
 
-// buildDynamicClients builds RawClient objects for every DB user, using the
+// buildDynamicClients builds RawClient objects for every desired user, using the
 // inbound's protocol to determine field layout.
-func buildDynamicClients(ib RawInbound, dbUsers []domain.VPNUserConfig) ([]RawClient, error) {
-	result := make([]RawClient, 0, len(dbUsers))
-	seen := make(map[string]bool, len(dbUsers))
-	for _, u := range dbUsers {
+func buildDynamicClients(ib RawInbound, users []domain.VPNUserConfig) ([]RawClient, error) {
+	result := make([]RawClient, 0, len(users))
+	seen := make(map[string]bool, len(users))
+	for _, u := range users {
 		if u.Email == "" {
 			continue
 		}
@@ -124,9 +95,9 @@ func buildDynamicClients(ib RawInbound, dbUsers []domain.VPNUserConfig) ([]RawCl
 	return result, nil
 }
 
-// RegenerateConfig reads the template, merges DB users, and writes the result
+// RegenerateConfig reads the template, applies the desired user snapshot, and writes the result
 // to configPath atomically. This is the single entry point for config generation.
-func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserConfig, realityRotation bool, realityKeysPath string, blacklistedAdmins []string) error {
+func RegenerateConfig(templatePath, configPath string, users []domain.VPNUserConfig, realityRotation bool, realityKeysPath string) error {
 	template, err := Read(templatePath)
 	if err != nil {
 		return fmt.Errorf("regenerate: read template %q: %w", templatePath, err)
@@ -153,7 +124,7 @@ func RegenerateConfig(templatePath, configPath string, dbUsers []domain.VPNUserC
 		}
 	}
 
-	merged, err := MergeUsers(template, dbUsers, blacklistedAdmins)
+	merged, err := MergeUsers(template, users)
 	if err != nil {
 		return fmt.Errorf("regenerate: merge users: %w", err)
 	}

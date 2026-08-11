@@ -10,19 +10,13 @@ import (
 	"xraytool/internal/pluginapi"
 )
 
-type staticEngineStub struct {
+type templateEngineStub struct {
 	domain.Engine
-	snapshot []domain.StaticInboundClients
-	applied  []domain.StaticInboundClients
+	snapshot []domain.VPNUserConfig
 }
 
-func (s *staticEngineStub) StaticClientSnapshot(_ context.Context, _ []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
-	return append([]domain.StaticInboundClients(nil), s.snapshot...), nil
-}
-
-func (s *staticEngineStub) ApplyStaticClientSnapshot(_ context.Context, clients []domain.StaticInboundClients) error {
-	s.applied = append([]domain.StaticInboundClients(nil), clients...)
-	return nil
+func (s *templateEngineStub) TemplateUserSnapshot(_ context.Context, _ []domain.VPNUserConfig) ([]domain.VPNUserConfig, error) {
+	return append([]domain.VPNUserConfig(nil), s.snapshot...), nil
 }
 
 func TestNewFromEngine_ReusesKernelEngine(t *testing.T) {
@@ -39,18 +33,14 @@ func TestNewFromEngine_ReusesKernelEngine(t *testing.T) {
 	require.NotNil(t, p.PublishedServices()["engine.softban"])
 }
 
-func TestPluginExposesUnderlyingStaticClientSynchronizer(t *testing.T) {
-	engine := &staticEngineStub{
-		snapshot: []domain.StaticInboundClients{{InboundTag: "vless-main", Protocol: "vless", Clients: []byte("[]")}},
+func TestPluginExposesUnderlyingTemplateUserSnapshotter(t *testing.T) {
+	engine := &templateEngineStub{
+		snapshot: []domain.VPNUserConfig{{Email: "ops@example.test", UUID: "static-id"}},
 	}
 	p := NewFromEngine(engine)
 
-	require.True(t, p.SupportsStaticClientSync())
-	snapshot, err := p.StaticClientSnapshot(context.Background(), nil)
+	require.True(t, p.SupportsTemplateUserSnapshot())
+	snapshot, err := p.TemplateUserSnapshot(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, engine.snapshot, snapshot)
-
-	desired := []domain.StaticInboundClients{{InboundTag: "vless-main", Protocol: "vless", Clients: []byte(`[{"email":"manual"}]`)}}
-	require.NoError(t, p.ApplyStaticClientSnapshot(context.Background(), desired))
-	require.Equal(t, desired, engine.applied)
 }

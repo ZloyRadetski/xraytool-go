@@ -378,9 +378,8 @@ func (s *replicationServer) sendEventsAfter(ctx context.Context, stream protocol
 }
 
 func (s *replicationServer) sendSnapshot(ctx context.Context, stream protocol.Replication_ConnectServer) (int64, error) {
-	// A snapshot is a complete desired-state transfer. Refresh configuration
-	// artifacts here as well as in the periodic master loop so a manually
-	// requested snapshot cannot omit master-only hardcoded template users.
+	// A snapshot is a complete desired-state transfer. Refresh the remaining
+	// configuration artifacts here as well as in the periodic master loop.
 	if count, err := s.service.PublishArtifacts(ctx, s.config.RealityKeysPath); err != nil {
 		return 0, fmt.Errorf("refresh replication artifacts for snapshot: %w", err)
 	} else if count > 0 {
@@ -417,6 +416,11 @@ func (s *replicationServer) sendSnapshot(ctx context.Context, stream protocol.Re
 		return 0, err
 	}
 	for _, artifact := range artifacts {
+		if artifact.Kind == legacyStaticClientsArtifact {
+			// Defensive compatibility filter for a stale row created by an older
+			// release. Hardcoded users are snapshot users now, never artifacts.
+			continue
+		}
 		payload, marshalErr := json.Marshal(artifactPayload{Kind: artifact.Kind, Data: base64.StdEncoding.EncodeToString(artifact.Payload)})
 		if marshalErr != nil {
 			return 0, marshalErr

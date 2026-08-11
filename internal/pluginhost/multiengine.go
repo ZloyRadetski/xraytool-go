@@ -61,7 +61,7 @@ type MultiEngine struct {
 
 var _ domain.Engine = (*MultiEngine)(nil)
 var _ pluginapi.ClientConfigContributor = (*MultiEngine)(nil)
-var _ domain.StaticClientSynchronizer = (*MultiEngine)(nil)
+var _ domain.TemplateUserSnapshotter = (*MultiEngine)(nil)
 var _ domain.DriftReconciler = (*MultiEngine)(nil)
 
 // NewMultiEngine creates a MultiEngine with the broadcast router.
@@ -123,53 +123,42 @@ func (m *MultiEngine) WithRouter(r EngineRouter) *MultiEngine {
 	return m
 }
 
-// SupportsStaticClientSync reports whether exactly one configured engine owns
-// hardcoded template clients. Static client artifacts have no engine ID in
-// their wire format, so delegating to more than one engine would be ambiguous
-// and unsafe. A single Xray engine remains supported alongside ordinary ones.
-func (m *MultiEngine) SupportsStaticClientSync() bool {
-	_, ok := m.staticClientSynchronizer()
+// SupportsTemplateUserSnapshot reports whether exactly one configured engine
+// owns a template user source. A hardcoded template user has no engine ID in
+// the generic snapshot, so selecting multiple sources would be ambiguous.
+func (m *MultiEngine) SupportsTemplateUserSnapshot() bool {
+	_, ok := m.templateUserSnapshotter()
 	return ok
 }
 
-// StaticClientSnapshot delegates the optional static/template-client
-// capability to its single supporting engine. This keeps cluster replication
-// working when the kernel passes the MultiEngine facade instead of Xray.
-func (m *MultiEngine) StaticClientSnapshot(ctx context.Context, users []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
-	synchronizer, ok := m.staticClientSynchronizer()
+// TemplateUserSnapshot delegates the read-only template-user capability to its
+// single supporting engine. This keeps cluster replication working when the
+// kernel passes the MultiEngine facade instead of Xray.
+func (m *MultiEngine) TemplateUserSnapshot(ctx context.Context, users []domain.VPNUserConfig) ([]domain.VPNUserConfig, error) {
+	snapshotter, ok := m.templateUserSnapshotter()
 	if !ok {
-		return nil, fmt.Errorf("pluginhost: static client synchronization requires exactly one capable engine")
+		return nil, fmt.Errorf("pluginhost: template user snapshot requires exactly one capable engine")
 	}
-	return synchronizer.StaticClientSnapshot(ctx, users)
+	return snapshotter.TemplateUserSnapshot(ctx, users)
 }
 
-// ApplyStaticClientSnapshot delegates replicated hardcoded clients to the
-// same engine. Dynamic database users remain routed by MultiEngine normally.
-func (m *MultiEngine) ApplyStaticClientSnapshot(ctx context.Context, clients []domain.StaticInboundClients) error {
-	synchronizer, ok := m.staticClientSynchronizer()
-	if !ok {
-		return fmt.Errorf("pluginhost: static client synchronization requires exactly one capable engine")
-	}
-	return synchronizer.ApplyStaticClientSnapshot(ctx, clients)
-}
-
-func (m *MultiEngine) staticClientSynchronizer() (domain.StaticClientSynchronizer, bool) {
+func (m *MultiEngine) templateUserSnapshotter() (domain.TemplateUserSnapshotter, bool) {
 	if m == nil {
 		return nil, false
 	}
-	var selected domain.StaticClientSynchronizer
+	var selected domain.TemplateUserSnapshotter
 	for _, ref := range m.engines {
-		if probe, ok := ref.provider.(interface{ SupportsStaticClientSync() bool }); ok && !probe.SupportsStaticClientSync() {
+		if probe, ok := ref.provider.(interface{ SupportsTemplateUserSnapshot() bool }); ok && !probe.SupportsTemplateUserSnapshot() {
 			continue
 		}
-		synchronizer, ok := ref.provider.(domain.StaticClientSynchronizer)
+		snapshotter, ok := ref.provider.(domain.TemplateUserSnapshotter)
 		if !ok {
 			continue
 		}
 		if selected != nil {
 			return nil, false
 		}
-		selected = synchronizer
+		selected = snapshotter
 	}
 	return selected, selected != nil
 }

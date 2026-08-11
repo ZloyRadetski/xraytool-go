@@ -1,6 +1,8 @@
 package engine_xray
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	json "github.com/goccy/go-json"
 	"os"
@@ -484,6 +486,15 @@ func taggedClientMap(payload []TaggedClient) map[string]RawClient {
 		m[tc.Tag] = tc.Client
 	}
 	return m
+}
+
+func rawClientKey(client RawClient) string {
+	data, err := json.Marshal(client)
+	if err != nil {
+		return "invalid-client"
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func mutateClients(cfg RawConfig, email string, fn func(RawClient)) error {

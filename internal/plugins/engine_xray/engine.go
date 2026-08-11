@@ -136,14 +136,6 @@ func (a *Adapter) calculateStateHash(dbUsers []domain.VPNUserConfig) (string, er
 			h.Write([]byte("template_err"))
 		}
 	}
-	// Replicated hardcoded clients live outside the user-owned template. Hash
-	// the overlay so a changed artifact cannot be hidden by the ordinary DB
-	// desired-state hash.
-	if data, err := os.ReadFile(a.staticClientStatePath()); err == nil {
-		h.Write([]byte("static:"))
-		h.Write(data)
-	}
-
 	// 2. Hash reality rotation settings
 	h.Write([]byte(fmt.Sprintf("rot:%t;keys:%s;", a.realityRotation, a.realityKeysPath)))
 	if a.realityRotation && a.realityKeysPath != "" {
@@ -378,7 +370,7 @@ func (a *Adapter) removeUserLocked(ctx context.Context, email string) error {
 		return fmt.Errorf("xray adapter RemoveUser: email must not be empty")
 	}
 
-	protected := a.getProtectedTemplateUsers(nil)
+	protected := a.getProtectedTemplateUsers()
 	if !shouldBypassProtection(ctx) && protected[email] {
 		a.log.Info("xray adapter: skipping RemoveUser for protected template user", "email", email)
 		return nil
@@ -451,7 +443,7 @@ func (a *Adapter) removeUsersBulkLocked(ctx context.Context, emails []string) er
 		return nil
 	}
 
-	protected := a.getProtectedTemplateUsers(nil)
+	protected := a.getProtectedTemplateUsers()
 	var nonProtected []string
 	for _, e := range emails {
 		if e != "" && (shouldBypassProtection(ctx) || !protected[e]) {
@@ -593,24 +585,9 @@ func (a *Adapter) ListUsers(_ context.Context) ([]domain.VPNUserConfig, error) {
 
 	users := make([]domain.VPNUserConfig, 0, len(rawUsers))
 	for _, u := range rawUsers {
-		authVal := u.GetString("auth")
-		if authVal == "" {
-			authVal = u.GetString("password")
+		if user, ok := rawClientToVPNUserConfig(u); ok {
+			users = append(users, user)
 		}
-
-		var maxDevices int
-		if lv, ok := u.GetNumber("limit"); ok {
-			maxDevices = int(lv)
-		}
-
-		users = append(users, domain.VPNUserConfig{
-			Email:      u.Email(),
-			UUID:       u.GetString("id"),
-			Auth:       authVal,
-			Subfile:    u.GetString("subfile"),
-			Expire:     u.GetString("expire"),
-			MaxDevices: maxDevices,
-		})
 	}
 	return users, nil
 }
@@ -758,37 +735,45 @@ func (a *Adapter) UnbanUser(ctx context.Context, email string) error {
 // SyncUsers — regenerate config + hot-sync with running xray
 // ─────────────────────────────────────────────────────────────────────────────
 
-// SyncUsers regenerates config.json from template + dbUsers, then diffs
+// SyncUsers regenerates config.json from template + the desired user snapshot, then diffs
 // against the running xray process and hot-adds / hot-removes as needed.
 // The config on disk is fully regenerated before the diff.
 //
 //   - removeOrphans=false is the safe default: missing users are added but
 //     extra users in xray are never removed.
-//   - removeOrphans=true cleans up users from xray that are not in dbUsers.
-func (a *Adapter) SyncUsers(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+//   - removeOrphans=true cleans up users from xray that are not in the snapshot.
+func (a *Adapter) SyncUsers(ctx context.Context, users []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
-	return a.syncUsersLocked(ctx, dbUsers, removeOrphans)
+	return a.syncUsersLocked(ctx, users, removeOrphans, true)
 }
 
 // ReconcileUsers deliberately bypasses the cached desired-state hash. Slave
 // replication uses it to repair an edited generated config even when the
 // desired users in the database have not changed.
-func (a *Adapter) ReconcileUsers(ctx context.Context, dbUsers []domain.VPNUserConfig) (*domain.EngineSyncResult, error) {
+func (a *Adapter) ReconcileUsers(ctx context.Context, users []domain.VPNUserConfig) (*domain.EngineSyncResult, error) {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	a.invalidateHash()
-	return a.syncUsersLocked(ctx, dbUsers, true)
+	return a.syncUsersLocked(ctx, users, true, false)
 }
 
-func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserConfig, removeOrphans bool) (*domain.EngineSyncResult, error) {
+func (a *Adapter) syncUsersLocked(ctx context.Context, users []domain.VPNUserConfig, removeOrphans, includeLocalTemplateUsers bool) (*domain.EngineSyncResult, error) {
 	_ = context.WithoutCancel(ctx)
 	result := &domain.EngineSyncResult{}
+	if includeLocalTemplateUsers {
+		var err error
+		users, err = a.withTemplateUsers(users)
+		if err != nil {
+			return result, fmt.Errorf("xray adapter SyncUsers: build template user snapshot: %w", err)
+		}
+	}
 
 	a.healDirty(ctx)
+	a.removeLegacyStaticClientState()
 
 	// Calculate desired state hash
-	dbHash, err := a.calculateStateHash(dbUsers)
+	dbHash, err := a.calculateStateHash(users)
 	if err == nil {
 		hashPath := a.configPath + ".hash"
 		if localHashBytes, err := os.ReadFile(hashPath); err == nil {
@@ -808,33 +793,27 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 
 	oldCfg, _ := Read(a.configPath)
 
-	dbEmails := make(map[string]bool, len(dbUsers))
-	for _, u := range dbUsers {
+	desiredEmails := make(map[string]bool, len(users))
+	for _, u := range users {
 		if u.Email != "" {
-			dbEmails[u.Email] = true
+			desiredEmails[u.Email] = true
 		}
 	}
 
-	// Load static template users to protect them from being marked as orphans
-	templateSet := a.getProtectedTemplateUsers(dbEmails)
-
-	// 2. Regenerate config.json from template + DB users.
+	// 2. Regenerate config.json from the structural template + one desired snapshot.
 	if a.templatePath != "" {
-		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers, a.realityRotation, a.realityKeysPath, a.blacklistedAdmins); err != nil {
+		if err := RegenerateConfig(a.templatePath, a.configPath, users, a.realityRotation, a.realityKeysPath); err != nil {
 			return result, fmt.Errorf("xray adapter SyncUsers: regenerate config: %w", err)
 		}
-		if err := a.restoreStaticClientsToGeneratedConfig(); err != nil {
-			return result, fmt.Errorf("xray adapter SyncUsers: restore replicated static clients: %w", err)
-		}
-		a.log.Info("xray adapter: config regenerated from template", "users", len(dbUsers))
-	} else if len(dbUsers) > 0 {
+		a.log.Info("xray adapter: config regenerated from template", "users", len(users))
+	} else if len(users) > 0 {
 		// Installations without a template keep their current config as the
 		// desired shape. In that mode addUsersBulkLocked performs the same
 		// per-inbound repair directly against the current config.
-		if err := a.addUsersBulkLocked(ctx, dbUsers); err != nil {
-			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(dbUsers), "err", err)
+		if err := a.addUsersBulkLocked(ctx, users); err != nil {
+			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(users), "err", err)
 		} else {
-			result.Added = len(dbUsers)
+			result.Added = len(users)
 		}
 	}
 
@@ -849,7 +828,7 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 	var toAdd []TaggedClient
 	toUpdateRemove := make(map[string][]string)
 	if a.templatePath != "" {
-		desiredPayload, err := DesiredUserClientPayload(desiredCfg, dbEmails)
+		desiredPayload, err := DesiredUserClientPayload(desiredCfg, desiredEmails)
 		if err != nil {
 			return result, fmt.Errorf("xray adapter SyncUsers: read desired inbound clients: %w", err)
 		}
@@ -862,10 +841,10 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 	// 4. Build lookup sets for orphan handling. The values are deliberately
 	// still one-per-email here; orphan removal is about ownership, not inbound
 	// membership, which was handled by the tag-aware diff above.
-	dbSet := make(map[string]domain.VPNUserConfig, len(dbUsers))
-	for _, u := range dbUsers {
+	desiredSet := make(map[string]domain.VPNUserConfig, len(users))
+	for _, u := range users {
 		if u.Email != "" {
-			dbSet[u.Email] = u
+			desiredSet[u.Email] = u
 		}
 	}
 
@@ -903,10 +882,8 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 	if removeOrphans {
 		var toRemove []string
 		for _, u := range liveUsers {
-			if _, ok := dbSet[u.Email]; !ok {
-				if !templateSet[u.Email] {
-					toRemove = append(toRemove, u.Email)
-				}
+			if _, ok := desiredSet[u.Email]; !ok {
+				toRemove = append(toRemove, u.Email)
 			}
 		}
 		if len(toRemove) > 0 {
@@ -957,7 +934,7 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 	}
 
 	a.log.Info("xray adapter: sync completed",
-		"db_users", len(dbUsers),
+		"desired_users", len(users),
 		"live_users", len(liveUsers),
 		"added", result.Added,
 		"removed", result.Removed,
@@ -1227,44 +1204,4 @@ func WithBypassProtection(ctx context.Context, bypass bool) context.Context {
 func shouldBypassProtection(ctx context.Context) bool {
 	val, ok := ctx.Value(bypassKey{}).(bool)
 	return ok && val
-}
-
-func (a *Adapter) getProtectedTemplateUsers(dbEmails map[string]bool) map[string]bool {
-	protected := make(map[string]bool)
-	blacklist := make(map[string]bool)
-	for _, email := range a.blacklistedAdmins {
-		if email != "" {
-			blacklist[email] = true
-		}
-	}
-
-	if a.templatePath != "" {
-		templateCfg, err := Read(a.templatePath)
-		if err == nil {
-			if templateUsers, err := ListUsers(templateCfg); err == nil {
-				for _, u := range templateUsers {
-					email := u.Email()
-					if email != "" && !blacklist[email] {
-						if dbEmails == nil || !dbEmails[email] {
-							protected[email] = true
-						}
-					}
-				}
-			}
-		}
-	}
-	// Both direct-config static clients and replicated template overlays are
-	// persisted in the same sidecar. They must be protected from orphan cleanup
-	// even though the overlay never changes the template.
-	if staticClients, err := a.readStaticClientState(); err == nil {
-		for _, clients := range staticClients {
-			for _, client := range clients {
-				email := client.Email()
-				if email != "" && !blacklist[email] && (dbEmails == nil || !dbEmails[email]) {
-					protected[email] = true
-				}
-			}
-		}
-	}
-	return protected
 }

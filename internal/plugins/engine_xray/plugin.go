@@ -243,32 +243,22 @@ func (p *Plugin) ReconcileUsers(ctx context.Context, users []domain.VPNUserConfi
 	return p.engine.SyncUsers(ctx, users, true)
 }
 
-// SupportsStaticClientSync exposes the optional template-client replication
+// SupportsTemplateUserSnapshot exposes the optional read-only template-user
 // capability through the plugin boundary. The kernel normally wraps engines in
 // MultiEngine, so the wrapper must be able to discover the Xray adapter.
-func (p *Plugin) SupportsStaticClientSync() bool {
-	_, ok := p.engine.(domain.StaticClientSynchronizer)
+func (p *Plugin) SupportsTemplateUserSnapshot() bool {
+	_, ok := p.engine.(domain.TemplateUserSnapshotter)
 	return ok
 }
 
-// StaticClientSnapshot preserves hardcoded template clients separately from
-// database-managed users for cluster replication.
-func (p *Plugin) StaticClientSnapshot(ctx context.Context, users []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
-	synchronizer, ok := p.engine.(domain.StaticClientSynchronizer)
+// TemplateUserSnapshot converts hardcoded template users to ordinary domain
+// users. No template file is changed by this operation.
+func (p *Plugin) TemplateUserSnapshot(ctx context.Context, users []domain.VPNUserConfig) ([]domain.VPNUserConfig, error) {
+	snapshotter, ok := p.engine.(domain.TemplateUserSnapshotter)
 	if !ok {
-		return nil, fmt.Errorf("engine_xray: static client sync is unavailable")
+		return nil, fmt.Errorf("engine_xray: template user snapshot is unavailable")
 	}
-	return synchronizer.StaticClientSnapshot(ctx, users)
-}
-
-// ApplyStaticClientSnapshot applies replicated hardcoded template clients and
-// hot-rebuilds the affected Xray inbounds through the underlying adapter.
-func (p *Plugin) ApplyStaticClientSnapshot(ctx context.Context, clients []domain.StaticInboundClients) error {
-	synchronizer, ok := p.engine.(domain.StaticClientSynchronizer)
-	if !ok {
-		return fmt.Errorf("engine_xray: static client sync is unavailable")
-	}
-	return synchronizer.ApplyStaticClientSnapshot(ctx, clients)
+	return snapshotter.TemplateUserSnapshot(ctx, users)
 }
 
 // ── pluginapi.ClientConfigContributor ────────────────────────────────────────
@@ -371,4 +361,4 @@ var _ pluginapi.Plugin = (*Plugin)(nil)
 var _ pluginapi.EngineProvider = (*Plugin)(nil)
 var _ pluginapi.ClientConfigContributor = (*Plugin)(nil)
 var _ pluginapi.ServiceProvider = (*Plugin)(nil)
-var _ domain.StaticClientSynchronizer = (*Plugin)(nil)
+var _ domain.TemplateUserSnapshotter = (*Plugin)(nil)

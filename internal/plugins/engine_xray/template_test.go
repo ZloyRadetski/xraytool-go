@@ -65,12 +65,12 @@ func readRawConfig(t *testing.T, path string) RawConfig {
 // MergeUsers
 // ---------------------------------------------------------------------------
 
-func TestMergeUsers_StaticClientsPreserved(t *testing.T) {
+func TestMergeUsers_UsesOnlySnapshotUsers(t *testing.T) {
 	tmplPath := writeTempFile(t, minXrayTemplate)
 	tmpl := readRawConfig(t, tmplPath)
 
 	// Empty DB users — nothing should change except empty-email cleanup.
-	merged, err := MergeUsers(tmpl, nil, nil)
+	merged, err := MergeUsers(tmpl, nil)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -79,22 +79,22 @@ func TestMergeUsers_StaticClientsPreserved(t *testing.T) {
 
 	// vless inbound
 	clients, _ := inbounds[0].GetClients()
-	if len(clients) != 2 {
-		t.Fatalf("vless: expected 2 static clients, got %d", len(clients))
+	if len(clients) != 0 {
+		t.Fatalf("vless: expected no users without a snapshot, got %d", len(clients))
 	}
-	if clients[0].Email() != "reverse-proxy-us" {
+	if len(clients) > 0 && clients[0].Email() != "reverse-proxy-us" {
 		t.Errorf("vless client[0]: expected reverse-proxy-us, got %q", clients[0].Email())
 	}
-	if clients[1].Email() != "admin-debug" {
+	if len(clients) > 1 && clients[1].Email() != "admin-debug" {
 		t.Errorf("vless client[1]: expected admin-debug, got %q", clients[1].Email())
 	}
 
 	// trojan inbound
 	clients, _ = inbounds[1].GetClients()
-	if len(clients) != 1 {
-		t.Fatalf("trojan: expected 1 static client, got %d", len(clients))
+	if len(clients) != 0 {
+		t.Fatalf("trojan: expected no users without a snapshot, got %d", len(clients))
 	}
-	if clients[0].Email() != "reverse-proxy-us" {
+	if len(clients) > 0 && clients[0].Email() != "reverse-proxy-us" {
 		t.Errorf("trojan client[0]: expected reverse-proxy-us, got %q", clients[0].Email())
 	}
 
@@ -113,30 +113,30 @@ func TestMergeUsers_AddsDBUsers(t *testing.T) {
 		{Email: "client2@example.com", UUID: "db-uuid-client2"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers, nil)
+	merged, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
 
 	inbounds, _ := merged.GetInbounds()
 
-	// vless: 2 static + 2 DB = 4
+	// vless: the desired snapshot has two users.
 	clients, _ := inbounds[0].GetClients()
-	if len(clients) != 4 {
-		t.Fatalf("vless: expected 4 clients (2 static + 2 db), got %d", len(clients))
+	if len(clients) != 2 {
+		t.Fatalf("vless: expected 2 snapshot users, got %d", len(clients))
 	}
 
-	// Check that DB users appear after static ones
+	// Snapshot order is preserved.
 	emails := make([]string, len(clients))
 	for i, c := range clients {
 		emails[i] = c.Email()
 	}
-	assertOrder(t, emails, "reverse-proxy-us", "admin-debug", "client1@example.com", "client2@example.com")
+	assertOrder(t, emails, "client1@example.com", "client2@example.com")
 
-	// trojan: 1 static + 2 DB = 3
+	// trojan: the same two snapshot users.
 	clients, _ = inbounds[1].GetClients()
-	if len(clients) != 3 {
-		t.Fatalf("trojan: expected 3 clients, got %d", len(clients))
+	if len(clients) != 2 {
+		t.Fatalf("trojan: expected 2 clients, got %d", len(clients))
 	}
 }
 
@@ -151,7 +151,7 @@ func TestMergeUsers_DBWinsOnCollision(t *testing.T) {
 		{Email: "reverse-proxy-us", UUID: "db-override-uuid", Flow: "xtls-rprx-vision"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers, nil)
+	merged, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -160,21 +160,17 @@ func TestMergeUsers_DBWinsOnCollision(t *testing.T) {
 	clients, _ := inbounds[0].GetClients()
 
 	// vless: admin-debug (static) + reverse-proxy-us (from DB, replacing static)
-	if len(clients) != 2 {
-		t.Fatalf("vless: expected 2 clients, got %d", len(clients))
+	if len(clients) != 1 {
+		t.Fatalf("vless: expected 1 snapshot client, got %d", len(clients))
 	}
 
 	// First client should be admin-debug (the non-colliding static)
-	if clients[0].Email() != "admin-debug" {
-		t.Errorf("expected admin-debug first, got %q", clients[0].Email())
+	if clients[0].Email() != "reverse-proxy-us" {
+		t.Errorf("expected reverse-proxy-us, got %q", clients[0].Email())
 	}
-	// Second client is reverse-proxy-us from DB
-	if clients[1].Email() != "reverse-proxy-us" {
-		t.Errorf("expected reverse-proxy-us second, got %q", clients[1].Email())
-	}
-	// ...and it has the DB UUID, not the template one
-	if clients[1].GetString("id") != "db-override-uuid" {
-		t.Errorf("expected DB UUID 'db-override-uuid', got %q", clients[1].GetString("id"))
+	// It has the snapshot UUID, not the template one.
+	if clients[0].GetString("id") != "db-override-uuid" {
+		t.Errorf("expected DB UUID 'db-override-uuid', got %q", clients[0].GetString("id"))
 	}
 }
 
@@ -195,7 +191,7 @@ func TestMergeUsers_EmptyEmailStaticPreserved(t *testing.T) {
 		{Email: "real@example.com", UUID: "real-uuid"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers, nil)
+	merged, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -226,7 +222,7 @@ func TestMergeUsers_NoClientInboundsUntouched(t *testing.T) {
 		{Email: "someone@example.com", UUID: "uuid"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers, nil)
+	merged, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -251,7 +247,7 @@ func TestMergeUsers_SkipsEmptyEmailDBUsers(t *testing.T) {
 		{Email: "good@example.com", UUID: "good-uuid"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers, nil)
+	merged, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -259,9 +255,9 @@ func TestMergeUsers_SkipsEmptyEmailDBUsers(t *testing.T) {
 	inbounds, _ := merged.GetInbounds()
 	clients, _ := inbounds[0].GetClients()
 
-	// 2 static + 1 DB = 3 (empty-email DB user skipped)
-	if len(clients) != 3 {
-		t.Fatalf("expected 3 clients, got %d", len(clients))
+	// The empty-email snapshot user is skipped.
+	if len(clients) != 1 {
+		t.Fatalf("expected 1 client, got %d", len(clients))
 	}
 }
 
@@ -274,7 +270,7 @@ func TestMergeUsers_DeduplicatesDBUsers(t *testing.T) {
 		{Email: "dup@example.com", UUID: "uuid-second"},
 	}
 
-	merged, err := MergeUsers(tmpl, dbUsers, nil)
+	merged, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -282,12 +278,12 @@ func TestMergeUsers_DeduplicatesDBUsers(t *testing.T) {
 	inbounds, _ := merged.GetInbounds()
 	clients, _ := inbounds[0].GetClients()
 
-	// 2 static + 1 DB = 3 (duplicate skipped)
-	if len(clients) != 3 {
-		t.Fatalf("expected 3 clients, got %d", len(clients))
+	// Duplicate snapshot users are collapsed.
+	if len(clients) != 1 {
+		t.Fatalf("expected 1 client, got %d", len(clients))
 	}
-	if clients[2].GetString("id") != "uuid-first" {
-		t.Errorf("expected first occurrence of duplicate user to win, got uuid: %q", clients[2].GetString("id"))
+	if clients[0].GetString("id") != "uuid-first" {
+		t.Errorf("expected first occurrence of duplicate user to win, got uuid: %q", clients[0].GetString("id"))
 	}
 }
 
@@ -301,7 +297,7 @@ func TestMergeUsers_DoesNotMutateTemplate(t *testing.T) {
 		{Email: "new@example.com", UUID: "some-uuid"},
 	}
 
-	_, err := MergeUsers(tmpl, dbUsers, nil)
+	_, err := MergeUsers(tmpl, dbUsers)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
@@ -325,7 +321,7 @@ func TestRegenerateConfig_WritesMergedConfig(t *testing.T) {
 		{Email: "client1@example.com", UUID: "uuid-1"},
 	}
 
-	err := RegenerateConfig(tmplPath, outPath, dbUsers, false, "", nil)
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, false, "")
 	if err != nil {
 		t.Fatalf("RegenerateConfig: %v", err)
 	}
@@ -335,14 +331,13 @@ func TestRegenerateConfig_WritesMergedConfig(t *testing.T) {
 	inbounds, _ := cfg.GetInbounds()
 	clients, _ := inbounds[0].GetClients()
 
-	// 2 static + 1 DB = 3
-	if len(clients) != 3 {
-		t.Fatalf("expected 3 clients in regenerated config, got %d", len(clients))
+	if len(clients) != 1 {
+		t.Fatalf("expected 1 snapshot client in regenerated config, got %d", len(clients))
 	}
 }
 
 func TestRegenerateConfig_TemplateNotFound(t *testing.T) {
-	err := RegenerateConfig("/nonexistent/template.json", "/tmp/out.json", nil, false, "", nil)
+	err := RegenerateConfig("/nonexistent/template.json", "/tmp/out.json", nil, false, "")
 	if err == nil {
 		t.Fatal("expected error for missing template")
 	}
@@ -353,7 +348,7 @@ func TestRegenerateConfig_BadTemplateJSON(t *testing.T) {
 	badPath := filepath.Join(dir, "bad.json")
 	_ = os.WriteFile(badPath, []byte(`{bad json`), 0644)
 
-	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil, false, "", nil)
+	err := RegenerateConfig(badPath, filepath.Join(dir, "out.json"), nil, false, "")
 	if err == nil {
 		t.Fatal("expected error for bad template JSON")
 	}
@@ -390,7 +385,7 @@ func TestRegenerateConfig_RealityRotation(t *testing.T) {
 	}
 
 	// 1. First run: should generate new keys and inject them
-	err := RegenerateConfig(tmplPath, outPath, dbUsers, true, keysPath, nil)
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, true, keysPath)
 	if err != nil {
 		t.Fatalf("RegenerateConfig: %v", err)
 	}
@@ -438,27 +433,23 @@ func TestRegenerateConfig_RealityRotation(t *testing.T) {
 	}
 }
 
-func TestMergeUsers_BlacklistedAdmins(t *testing.T) {
+func TestTemplateUsers_ExcludeBlacklistedAdmins(t *testing.T) {
 	tmplPath := writeTempFile(t, minXrayTemplate)
 	tmpl := readRawConfig(t, tmplPath)
 
 	// "admin-debug" is static in minXrayTemplate. We blacklist it.
 	blacklisted := []string{"admin-debug"}
 
-	merged, err := MergeUsers(tmpl, nil, blacklisted)
+	users, err := templateUsers(tmpl, nil, blacklisted)
 	if err != nil {
 		t.Fatalf("MergeUsers: %v", err)
 	}
 
-	inbounds, _ := merged.GetInbounds()
-	clients, _ := inbounds[0].GetClients()
-
-	// Should only have "reverse-proxy-us" left, "admin-debug" must be filtered out.
-	if len(clients) != 1 {
-		t.Fatalf("expected 1 client, got %d", len(clients))
+	if len(users) != 1 {
+		t.Fatalf("expected 1 template user, got %d", len(users))
 	}
-	if clients[0].Email() != "reverse-proxy-us" {
-		t.Errorf("expected reverse-proxy-us, got %q", clients[0].Email())
+	if users[0].Email != "reverse-proxy-us" {
+		t.Errorf("expected reverse-proxy-us, got %q", users[0].Email)
 	}
 }
 

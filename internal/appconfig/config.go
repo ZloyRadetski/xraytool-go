@@ -850,7 +850,7 @@ reality:
   # Path to store the generated JSON keys file.
   keys_filepath: "/etc/xraytool/configs/reality.keys"
 
-# Hardcoded admins from template to exclude/disable from being sync'd/added to config.json
+# Hardcoded template users to exclude from the generated user snapshot
 blacklisted_admins:
   # - "bazhon"
   # - "admin2"
@@ -874,8 +874,8 @@ paths:
   # Xray-core main config
   xray_config: "/usr/local/etc/xray/config.json"
 
-  # Xray config template (structural skeleton with static clients)
-  # xraytool regenerates xray_config from this template + DB users on startup.
+  # Xray config template (structural skeleton; it is never modified by xraytool)
+  # xraytool regenerates xray_config from this template + the desired user snapshot.
   # Leave empty to disable template-based generation (uses xray_config directly).
   xray_template: "/etc/xraytool/xray_template.json"
 
