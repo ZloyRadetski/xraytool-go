@@ -431,13 +431,40 @@ func (s *Service) ReconcileSlave(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if reconciler, ok := s.engine.(domain.DriftReconciler); ok {
-		_, err = reconciler.ReconcileUsers(ctx, users)
-	} else {
-		_, err = s.engine.SyncUsers(ctx, users, true)
-	}
-	if err != nil {
+	if err := s.reconcileUsers(ctx, users); err != nil {
 		return fmt.Errorf("reconcile slave desired state: %w", err)
+	}
+	return nil
+}
+
+// ReconcileDesiredState restores this node's generated configuration from the
+// durable template and the current database snapshot. It deliberately bypasses
+// the regular desired-state hash so a template-only correction takes effect
+// even when the database users themselves did not change.
+func (s *Service) ReconcileDesiredState(ctx context.Context) error {
+	users, err := s.BuildSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return s.reconcileUsers(ctx, users)
+}
+
+// reconcileUsers always repairs configuration from the supplied desired state.
+// A streamed snapshot must use this path rather than a hash-skippable regular
+// SyncUsers call: a static artifact can have changed the local template while
+// the database user list itself is unchanged.
+func (s *Service) reconcileUsers(ctx context.Context, users []domain.VPNUserConfig) error {
+	if reconciler, ok := s.engine.(domain.DriftReconciler); ok {
+		_, err := reconciler.ReconcileUsers(ctx, users)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Engines without an explicit drift-repair capability still receive the
+		// snapshot through their normal synchronisation interface.
+		if _, err := s.engine.SyncUsers(ctx, users, true); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -233,6 +233,16 @@ func (p *Plugin) SyncUsers(ctx context.Context, dbUsers []pluginapi.VPNUserConfi
 	return &pluginapi.EngineSyncResult{Added: result.Added, Removed: result.Removed}, nil
 }
 
+// ReconcileUsers exposes forced template-based repair through the plugin
+// boundary. MultiEngine uses this optional domain capability for replication
+// snapshots so xray's desired-state hash cannot hide a template-only change.
+func (p *Plugin) ReconcileUsers(ctx context.Context, users []domain.VPNUserConfig) (*domain.EngineSyncResult, error) {
+	if reconciler, ok := p.engine.(domain.DriftReconciler); ok {
+		return reconciler.ReconcileUsers(ctx, users)
+	}
+	return p.engine.SyncUsers(ctx, users, true)
+}
+
 // SupportsStaticClientSync exposes the optional template-client replication
 // capability through the plugin boundary. The kernel normally wraps engines in
 // MultiEngine, so the wrapper must be able to discover the Xray adapter.
@@ -274,6 +284,8 @@ func (p *Plugin) Adapter() *Adapter { return p.adapter }
 // DomainEngine returns the adapter as domain.Engine.
 // Convenience method so the kernel doesn't need to cast.
 func (p *Plugin) DomainEngine() domain.Engine { return p.engine }
+
+var _ domain.DriftReconciler = (*Plugin)(nil)
 
 // ── type conversion helpers ───────────────────────────────────────────────────
 

@@ -62,6 +62,7 @@ type MultiEngine struct {
 var _ domain.Engine = (*MultiEngine)(nil)
 var _ pluginapi.ClientConfigContributor = (*MultiEngine)(nil)
 var _ domain.StaticClientSynchronizer = (*MultiEngine)(nil)
+var _ domain.DriftReconciler = (*MultiEngine)(nil)
 
 // NewMultiEngine creates a MultiEngine with the broadcast router.
 //
@@ -580,23 +581,9 @@ func (m *MultiEngine) SyncUsers(
 		return nil, err
 	}
 
-	// Route the desired snapshot just like AddUsersBulk. Every provider is
-	// still called (possibly with an empty slice) so removeOrphans=true also
-	// cleans users that were moved away from that engine by a plan/override.
-	batches := make([][]pluginapi.VPNUserConfig, len(m.engines))
-	indexByID := make(map[string]int, len(m.engines))
-	for index, ref := range m.engines {
-		indexByID[ref.id] = index
-	}
-	for _, dbUser := range dbUsers {
-		pluginUser := toPluginVPNUserConfig(dbUser)
-		targets, err := m.routedEngines(pluginUser)
-		if err != nil {
-			return nil, err
-		}
-		for _, target := range targets {
-			batches[indexByID[target.id]] = append(batches[indexByID[target.id]], pluginUser)
-		}
+	batches, err := m.userBatches(dbUsers)
+	if err != nil {
+		return nil, err
 	}
 
 	type syncResult struct {
@@ -611,16 +598,7 @@ func (m *MultiEngine) SyncUsers(
 			// Engine providers are independent plugins. Give each one its own
 			// slice so a provider that normalises its input cannot race with
 			// another provider or mutate the next provider's view.
-			usersForEngine := make([]pluginapi.VPNUserConfig, len(users))
-			for j, u := range users {
-				usersForEngine[j] = u
-				if u.PlanEngineIDs != nil {
-					usersForEngine[j].PlanEngineIDs = append([]string(nil), u.PlanEngineIDs...)
-				}
-				if u.SubscriptionEngineIDs != nil {
-					usersForEngine[j].SubscriptionEngineIDs = append([]string(nil), u.SubscriptionEngineIDs...)
-				}
-			}
+			usersForEngine := clonePluginUsers(users)
 			engineResult, err := provider.SyncUsers(ctx, usersForEngine, removeOrphans)
 			ch <- syncResult{index: index, result: engineResult, err: err}
 		}(i, ref.provider, users)
@@ -647,6 +625,105 @@ func (m *MultiEngine) SyncUsers(
 		}
 	}
 	return aggregate, errors.Join(errs...)
+}
+
+// ReconcileUsers repairs the generated engine configuration from a complete
+// desired snapshot. Providers that expose domain.DriftReconciler are forced to
+// rebuild; older providers retain their normal SyncUsers fallback.
+func (m *MultiEngine) ReconcileUsers(
+	ctx context.Context,
+	dbUsers []domain.VPNUserConfig,
+) (*domain.EngineSyncResult, error) {
+	if err := m.ready(); err != nil {
+		return nil, err
+	}
+
+	batches, err := m.userBatches(dbUsers)
+	if err != nil {
+		return nil, err
+	}
+
+	type reconcileResult struct {
+		index  int
+		result *domain.EngineSyncResult
+		err    error
+	}
+	ch := make(chan reconcileResult, len(m.engines))
+	for i, ref := range m.engines {
+		users := batches[i]
+		go func(index int, provider pluginapi.EngineProvider, users []pluginapi.VPNUserConfig) {
+			usersForEngine := clonePluginUsers(users)
+			if reconciler, ok := provider.(domain.DriftReconciler); ok {
+				result, err := reconciler.ReconcileUsers(ctx, toDomainVPNUserConfigs(usersForEngine))
+				ch <- reconcileResult{index: index, result: result, err: err}
+				return
+			}
+			result, err := provider.SyncUsers(ctx, usersForEngine, true)
+			if result == nil {
+				ch <- reconcileResult{index: index, err: err}
+				return
+			}
+			ch <- reconcileResult{index: index, result: &domain.EngineSyncResult{Added: result.Added, Removed: result.Removed}, err: err}
+		}(i, ref.provider, users)
+	}
+
+	results := make([]reconcileResult, len(m.engines))
+	for range m.engines {
+		result := <-ch
+		results[result.index] = result
+	}
+
+	aggregate := &domain.EngineSyncResult{}
+	var errs []error
+	for i, result := range results {
+		if result.err != nil {
+			m.logger().Warn("[multiengine] ReconcileUsers partial failure",
+				"engine", m.engines[i].id, "error", result.err)
+			errs = append(errs, fmt.Errorf("engine %q: %w", m.engines[i].id, result.err))
+			continue
+		}
+		if result.result != nil {
+			aggregate.Added += result.result.Added
+			aggregate.Removed += result.result.Removed
+		}
+	}
+	return aggregate, errors.Join(errs...)
+}
+
+// userBatches routes a desired user snapshot to the configured engine
+// providers. Every provider gets a batch, including an empty one, so orphan
+// removal remains correct when routing rules change.
+func (m *MultiEngine) userBatches(dbUsers []domain.VPNUserConfig) ([][]pluginapi.VPNUserConfig, error) {
+	batches := make([][]pluginapi.VPNUserConfig, len(m.engines))
+	indexByID := make(map[string]int, len(m.engines))
+	for index, ref := range m.engines {
+		indexByID[ref.id] = index
+	}
+	for _, dbUser := range dbUsers {
+		pluginUser := toPluginVPNUserConfig(dbUser)
+		targets, err := m.routedEngines(pluginUser)
+		if err != nil {
+			return nil, err
+		}
+		for _, target := range targets {
+			batches[indexByID[target.id]] = append(batches[indexByID[target.id]], pluginUser)
+		}
+	}
+	return batches, nil
+}
+
+func clonePluginUsers(users []pluginapi.VPNUserConfig) []pluginapi.VPNUserConfig {
+	usersForEngine := make([]pluginapi.VPNUserConfig, len(users))
+	for j, u := range users {
+		usersForEngine[j] = u
+		if u.PlanEngineIDs != nil {
+			usersForEngine[j].PlanEngineIDs = append([]string(nil), u.PlanEngineIDs...)
+		}
+		if u.SubscriptionEngineIDs != nil {
+			usersForEngine[j].SubscriptionEngineIDs = append([]string(nil), u.SubscriptionEngineIDs...)
+		}
+	}
+	return usersForEngine
 }
 
 // BuildClientLinks collects share links from the engines selected by the
@@ -733,6 +810,14 @@ func toDomainVPNUserConfig(user pluginapi.VPNUserConfig) domain.VPNUserConfig {
 		PlanEngineIDs:         append([]string(nil), user.PlanEngineIDs...),
 		SubscriptionEngineIDs: append([]string(nil), user.SubscriptionEngineIDs...),
 	}
+}
+
+func toDomainVPNUserConfigs(users []pluginapi.VPNUserConfig) []domain.VPNUserConfig {
+	out := make([]domain.VPNUserConfig, len(users))
+	for i, user := range users {
+		out[i] = toDomainVPNUserConfig(user)
+	}
+	return out
 }
 
 // MultiEngine returns the aggregate facade for the loaded EngineProvider

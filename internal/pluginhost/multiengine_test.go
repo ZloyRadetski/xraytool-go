@@ -53,6 +53,27 @@ type staticFakeEngine struct {
 
 var _ domain.StaticClientSynchronizer = (*staticFakeEngine)(nil)
 
+type driftFakeEngine struct {
+	*fakeEngine
+
+	reconcileCalls  [][]domain.VPNUserConfig
+	reconcileResult *domain.EngineSyncResult
+	reconcileErr    error
+}
+
+var _ domain.DriftReconciler = (*driftFakeEngine)(nil)
+
+func (e *driftFakeEngine) ReconcileUsers(_ context.Context, users []domain.VPNUserConfig) (*domain.EngineSyncResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reconcileCalls = append(e.reconcileCalls, append([]domain.VPNUserConfig(nil), users...))
+	if e.reconcileResult == nil {
+		return nil, e.reconcileErr
+	}
+	result := *e.reconcileResult
+	return &result, e.reconcileErr
+}
+
 func (e *staticFakeEngine) StaticClientSnapshot(_ context.Context, _ []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -113,6 +134,29 @@ func (e *fakeEngine) SyncUsers(
 	}
 	result := *e.syncResult
 	return &result, e.syncErr
+}
+
+func TestMultiEngineReconcileUsersForcesCapableProviders(t *testing.T) {
+	t.Parallel()
+
+	forced := &driftFakeEngine{
+		fakeEngine:      &fakeEngine{id: "xray"},
+		reconcileResult: &domain.EngineSyncResult{Added: 2, Removed: 1},
+	}
+	fallback := &fakeEngine{
+		id:         "singbox",
+		syncResult: &pluginapi.EngineSyncResult{Added: 3, Removed: 4},
+	}
+	multi := NewMultiEngine([]pluginapi.EngineProvider{forced, fallback}, nil)
+
+	result, err := multi.ReconcileUsers(context.Background(), []domain.VPNUserConfig{{
+		Email: "user@example.test", UUID: "uuid",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, &domain.EngineSyncResult{Added: 5, Removed: 5}, result)
+	require.Len(t, forced.reconcileCalls, 1)
+	require.Len(t, forced.syncCalls, 0)
+	require.Len(t, fallback.syncCalls, 1)
 }
 
 func (e *fakeEngine) BuildClientLinks(

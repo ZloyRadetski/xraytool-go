@@ -37,7 +37,10 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 				fmt.Printf("ERROR|projecting static clients on master: %v\n", err)
 				return
 			}
-			if _, err := deps.Engine.SyncUsers(cmd.Context(), users, true); err != nil {
+			// The replication service keeps the actual local engine, before the
+			// master publishing wrapper. Reconcile through it so a template-only
+			// repair is never skipped by the engine's desired-state hash.
+			if err := deps.ReplicationService.ReconcileDesiredState(cmd.Context()); err != nil {
 				fmt.Printf("ERROR|reconciling master: %v\n", err)
 				return
 			}

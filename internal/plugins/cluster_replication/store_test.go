@@ -107,6 +107,15 @@ func TestProjectStaticClientsAppliesMasterProjectionExplicitly(t *testing.T) {
 	require.Equal(t, engine.snapshot, engine.applied)
 }
 
+func TestReconcileUsersUsesForcedDriftRepair(t *testing.T) {
+	engine := &reconcileEngine{}
+	service := &Service{engine: engine}
+	users := []domain.VPNUserConfig{{Email: "snapshot@example.test", UUID: "uuid"}}
+
+	require.NoError(t, service.reconcileUsers(context.Background(), users))
+	require.Equal(t, users, engine.users)
+}
+
 func TestReconcileSlaveUsesPersistedDesiredProjection(t *testing.T) {
 	store := newTestStore(t)
 	payload, err := json.Marshal(userPayload{User: domain.VPNUserConfig{Email: "repair@example.test", UUID: "uuid-1"}})

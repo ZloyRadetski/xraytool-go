@@ -179,7 +179,8 @@ func TestStaticClientSnapshotProjectsUserToNodeSpecificInbounds(t *testing.T) {
 	masterTemplatePath := filepath.Join(dir, "master-template.json")
 	masterTemplate := `{
   "inbounds": [
-    {"tag":"master-vless","protocol":"vless","settings":{"clients":[{"email":"ops-access","id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","level":7}]}}
+    {"tag":"master-vless","protocol":"vless","settings":{"clients":[{"email":"ops-access","id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","level":7}]}},
+    {"tag":"master-xhttp","protocol":"xhttp","settings":{"clients":[{"email":"ops-access","id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","flow":"xtls-rprx-vision"}]}}
   ]
 }`
 	if err := os.WriteFile(masterTemplatePath, []byte(masterTemplate), 0o600); err != nil {
@@ -222,6 +223,9 @@ func TestStaticClientSnapshotProjectsUserToNodeSpecificInbounds(t *testing.T) {
 	xhttp := clientByEmail(clientsForInbound(t, active, "msk-xhttp"), "ops-access")
 	if xhttp == nil || xhttp.GetString("id") != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
 		t.Fatalf("static user was not generated for local xhttp inbound: %+v", xhttp)
+	}
+	if xhttp.Has("flow") {
+		t.Fatalf("xhttp static user must not inherit VLESS flow: %+v", xhttp)
 	}
 	trojan := clientByEmail(clientsForInbound(t, active, "msk-trojan"), "ops-access")
 	if trojan == nil || trojan.GetString("password") != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {

@@ -115,3 +115,32 @@ func TestBuildClient(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildClientXHTTPNeverGeneratesVisionFlow(t *testing.T) {
+	for _, protocol := range []string{"xhttp", "splithttp"} {
+		t.Run(protocol, func(t *testing.T) {
+			data, err := json.Marshal(map[string]interface{}{
+				"protocol": protocol,
+				// Deliberately omit network: the old implementation treated this as
+				// TCP and incorrectly generated Vision for xHTTP.
+				"streamSettings": map[string]interface{}{"security": "reality"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var inbound RawInbound
+			if err := json.Unmarshal(data, &inbound); err != nil {
+				t.Fatal(err)
+			}
+			client, err := BuildClient(inbound, ClientParams{
+				Email: "user@example.test", UUID: "11111111-1111-1111-1111-111111111111", Flow: "xtls-rprx-vision",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.Has("flow") {
+				t.Fatalf("%s client must not contain Vision flow: %+v", protocol, client)
+			}
+		})
+	}
+}

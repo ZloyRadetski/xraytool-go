@@ -69,9 +69,9 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 	protocol := ib.Protocol()
 
 	switch protocol {
-	case "vless", "xhttp", "splithttp":
+	case "vless":
 		if params.UUID == "" {
-			return nil, fmt.Errorf("%s requires UUID", protocol)
+			return nil, fmt.Errorf("vless requires UUID")
 		}
 		result.Set("id", params.UUID)
 
@@ -82,6 +82,15 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 		if flow != "" {
 			result.Set("flow", flow)
 		}
+
+	case "xhttp", "splithttp":
+		if params.UUID == "" {
+			return nil, fmt.Errorf("%s requires UUID", protocol)
+		}
+		result.Set("id", params.UUID)
+		// Vision is only valid for VLESS over a TCP transport. xHTTP and
+		// splitHTTP must never inherit or synthesize a VLESS flow, even when
+		// their Reality settings are otherwise similar.
 
 	case "vmess":
 		if params.UUID == "" {

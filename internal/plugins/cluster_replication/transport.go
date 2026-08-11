@@ -378,6 +378,15 @@ func (s *replicationServer) sendEventsAfter(ctx context.Context, stream protocol
 }
 
 func (s *replicationServer) sendSnapshot(ctx context.Context, stream protocol.Replication_ConnectServer) (int64, error) {
+	// A snapshot is a complete desired-state transfer. Refresh configuration
+	// artifacts here as well as in the periodic master loop so a manually
+	// requested snapshot cannot omit master-only hardcoded template users.
+	if count, err := s.service.PublishArtifacts(ctx, s.config.RealityKeysPath); err != nil {
+		return 0, fmt.Errorf("refresh replication artifacts for snapshot: %w", err)
+	} else if count > 0 {
+		s.log.Info("replication snapshot artifacts refreshed", "count", count)
+	}
+
 	// Capture the revision before reading state. A concurrent change can appear
 	// in both this snapshot and the later delta, which is harmless because user
 	// upserts are idempotent; it cannot be omitted from both.
@@ -605,7 +614,7 @@ func receiveSlaveFrames(
 			if err != nil {
 				return err
 			}
-			if _, err := service.engine.SyncUsers(ctx, users, true); err != nil {
+			if err := service.reconcileUsers(ctx, users); err != nil {
 				return fmt.Errorf("apply replication snapshot: %w", err)
 			}
 			activeSnapshot = ""

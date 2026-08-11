@@ -386,7 +386,14 @@ func (p parsedStaticClientSnapshot) replacementsFor(cfg RawConfig) (map[string]s
 func (p staticClientProfile) buildFor(inbound RawInbound) (RawClient, error) {
 	protocol := inbound.Protocol()
 	if prototype, exists := p.prototype[protocol]; exists {
-		return cloneRawClient(prototype), nil
+		client := cloneRawClient(prototype)
+		// Older generated templates may already contain an invalid Vision flow
+		// on xHTTP. Do not perpetuate it while preserving the rest of a
+		// hardcoded client profile.
+		if protocol == "xhttp" || protocol == "splithttp" {
+			client.Delete("flow")
+		}
+		return client, nil
 	}
 	flow := ""
 	if protocol == "vless" {
