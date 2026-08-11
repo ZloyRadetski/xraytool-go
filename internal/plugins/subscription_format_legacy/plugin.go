@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core/convert"
+	"xraytool/internal/plugins/subscription_format_legacy/convert"
 )
 
 type Plugin struct{}

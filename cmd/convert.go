@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"xraytool/internal/plugins/core/convert"
+	"xraytool/internal/plugins/subscription_format_legacy/convert"
 
 	"github.com/spf13/cobra"
 )

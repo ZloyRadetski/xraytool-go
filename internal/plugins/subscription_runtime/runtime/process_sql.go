@@ -15,7 +15,7 @@ import (
 	"xraytool/internal/events"
 	"xraytool/internal/logger"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core/convert"
+	"xraytool/internal/plugins/subscription_format_legacy/convert"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -504,8 +504,8 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		}
 	}
 
-	// The compatibility fallback intentionally stays in core for callers that
-	// construct CacheManager outside Plugin Host. Normal server startup wires
+	// The compatibility fallback intentionally stays in subscription_runtime for
+	// callers that construct CacheManager outside Plugin Host. Normal startup wires
 	// subscription_format_legacy above, so the conversion implementation is
 	// replaceable without changing the subscription hot path.
 	if isVlessFormat {

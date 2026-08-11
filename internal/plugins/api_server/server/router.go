@@ -47,8 +47,8 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core/subscription"
-	usersvc "xraytool/internal/plugins/core/user"
+	"xraytool/internal/plugins/subscription_runtime/runtime"
+	usersvc "xraytool/internal/plugins/user_management/service"
 )
 
 // Router holds all server-wide dependencies and the configured mux.
@@ -232,11 +232,6 @@ func (r *Router) registerRoutes() {
 		return r.gzipMiddleware(r.AuthMiddleware(h))
 	}
 
-	// Files & Webhooks
-	r.mux.Handle("POST /api/rest/update-links", protected(r.handleUpdateLinks))
-	r.mux.Handle("POST /api/rest/upload", protected(r.handleUpload))
-	r.mux.Handle("GET /api/rest/download", protected(r.handleDownload))
-
 	// Users
 	r.mux.Handle("POST /api/v1/users/register", protected(r.handleRegisterUser))
 	r.mux.Handle("POST /api/v1/users/request_code", protected(r.handleRequestCode))
@@ -263,7 +258,7 @@ func (r *Router) registerRoutes() {
 	// Gateway callbacks are authenticated by their selected provider, not by
 	// the admin API-key middleware. This lets a newly installed provider expose
 	// its conventional /payments/<method>/callback endpoint without adding a
-	// concrete route to the core router.
+	// concrete route to the API router.
 	// (Payments are now handled by the billing plugin)
 
 	// Admin

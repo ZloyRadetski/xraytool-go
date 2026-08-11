@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"fmt"
 	json "github.com/goccy/go-json"
 	"io"
 	"log/slog"
@@ -13,7 +14,7 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/pluginapi"
-	usersvc "xraytool/internal/plugins/core/user"
+	usersvc "xraytool/internal/plugins/user_management/service"
 )
 
 type Plugin struct {
@@ -40,53 +41,75 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Kind:        "payment",
 		Version:     "1.0.0",
 		APIVersion:  pluginapi.CurrentAPIVersion,
-		Description: "Billing plugin",
+		Description: "Billing API and payment orchestration.",
 		Publishes: []pluginapi.ServiceRef{
-			{Name: "payment_service"},
+			{Name: pluginapi.ServicePaymentService},
 		},
 		Requires: []pluginapi.ServiceRef{
-			{Name: "domain_registry"},
-			{Name: "event_dispatcher"},
-			{Name: "user_service"},
-			{Name: "protected_middleware"},
+			{Name: pluginapi.ServiceDomainRegistry},
+			{Name: pluginapi.ServiceEventDispatcher},
+			{Name: pluginapi.ServiceUserManagement},
+			{Name: pluginapi.ServiceProtectedMiddleware},
 		},
 	}
 }
 
 func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg pluginapi.ServiceResolver) error {
+	if p.cfg == nil {
+		return fmt.Errorf("billing: app config must not be nil")
+	}
 	p.log = reg.Logger()
 
-	domainReg, err := reg.Resolve("domain_registry")
+	domainReg, err := reg.Resolve(pluginapi.ServiceDomainRegistry)
 	if err != nil {
 		return err
 	}
-	p.registry = domainReg.(domain.Registry)
+	registry, ok := domainReg.(domain.Registry)
+	if !ok || registry == nil {
+		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceDomainRegistry, domainReg)
+	}
 
-	dispatcher, err := reg.Resolve("event_dispatcher")
+	dispatcher, err := reg.Resolve(pluginapi.ServiceEventDispatcher)
 	if err != nil {
 		return err
 	}
-	p.dispatcher = dispatcher.(*events.Dispatcher)
+	resolvedDispatcher, ok := dispatcher.(*events.Dispatcher)
+	if !ok || resolvedDispatcher == nil {
+		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceEventDispatcher, dispatcher)
+	}
 
-	userSvc, err := reg.Resolve("user_service")
+	userSvc, err := reg.Resolve(pluginapi.ServiceUserManagement)
 	if err != nil {
 		return err
 	}
-	p.userSvc = userSvc.(*usersvc.Service)
+	resolvedUserService, ok := userSvc.(*usersvc.Service)
+	if !ok || resolvedUserService == nil {
+		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceUserManagement, userSvc)
+	}
 
-	authMw, err := reg.Resolve("protected_middleware")
+	authMw, err := reg.Resolve(pluginapi.ServiceProtectedMiddleware)
 	if err != nil {
 		return err
 	}
-	p.authMiddleware = authMw.(func(http.Handler) http.Handler)
+	protected, ok := authMw.(func(http.Handler) http.Handler)
+	if !ok || protected == nil {
+		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceProtectedMiddleware, authMw)
+	}
+	p.registry = registry
+	p.dispatcher = resolvedDispatcher
+	p.userSvc = resolvedUserService
+	p.authMiddleware = protected
 
 	p.paymentSvc = NewService(p.registry, p.dispatcher, slog.Default())
 	return nil
 }
 
 func (p *Plugin) Start(ctx context.Context) error {
+	if p.paymentSvc == nil {
+		return fmt.Errorf("billing: not initialized")
+	}
 	scrubber := NewScrubberWorker(p.paymentSvc, slog.Default())
-	go scrubber.Run(ctx)
+	scrubber.Run(ctx)
 	return nil
 }
 
@@ -95,6 +118,9 @@ func (p *Plugin) Stop(ctx context.Context) error {
 }
 
 func (p *Plugin) Health(ctx context.Context) error {
+	if p.paymentSvc == nil || p.authMiddleware == nil {
+		return fmt.Errorf("billing: not initialized")
+	}
 	return nil
 }
 
@@ -104,7 +130,7 @@ func (p *Plugin) SetPaymentProviders(providers map[string]pluginapi.PaymentProvi
 
 func (p *Plugin) PublishedServices() map[string]any {
 	return map[string]any{
-		"payment_service": p.paymentSvc,
+		pluginapi.ServicePaymentService: p.paymentSvc,
 	}
 }
 

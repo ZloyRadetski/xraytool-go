@@ -651,6 +651,9 @@ func writePluginList(out io.Writer, path string) error {
 	if err != nil {
 		return err
 	}
+	if err := materializeRuntimePluginEntries(path, configured); err != nil {
+		return err
+	}
 	builtins, err := builtinPluginMetadata()
 	if err != nil {
 		return err
@@ -723,28 +726,12 @@ func writePluginGraph(out io.Writer, path string) error {
 	if err != nil {
 		return err
 	}
+	if err := materializeRuntimePluginEntries(path, configured); err != nil {
+		return err
+	}
 	builtins, err := builtinPluginMetadata()
 	if err != nil {
 		return err
-	}
-
-	// Runtime materialises the mandatory foundation plugins even for older
-	// config files. Mirror those defaults here so plugin graph represents the
-	// process that start-server will actually compose.
-	for _, name := range []string{"core", "user_management", "subscription_runtime", "subscription_autobalancer", "api_server"} {
-		if _, exists := configured[name]; !exists {
-			configured[name] = configuredPlugin{Name: name, Enabled: true, Source: "builtin"}
-		}
-	}
-	hasEngine := false
-	for name := range configured {
-		if strings.HasPrefix(name, "engine_") {
-			hasEngine = true
-			break
-		}
-	}
-	if !hasEngine {
-		configured["engine_xray"] = configuredPlugin{Name: "engine_xray", Enabled: true, Source: "builtin", Location: enginesLocation}
 	}
 
 	metas := make([]pluginapi.Metadata, 0, len(configured))
@@ -782,6 +769,40 @@ func writePluginGraph(out io.Writer, path string) error {
 		}
 		if len(meta.Requires) > 0 {
 			_, _ = fmt.Fprintf(out, "   requires:  %s\n", formatServiceRefs(meta.Requires))
+		}
+	}
+	return nil
+}
+
+// materializeRuntimePluginEntries mirrors appconfig.Load's defaulting without
+// mutating the user's YAML document. Plugin diagnostics must show the graph the
+// server will actually start, including built-ins omitted from older configs.
+// Explicit YAML entries always win so external-plugin metadata and comments
+// remain available to the command layer.
+func materializeRuntimePluginEntries(path string, configured map[string]configuredPlugin) error {
+	cfg, err := appconfig.Load(path)
+	if err != nil {
+		return err
+	}
+	for name, entry := range cfg.Plugins {
+		if _, exists := configured[name]; exists {
+			continue
+		}
+		configured[name] = configuredPlugin{
+			Name: name, Enabled: entry.Enabled, Source: entry.Source,
+			Exec: entry.Exec, ManifestPath: entry.Manifest, LogPath: entry.LogPath,
+			Location: pluginsLocation,
+		}
+	}
+	for engineName, entry := range cfg.Engines.Entries {
+		name := "engine_" + engineName
+		if _, exists := configured[name]; exists {
+			continue
+		}
+		configured[name] = configuredPlugin{
+			Name: name, Enabled: entry.Enabled, Source: entry.Source,
+			Exec: entry.Exec, ManifestPath: entry.Manifest, LogPath: entry.LogPath,
+			Location: enginesLocation,
 		}
 	}
 	return nil

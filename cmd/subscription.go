@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core/convert"
 	autoBalancerPlugin "xraytool/internal/plugins/subscription_autobalancer"
+	"xraytool/internal/plugins/subscription_format_legacy/convert"
 )
 
 // subscriptionCmd exposes local validation and rendering for the versioned

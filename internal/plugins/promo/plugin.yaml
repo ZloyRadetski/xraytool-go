@@ -1,0 +1,12 @@
+name: promo
+kind: api
+version: 1.0.0
+api_version: "1"
+description: Promo-code management API.
+type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
+publishes: []
+requires:
+  - domain_registry
+  - user_service
+  - protected_middleware

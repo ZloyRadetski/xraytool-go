@@ -22,8 +22,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"xraytool/internal/domain"
-	"xraytool/internal/plugins/core/convert"
-	"xraytool/internal/plugins/core/user"
+	"xraytool/internal/plugins/user_management/service"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1082,7 +1081,7 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	expireTime, err := convert.ParseExpiryDate(body.Expire)
+	expireTime, err := parseExpiryDate(body.Expire)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid expire format")
 		return

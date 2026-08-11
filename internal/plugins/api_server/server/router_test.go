@@ -37,3 +37,11 @@ func TestRouter_PublicRoute_NoAuth(t *testing.T) {
 		t.Errorf("expected not 404 for public route")
 	}
 }
+
+func TestRouter_ConfigStorageRoutesAreNotOwnedByAPI(t *testing.T) {
+	r := newTestRouter(t)
+	w := do(r, http.MethodGet, "/api/rest/download", "", "test-api-key")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected config-storage route to be absent from api_server, got %d", w.Code)
+	}
+}

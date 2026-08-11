@@ -1,0 +1,10 @@
+name: referral
+kind: event_sink
+version: 1.0.0
+api_version: "1"
+description: Referral reward event handler.
+type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
+publishes: []
+requires:
+  - domain_registry

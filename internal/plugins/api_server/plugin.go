@@ -13,13 +13,10 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core"
-	"xraytool/internal/plugins/core/server"
-	"xraytool/internal/plugins/core/subscription"
-	usersvc "xraytool/internal/plugins/core/user"
+	"xraytool/internal/plugins/api_server/server"
+	"xraytool/internal/plugins/subscription_runtime/runtime"
+	usersvc "xraytool/internal/plugins/user_management/service"
 )
-
-const ServiceHTTPHandler = "api_http_handler"
 
 type Plugin struct {
 	cfg    *appconfig.Config
@@ -36,17 +33,16 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		APIVersion:  pluginapi.CurrentAPIVersion,
 		Description: "HTTP API routes, authentication middleware, and plugin route composition.",
 		Publishes: []pluginapi.ServiceRef{
-			{Name: "auth_middleware"},
-			{Name: "protected_middleware"},
-			{Name: ServiceHTTPHandler},
+			{Name: pluginapi.ServiceAuthMiddleware},
+			{Name: pluginapi.ServiceProtectedMiddleware},
+			{Name: pluginapi.ServiceHTTPHandler},
 		},
 		Requires: []pluginapi.ServiceRef{
-			{Name: core.ServiceCoreProvider},
-			{Name: core.ServiceDomainRegistry},
-			{Name: core.ServiceDomainEngine},
-			{Name: core.ServiceUserService},
-			{Name: core.ServiceSubscriptionCache},
-			{Name: core.ServiceEventDispatcher},
+			{Name: pluginapi.ServiceDomainRegistry},
+			{Name: pluginapi.ServiceDomainEngine},
+			{Name: pluginapi.ServiceUserManagement},
+			{Name: pluginapi.ServiceSubscriptionRuntime},
+			{Name: pluginapi.ServiceEventDispatcher},
 			{Name: pluginapi.ServiceIdentityProvider, Optional: true},
 		},
 	}
@@ -56,53 +52,45 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 	if p.cfg == nil {
 		return fmt.Errorf("api_server: app config must not be nil")
 	}
-	coreValue, err := reg.Resolve(core.ServiceCoreProvider)
-	if err != nil {
-		return err
-	}
-	coreProvider, ok := coreValue.(pluginapi.AuthMiddlewareBinder)
-	if !ok || coreProvider == nil {
-		return fmt.Errorf("api_server: %s has unexpected type %T", core.ServiceCoreProvider, coreValue)
-	}
-	registryValue, err := reg.Resolve(core.ServiceDomainRegistry)
+	registryValue, err := reg.Resolve(pluginapi.ServiceDomainRegistry)
 	if err != nil {
 		return err
 	}
 	registry, ok := registryValue.(domain.Registry)
 	if !ok || registry == nil {
-		return fmt.Errorf("api_server: %s has unexpected type %T", core.ServiceDomainRegistry, registryValue)
+		return fmt.Errorf("api_server: %s has unexpected type %T", pluginapi.ServiceDomainRegistry, registryValue)
 	}
-	engineValue, err := reg.Resolve(core.ServiceDomainEngine)
+	engineValue, err := reg.Resolve(pluginapi.ServiceDomainEngine)
 	if err != nil {
 		return err
 	}
 	engine, ok := engineValue.(domain.Engine)
 	if !ok || engine == nil {
-		return fmt.Errorf("api_server: %s has unexpected type %T", core.ServiceDomainEngine, engineValue)
+		return fmt.Errorf("api_server: %s has unexpected type %T", pluginapi.ServiceDomainEngine, engineValue)
 	}
-	userValue, err := reg.Resolve(core.ServiceUserService)
+	userValue, err := reg.Resolve(pluginapi.ServiceUserManagement)
 	if err != nil {
 		return err
 	}
 	userService, ok := userValue.(*usersvc.Service)
 	if !ok || userService == nil {
-		return fmt.Errorf("api_server: %s has unexpected type %T", core.ServiceUserService, userValue)
+		return fmt.Errorf("api_server: %s has unexpected type %T", pluginapi.ServiceUserManagement, userValue)
 	}
-	cacheValue, err := reg.Resolve(core.ServiceSubscriptionCache)
+	cacheValue, err := reg.Resolve(pluginapi.ServiceSubscriptionRuntime)
 	if err != nil {
 		return err
 	}
 	cache, ok := cacheValue.(*subscription.CacheManager)
 	if !ok || cache == nil {
-		return fmt.Errorf("api_server: %s has unexpected type %T", core.ServiceSubscriptionCache, cacheValue)
+		return fmt.Errorf("api_server: %s has unexpected type %T", pluginapi.ServiceSubscriptionRuntime, cacheValue)
 	}
-	dispatcherValue, err := reg.Resolve(core.ServiceEventDispatcher)
+	dispatcherValue, err := reg.Resolve(pluginapi.ServiceEventDispatcher)
 	if err != nil {
 		return err
 	}
 	dispatcher, ok := dispatcherValue.(*events.Dispatcher)
 	if !ok || dispatcher == nil {
-		return fmt.Errorf("api_server: %s has unexpected type %T", core.ServiceEventDispatcher, dispatcherValue)
+		return fmt.Errorf("api_server: %s has unexpected type %T", pluginapi.ServiceEventDispatcher, dispatcherValue)
 	}
 
 	p.router = server.NewWithOptions(
@@ -121,7 +109,6 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 			p.router.WithIdentityProvider(provider)
 		}
 	}
-	coreProvider.SetAuthMiddleware(p.AuthMiddleware)
 	return nil
 }
 
@@ -149,9 +136,9 @@ func (p *Plugin) PublishedServices() map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"auth_middleware":      p.AuthMiddleware,
-		"protected_middleware": p.ProtectedMiddleware,
-		ServiceHTTPHandler:     http.Handler(p.router),
+		pluginapi.ServiceAuthMiddleware:      p.AuthMiddleware,
+		pluginapi.ServiceProtectedMiddleware: p.ProtectedMiddleware,
+		pluginapi.ServiceHTTPHandler:         http.Handler(p.router),
 	}
 }
 

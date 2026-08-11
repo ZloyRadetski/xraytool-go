@@ -34,6 +34,27 @@ type RawConfig map[string]any
 // them in pluginapi prevents the composition root from importing an optional
 // plugin package merely to obtain a string constant.
 const (
+	// Mandatory domain foundation services. They intentionally live in
+	// pluginapi rather than the core package so consumers do not import core
+	// merely to obtain a service name.
+	ServiceUserRepository         = "user_repository"
+	ServiceSubscriptionRepository = "subscription_repository"
+	ServiceDeviceRepository       = "device_repository"
+	ServicePlanRepository         = "plan_repository"
+	ServicePaymentRecorder        = "payment_recorder"
+	ServiceSubscriptionLifecycle  = "subscription_lifecycle"
+	ServiceUserManagement         = "user_service"
+	ServiceSubscriptionRuntime    = "subscription_cache"
+	ServiceEventDispatcher        = "event_dispatcher"
+	ServiceDomainRegistry         = "domain_registry"
+	ServiceDomainEngine           = "domain_engine"
+	ServiceEventPropagator        = "event_propagator"
+	ServiceCoreProvider           = "core_provider"
+	ServiceAuthMiddleware         = "auth_middleware"
+	ServiceProtectedMiddleware    = "protected_middleware"
+	ServiceHTTPHandler            = "api_http_handler"
+	ServicePaymentService         = "payment_service"
+
 	ServiceClusterReplicationProvider    = "cluster_replication_provider"
 	ServiceIdentityProvider              = "identity_provider"
 	ServiceSubscriptionFormatProvider    = "subscription_format_provider"
@@ -72,6 +93,13 @@ type ServiceRef struct {
 	// this service is not published by any loaded plugin. When false, Host.Load()
 	// fails with a clear error before any plugin is started.
 	Optional bool
+}
+
+// SubscriptionLifecycle is the narrow transaction port used by payment
+// providers. The lifecycle plugin owns the implementation; callers cannot
+// mutate subscription expiry outside this contract.
+type SubscriptionLifecycle interface {
+	ExtendSubscription(ctx context.Context, subscriptionID string, months int) error
 }
 
 // Metadata describes a plugin and its dependencies.
@@ -161,8 +189,8 @@ type ServiceProvider interface {
 }
 
 // HTTPContributor is implemented by plugins that need to register custom HTTP
-// routes (e.g. for webhooks or plugin-specific APIs). The core plugin's router
-// will call RegisterRoutes during its initialization.
+// routes (e.g. for webhooks or plugin-specific APIs). The API composition root
+// mounts them after the api_server plugin has initialized its middleware.
 type HTTPContributor interface {
 	Plugin
 
@@ -352,7 +380,7 @@ type PlanRepository interface {
 // Published service names (Metadata.Publishes):
 //
 //	"user_repository", "subscription_repository", "device_repository",
-//	"plan_repository", "payment_recorder", "subscription_lifecycle"
+//	"plan_repository", "payment_recorder", "event_dispatcher"
 type CoreProvider interface {
 	Plugin
 
@@ -361,21 +389,6 @@ type CoreProvider interface {
 	SubscriptionRepository() SubscriptionRepository
 	DeviceRepository() DeviceRepository
 	PlanRepository() PlanRepository
-
-	// Business-orchestration methods that must remain in core so that every
-	// payment provider uses the same subscription-extension rules.
-	ExtendSubscription(ctx context.Context, subID string, months int) error
-
-	// AuthMiddleware protects routes by enforcing the global API key.
-	AuthMiddleware(next http.Handler) http.Handler
-}
-
-// AuthMiddlewareBinder is the small compatibility bridge between a mandatory
-// CoreProvider and the plugin that owns the HTTP router. It lets api plugins
-// preserve the historical CoreProvider.AuthMiddleware method without owning
-// router implementation inside the core plugin.
-type AuthMiddlewareBinder interface {
-	SetAuthMiddleware(func(http.Handler) http.Handler)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -459,7 +472,7 @@ type PaymentIntentResult struct {
 }
 
 // PaymentCallbackResult is the normalised outcome of a verified webhook callback.
-// The core plugin uses this to decide whether to extend the subscription.
+// The billing plugin applies its business policy after a provider returns it.
 type PaymentCallbackResult struct {
 	ExternalID string
 	Status     string // "completed" | "failed" | "refunded"
@@ -470,13 +483,13 @@ type PaymentCallbackResult struct {
 
 // PaymentProvider is the extension point for a single payment gateway.
 // Multiple PaymentProvider plugins may be loaded simultaneously (e.g. platega +
-// yookassa); the core plugin dispatches CreatePayment to the correct provider by
-// MethodID.
+// yookassa); the billing plugin dispatches CreatePayment to the correct provider
+// by MethodID.
 //
 // IMPORTANT: subscription extension, balance adjustments and referral rewards
-// are handled by CoreProvider.ExtendSubscription / ApplyReferralReward — NOT by
-// the payment plugin. This prevents a rogue payment plugin from minting
-// subscriptions in violation of core business rules.
+// are handled by the lifecycle, billing and referral services — NOT by the
+// payment gateway plugin. This prevents a rogue gateway from minting
+// subscriptions in violation of business rules.
 //
 // Required services (Metadata.Requires):
 //
@@ -678,7 +691,7 @@ type EventSink interface {
 // providers that only implement scheduled replication and traffic collection.
 
 // ClusterCommandPropagator is the optional cluster capability used by admin
-// user handlers to broadcast legacy newuser/rmuser commands. The core HTTP
+// user handlers to broadcast legacy newuser/rmuser commands. The api_server
 // package never constructs slave clients directly; a loaded cluster plugin
 // owns the transport and may decline the operation when it is unavailable.
 

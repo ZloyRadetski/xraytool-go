@@ -1,13 +1,14 @@
-package convert
+package server
 
 import (
 	"fmt"
 	"time"
 )
 
-// ParseExpiryDate parses an expiry date string into a time.Time.
-// Supports: "DD.MM.YYYY HH:MM", "DD.MM.YYYY" (defaults to 15:00 MSK), and RFC3339.
-func ParseExpiryDate(dateStr string) (time.Time, error) {
+// parseExpiryDate parses the administrator-facing expiry input. It belongs to
+// the API plugin rather than a subscription-format renderer because it changes
+// subscription lifecycle state; it does not render a client configuration.
+func parseExpiryDate(dateStr string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
 		return t, nil
 	}

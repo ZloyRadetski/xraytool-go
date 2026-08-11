@@ -33,12 +33,15 @@ requires:
 func TestBuiltinManifestFilesAreValid(t *testing.T) {
 	paths := []string{
 		filepath.Join("..", "plugins", "core", "plugin.yaml"),
+		filepath.Join("..", "plugins", "billing", "plugin.yaml"),
 		filepath.Join("..", "plugins", "antifraud", "plugin.yaml"),
 		filepath.Join("..", "plugins", "engine_xray", "plugin.yaml"),
 		filepath.Join("..", "plugins", "engine_singbox", "plugin.yaml"),
 		filepath.Join("..", "plugins", "eventsink_webhook", "plugin.yaml"),
 		filepath.Join("..", "plugins", "mailer_resend", "plugin.yaml"),
 		filepath.Join("..", "plugins", "pricing_default", "plugin.yaml"),
+		filepath.Join("..", "plugins", "promo", "plugin.yaml"),
+		filepath.Join("..", "plugins", "referral", "plugin.yaml"),
 		filepath.Join("..", "plugins", "payment_platega", "plugin.yaml"),
 		filepath.Join("..", "plugins", "cluster_replication", "plugin.yaml"),
 		filepath.Join("..", "plugins", "api_server", "plugin.yaml"),

@@ -12,8 +12,6 @@ publishes:
   - device_repository
   - plan_repository
   - payment_recorder
-  - subscription_lifecycle
-  - user_service
   - event_dispatcher
   - domain_registry
   - domain_engine

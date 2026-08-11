@@ -5,6 +5,8 @@ api_version: "1"
 description: Expiry, warning, and device-limit maintenance worker.
 type: internal
 config_schema: ../../pluginmanifest/schemas/empty.schema.json
+publishes:
+  - subscription_lifecycle
 requires:
   - domain_registry
   - event_dispatcher

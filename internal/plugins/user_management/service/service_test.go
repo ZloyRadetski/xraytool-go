@@ -13,8 +13,8 @@ import (
 
 	"xraytool/internal/database"
 	"xraytool/internal/domain"
-	"xraytool/internal/plugins/core/user"
 	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/plugins/user_management/service"
 )
 
 func newTestService(t *testing.T) (*user.Service, domain.Registry) {

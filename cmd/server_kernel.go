@@ -100,17 +100,30 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	}
 
 	factories := pluginhost.BuiltinRegistry(cfg)
+	if _, configured := factories["engine_xray"]; configured && vpnEngine != nil {
+		// The plugin and all core consumers must observe one engine instance.
+		// In particular, replication may wrap this instance to append its outbox
+		// events, so constructing a second Xray adapter here would split state.
+		sharedEngine := vpnEngine
+		factories["engine_xray"] = func() pluginapi.Plugin {
+			return vpn.NewFromEngine(sharedEngine)
+		}
+	}
+	multiEngine, err := prepareMultiEngine(pluginsCfg, factories, slog.Default(), cfg.Engines.RoutingMode)
+	if err != nil {
+		return err
+	}
 	factories["core"] = func() pluginapi.Plugin {
 		return corePlugin.NewWithRuntime(cfg, corePlugin.Runtime{
 			Registry:   deps.Registry,
-			Engine:     vpnEngine,
+			Engine:     multiEngine,
 			Propagator: deps.Propagator,
 		})
 	}
 	// Populate optional built-in factories (antifraud, cluster_replication, …).
 	// configureOptionalPluginFactories is defined in server_kernel_optional.go
 	// (build tag !minimal) and builds the fraud reporter for slave nodes.
-	configureOptionalPluginFactories(factories, deps, vpnEngine, nil)
+	configureOptionalPluginFactories(factories, deps, multiEngine, nil)
 
 	// Extract the connection from the legacy registry for plugin host schema ownership.
 	var hostOpts []pluginhost.HostOption
@@ -166,7 +179,7 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 				}
 				dbUsers = append(dbUsers, vpn.SubscriptionToVPNUserConfig(sub))
 			}
-			if result, err := vpnEngine.SyncUsers(ctx, dbUsers, false); err != nil {
+			if result, err := multiEngine.SyncUsers(ctx, dbUsers, false); err != nil {
 				slog.Warn("[KERNEL] Initial user sync failed", "error", err)
 			} else {
 				slog.Info("[KERNEL] Initial sync complete", "added", result.Added)

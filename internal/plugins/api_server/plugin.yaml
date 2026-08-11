@@ -10,7 +10,6 @@ publishes:
   - protected_middleware
   - api_http_handler
 requires:
-  - core_provider
   - domain_registry
   - domain_engine
   - user_service

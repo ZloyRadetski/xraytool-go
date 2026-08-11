@@ -1,19 +1,19 @@
 // Package subscription_lifecycle owns scheduled subscription maintenance.
-// Core retains subscription transactions; this plugin owns expiry timing,
-// warning delivery, and periodic device-limit enforcement.
+// It owns subscription-expiry policy, warning delivery, and periodic
+// device-limit enforcement.
 package subscription_lifecycle
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core"
-	"xraytool/internal/plugins/core/worker"
+	"xraytool/internal/plugins/subscription_lifecycle/worker"
 )
 
 type Plugin struct {
@@ -33,11 +33,14 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Version:     "1.0.0",
 		APIVersion:  pluginapi.CurrentAPIVersion,
 		Description: "Expiry, warning, and device-limit maintenance worker.",
+		Publishes: []pluginapi.ServiceRef{
+			{Name: pluginapi.ServiceSubscriptionLifecycle},
+		},
 		Requires: []pluginapi.ServiceRef{
-			{Name: core.ServiceDomainRegistry},
-			{Name: core.ServiceEventDispatcher},
-			{Name: core.ServiceDomainEngine},
-			{Name: core.ServiceEventPropagator},
+			{Name: pluginapi.ServiceDomainRegistry},
+			{Name: pluginapi.ServiceEventDispatcher},
+			{Name: pluginapi.ServiceDomainEngine},
+			{Name: pluginapi.ServiceEventPropagator},
 		},
 	}
 }
@@ -46,26 +49,42 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 	if p.cfg == nil {
 		return fmt.Errorf("subscription_lifecycle: app config must not be nil")
 	}
-	registry, err := reg.Resolve(core.ServiceDomainRegistry)
+	registry, err := reg.Resolve(pluginapi.ServiceDomainRegistry)
 	if err != nil {
 		return err
 	}
-	dispatcher, err := reg.Resolve(core.ServiceEventDispatcher)
+	dispatcher, err := reg.Resolve(pluginapi.ServiceEventDispatcher)
 	if err != nil {
 		return err
 	}
-	engine, err := reg.Resolve(core.ServiceDomainEngine)
+	engine, err := reg.Resolve(pluginapi.ServiceDomainEngine)
 	if err != nil {
 		return err
 	}
-	propagator, err := reg.Resolve(core.ServiceEventPropagator)
+	propagator, err := reg.Resolve(pluginapi.ServiceEventPropagator)
 	if err != nil {
 		return err
 	}
-	p.registry = registry.(domain.Registry)
-	p.dispatcher = dispatcher.(*events.Dispatcher)
-	p.engine = engine.(domain.Engine)
-	p.propagator = propagator.(domain.EventPropagator)
+	resolvedRegistry, ok := registry.(domain.Registry)
+	if !ok || resolvedRegistry == nil {
+		return fmt.Errorf("subscription_lifecycle: %s has unexpected type %T", pluginapi.ServiceDomainRegistry, registry)
+	}
+	resolvedDispatcher, ok := dispatcher.(*events.Dispatcher)
+	if !ok || resolvedDispatcher == nil {
+		return fmt.Errorf("subscription_lifecycle: %s has unexpected type %T", pluginapi.ServiceEventDispatcher, dispatcher)
+	}
+	resolvedEngine, ok := engine.(domain.Engine)
+	if !ok || resolvedEngine == nil {
+		return fmt.Errorf("subscription_lifecycle: %s has unexpected type %T", pluginapi.ServiceDomainEngine, engine)
+	}
+	resolvedPropagator, ok := propagator.(domain.EventPropagator)
+	if !ok || resolvedPropagator == nil {
+		return fmt.Errorf("subscription_lifecycle: %s has unexpected type %T", pluginapi.ServiceEventPropagator, propagator)
+	}
+	p.registry = resolvedRegistry
+	p.dispatcher = resolvedDispatcher
+	p.engine = resolvedEngine
+	p.propagator = resolvedPropagator
 	return nil
 }
 
@@ -87,4 +106,39 @@ func (p *Plugin) Health(_ context.Context) error {
 	return nil
 }
 
+func (p *Plugin) PublishedServices() map[string]any {
+	if p.registry == nil {
+		return nil
+	}
+	return map[string]any{pluginapi.ServiceSubscriptionLifecycle: pluginapi.SubscriptionLifecycle(p)}
+}
+
+// ExtendSubscription is the transaction boundary used by payment providers.
+// Keeping it with the lifecycle plugin makes subscription business policy
+// independent from the mandatory repository foundation.
+func (p *Plugin) ExtendSubscription(ctx context.Context, subscriptionID string, months int) error {
+	if months <= 0 {
+		return fmt.Errorf("subscription_lifecycle: extension months must be positive")
+	}
+	if p.registry == nil {
+		return fmt.Errorf("subscription_lifecycle: not initialized")
+	}
+	return p.registry.WithTx(ctx, func(tx domain.Registry) error {
+		subscription, err := tx.Subscriptions().FindByID(ctx, subscriptionID)
+		if err != nil {
+			return err
+		}
+		base := time.Now()
+		if subscription.EndsAt != nil && subscription.EndsAt.After(base) {
+			base = *subscription.EndsAt
+		}
+		endsAt := base.AddDate(0, months, 0)
+		subscription.EndsAt = &endsAt
+		subscription.Status = "active"
+		return tx.Subscriptions().Update(ctx, subscription)
+	})
+}
+
 var _ pluginapi.Plugin = (*Plugin)(nil)
+var _ pluginapi.ServiceProvider = (*Plugin)(nil)
+var _ pluginapi.SubscriptionLifecycle = (*Plugin)(nil)

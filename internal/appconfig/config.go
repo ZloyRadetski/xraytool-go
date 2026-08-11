@@ -790,7 +790,7 @@ func mergePluginDefaults(entry, fallback PluginConf, presence pluginEntryPresenc
 }
 
 func withDefaultRawConfig(entry PluginConf, defaults map[string]any) PluginConf {
-	if len(defaults) == 0 {
+	if defaults == nil {
 		entry.Config = nil
 		return entry
 	}
@@ -802,7 +802,7 @@ func withDefaultRawConfig(entry PluginConf, defaults map[string]any) PluginConf 
 }
 
 func mergeRawConfigDefaults(config, defaults map[string]any, explicitlySet map[string]bool) map[string]any {
-	if len(defaults) == 0 {
+	if defaults == nil {
 		return config
 	}
 	if config == nil {

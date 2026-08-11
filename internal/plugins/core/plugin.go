@@ -8,38 +8,12 @@ package core
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"time"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/events"
 	"xraytool/internal/pluginapi"
 )
-
-// Service names are stable registry keys shared by built-in and external
-// plugins. Consumers must declare them in Metadata.Requires.
-const (
-	ServiceUserRepository         = "user_repository"
-	ServiceSubscriptionRepository = "subscription_repository"
-	ServiceDeviceRepository       = "device_repository"
-	ServicePlanRepository         = "plan_repository"
-	ServicePaymentRecorder        = "payment_recorder"
-	ServiceSubscriptionLifecycle  = "subscription_lifecycle"
-	ServiceUserService            = "user_service"
-	ServiceSubscriptionCache      = "subscription_cache"
-	ServiceEventDispatcher        = "event_dispatcher"
-	ServiceDomainRegistry         = "domain_registry"
-	ServiceDomainEngine           = "domain_engine"
-	ServiceEventPropagator        = "event_propagator"
-	ServiceCoreProvider           = "core_provider"
-)
-
-// SubscriptionLifecycle is the narrow transaction port used by payment
-// providers. They cannot mutate subscriptions outside this contract.
-type SubscriptionLifecycle interface {
-	ExtendSubscription(ctx context.Context, subscriptionID string, months int) error
-}
 
 type noopEventPropagator struct{}
 
@@ -63,7 +37,6 @@ type Plugin struct {
 	registry   domain.Registry
 	dispatcher *events.Dispatcher
 	reg        pluginapi.ServiceResolver
-	auth       func(http.Handler) http.Handler
 }
 
 func New(cfg *appconfig.Config) *Plugin {
@@ -83,17 +56,16 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Description: "Mandatory domain foundations: repositories, events, and engine bridge.",
 		Mandatory:   true,
 		Publishes: []pluginapi.ServiceRef{
-			{Name: ServiceUserRepository},
-			{Name: ServiceSubscriptionRepository},
-			{Name: ServiceDeviceRepository},
-			{Name: ServicePlanRepository},
-			{Name: ServicePaymentRecorder},
-			{Name: ServiceSubscriptionLifecycle},
-			{Name: ServiceEventDispatcher},
-			{Name: ServiceDomainRegistry},
-			{Name: ServiceDomainEngine},
-			{Name: ServiceEventPropagator},
-			{Name: ServiceCoreProvider},
+			{Name: pluginapi.ServiceUserRepository},
+			{Name: pluginapi.ServiceSubscriptionRepository},
+			{Name: pluginapi.ServiceDeviceRepository},
+			{Name: pluginapi.ServicePlanRepository},
+			{Name: pluginapi.ServicePaymentRecorder},
+			{Name: pluginapi.ServiceEventDispatcher},
+			{Name: pluginapi.ServiceDomainRegistry},
+			{Name: pluginapi.ServiceDomainEngine},
+			{Name: pluginapi.ServiceEventPropagator},
+			{Name: pluginapi.ServiceCoreProvider},
 		},
 	}
 }
@@ -125,17 +97,16 @@ func (p *Plugin) PublishedServices() map[string]any {
 		return nil
 	}
 	return map[string]any{
-		ServiceUserRepository:         p.UserRepository(),
-		ServiceSubscriptionRepository: p.SubscriptionRepository(),
-		ServiceDeviceRepository:       p.DeviceRepository(),
-		ServicePlanRepository:         p.PlanRepository(),
-		ServicePaymentRecorder:        p.registry.Payments(),
-		ServiceSubscriptionLifecycle:  p,
-		ServiceEventDispatcher:        p.dispatcher,
-		ServiceDomainRegistry:         p.registry,
-		ServiceDomainEngine:           p.runtime.Engine,
-		ServiceEventPropagator:        p.eventPropagator(),
-		ServiceCoreProvider:           p,
+		pluginapi.ServiceUserRepository:         p.UserRepository(),
+		pluginapi.ServiceSubscriptionRepository: p.SubscriptionRepository(),
+		pluginapi.ServiceDeviceRepository:       p.DeviceRepository(),
+		pluginapi.ServicePlanRepository:         p.PlanRepository(),
+		pluginapi.ServicePaymentRecorder:        p.registry.Payments(),
+		pluginapi.ServiceEventDispatcher:        p.dispatcher,
+		pluginapi.ServiceDomainRegistry:         p.registry,
+		pluginapi.ServiceDomainEngine:           p.runtime.Engine,
+		pluginapi.ServiceEventPropagator:        p.eventPropagator(),
+		pluginapi.ServiceCoreProvider:           p,
 	}
 }
 
@@ -197,53 +168,6 @@ func (p *Plugin) PlanRepository() pluginapi.PlanRepository {
 
 func (p *Plugin) Dispatcher() *events.Dispatcher { return p.dispatcher }
 
-// AuthMiddleware preserves the CoreProvider compatibility method while the
-// actual middleware is owned and configured by api_server.
-func (p *Plugin) AuthMiddleware(next http.Handler) http.Handler {
-	if p.auth != nil {
-		return p.auth(next)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "API server is not initialized", http.StatusServiceUnavailable)
-	})
-}
-
-// SetAuthMiddleware is called by api_server during its Init phase. Keeping the
-// bridge here avoids breaking existing CoreProvider consumers while moving all
-// router implementation out of core.
-func (p *Plugin) SetAuthMiddleware(middleware func(http.Handler) http.Handler) {
-	p.auth = middleware
-}
-
-// ExtendSubscription applies the engine-independent transaction rule used by
-// payment providers. It remains a domain foundation rather than a gateway API.
-func (p *Plugin) ExtendSubscription(ctx context.Context, subscriptionID string, months int) error {
-	if months <= 0 {
-		return fmt.Errorf("core plugin: extension months must be positive")
-	}
-	if p.registry == nil {
-		return fmt.Errorf("core plugin: registry not initialised")
-	}
-
-	return p.registry.WithTx(ctx, func(tx domain.Registry) error {
-		sub, err := tx.Subscriptions().FindByID(ctx, subscriptionID)
-		if err != nil {
-			return err
-		}
-
-		base := time.Now()
-		if sub.EndsAt != nil && sub.EndsAt.After(base) {
-			base = *sub.EndsAt
-		}
-		endsAt := base.AddDate(0, months, 0)
-		sub.EndsAt = &endsAt
-		sub.Status = "active"
-		return tx.Subscriptions().Update(ctx, sub)
-	})
-}
-
 var _ pluginapi.Plugin = (*Plugin)(nil)
 var _ pluginapi.ServiceProvider = (*Plugin)(nil)
 var _ pluginapi.CoreProvider = (*Plugin)(nil)
-var _ pluginapi.AuthMiddlewareBinder = (*Plugin)(nil)
-var _ SubscriptionLifecycle = (*Plugin)(nil)

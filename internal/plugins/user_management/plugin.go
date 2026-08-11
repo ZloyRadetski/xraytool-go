@@ -10,8 +10,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core"
-	usersvc "xraytool/internal/plugins/core/user"
+	usersvc "xraytool/internal/plugins/user_management/service"
 )
 
 type Plugin struct {
@@ -29,12 +28,12 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		APIVersion:  pluginapi.CurrentAPIVersion,
 		Description: "User lifecycle service backed by the core domain registry.",
 		Publishes: []pluginapi.ServiceRef{
-			{Name: core.ServiceUserService},
+			{Name: pluginapi.ServiceUserManagement},
 		},
 		Requires: []pluginapi.ServiceRef{
-			{Name: core.ServiceDomainRegistry},
-			{Name: core.ServiceDomainEngine},
-			{Name: core.ServiceEventPropagator},
+			{Name: pluginapi.ServiceDomainRegistry},
+			{Name: pluginapi.ServiceDomainEngine},
+			{Name: pluginapi.ServiceEventPropagator},
 		},
 	}
 }
@@ -43,29 +42,29 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 	if p.cfg == nil {
 		return fmt.Errorf("user_management: app config must not be nil")
 	}
-	registryValue, err := reg.Resolve(core.ServiceDomainRegistry)
+	registryValue, err := reg.Resolve(pluginapi.ServiceDomainRegistry)
 	if err != nil {
 		return err
 	}
 	registry, ok := registryValue.(domain.Registry)
 	if !ok || registry == nil {
-		return fmt.Errorf("user_management: %s has unexpected type %T", core.ServiceDomainRegistry, registryValue)
+		return fmt.Errorf("user_management: %s has unexpected type %T", pluginapi.ServiceDomainRegistry, registryValue)
 	}
-	engineValue, err := reg.Resolve(core.ServiceDomainEngine)
+	engineValue, err := reg.Resolve(pluginapi.ServiceDomainEngine)
 	if err != nil {
 		return err
 	}
 	engine, ok := engineValue.(domain.Engine)
 	if !ok || engine == nil {
-		return fmt.Errorf("user_management: %s has unexpected type %T", core.ServiceDomainEngine, engineValue)
+		return fmt.Errorf("user_management: %s has unexpected type %T", pluginapi.ServiceDomainEngine, engineValue)
 	}
-	propagatorValue, err := reg.Resolve(core.ServiceEventPropagator)
+	propagatorValue, err := reg.Resolve(pluginapi.ServiceEventPropagator)
 	if err != nil {
 		return err
 	}
 	propagator, ok := propagatorValue.(domain.EventPropagator)
 	if !ok || propagator == nil {
-		return fmt.Errorf("user_management: %s has unexpected type %T", core.ServiceEventPropagator, propagatorValue)
+		return fmt.Errorf("user_management: %s has unexpected type %T", pluginapi.ServiceEventPropagator, propagatorValue)
 	}
 
 	p.service = usersvc.NewService(registry, usersvc.Config{
@@ -98,7 +97,7 @@ func (p *Plugin) PublishedServices() map[string]any {
 	if p.service == nil {
 		return nil
 	}
-	return map[string]any{core.ServiceUserService: p.service}
+	return map[string]any{pluginapi.ServiceUserManagement: p.service}
 }
 
 func (p *Plugin) Service() *usersvc.Service { return p.service }

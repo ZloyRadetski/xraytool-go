@@ -87,6 +87,10 @@ func TestPluginListAndGraphDoNotLoadRuntimeDependencies(t *testing.T) {
 	require.Contains(t, listOutput, "NAME")
 	require.Contains(t, listOutput, "antifraud")
 	require.Contains(t, listOutput, "core")
+	// These entries are intentionally omitted from the old YAML fixture, but
+	// appconfig materializes them before start-server runs.
+	require.Contains(t, listOutput, "billing")
+	require.Contains(t, listOutput, "subscription_lifecycle")
 
 	graphOutput, err := executePluginCommand(t, configPath, "graph")
 	require.NoError(t, err)
@@ -96,6 +100,8 @@ func TestPluginListAndGraphDoNotLoadRuntimeDependencies(t *testing.T) {
 	require.GreaterOrEqual(t, corePosition, 0)
 	require.GreaterOrEqual(t, enginePosition, 0)
 	require.Less(t, corePosition, enginePosition)
+	require.Contains(t, graphOutput, "billing (payment)")
+	require.Contains(t, graphOutput, "subscription_lifecycle (lifecycle)")
 }
 
 func TestPluginVerify(t *testing.T) {

@@ -9,3 +9,5 @@ publishes:
   - antifraud_provider
 requires:
   - domain_registry
+  - name: cluster_replication_provider
+    optional: true

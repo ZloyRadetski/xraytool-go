@@ -16,7 +16,6 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/events"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core"
 	"xraytool/internal/safeio"
 )
 
@@ -38,8 +37,8 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		APIVersion:  pluginapi.CurrentAPIVersion,
 		Description: "Authorized storage for subscription templates and other configuration assets.",
 		Requires: []pluginapi.ServiceRef{
-			{Name: "protected_middleware"},
-			{Name: core.ServiceEventDispatcher},
+			{Name: pluginapi.ServiceProtectedMiddleware},
+			{Name: pluginapi.ServiceEventDispatcher},
 		},
 	}
 }
@@ -48,16 +47,24 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 	if p.cfg == nil {
 		return fmt.Errorf("config_storage: app config must not be nil")
 	}
-	auth, err := reg.Resolve("protected_middleware")
+	auth, err := reg.Resolve(pluginapi.ServiceProtectedMiddleware)
 	if err != nil {
 		return err
 	}
-	dispatcher, err := reg.Resolve(core.ServiceEventDispatcher)
+	dispatcher, err := reg.Resolve(pluginapi.ServiceEventDispatcher)
 	if err != nil {
 		return err
 	}
-	p.auth = auth.(func(http.Handler) http.Handler)
-	p.dispatcher = dispatcher.(*events.Dispatcher)
+	protected, ok := auth.(func(http.Handler) http.Handler)
+	if !ok || protected == nil {
+		return fmt.Errorf("config_storage: %s has unexpected type %T", pluginapi.ServiceProtectedMiddleware, auth)
+	}
+	resolvedDispatcher, ok := dispatcher.(*events.Dispatcher)
+	if !ok || resolvedDispatcher == nil {
+		return fmt.Errorf("config_storage: %s has unexpected type %T", pluginapi.ServiceEventDispatcher, dispatcher)
+	}
+	p.auth = protected
+	p.dispatcher = resolvedDispatcher
 	return nil
 }
 

@@ -319,6 +319,30 @@ engines:
 	}
 }
 
+func TestLoadPluginWithoutConfigUsesEmptyObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins-empty-config.yaml")
+	if err := os.WriteFile(path, []byte(`
+plugins:
+  pricing_default:
+    enabled: true
+    source: builtin
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	pricing := cfg.Plugins["pricing_default"]
+	if pricing.Config == nil {
+		t.Fatal("expected pricing_default.config to be an empty object, not null")
+	}
+	if len(pricing.Config) != 0 {
+		t.Fatalf("expected empty pricing_default.config, got %#v", pricing.Config)
+	}
+}
+
 func TestLoadLegacyConfigMaterializesPluginAndEngineDefaults(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "legacy.yaml")
 	legacyYAML := `

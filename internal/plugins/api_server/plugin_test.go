@@ -63,10 +63,10 @@ func TestCoreServicesAreComposedByDedicatedPlugins(t *testing.T) {
 	}, nil)
 
 	require.NoError(t, host.Load(context.Background()))
-	service, err := host.ResolveService(core.ServiceUserService)
+	service, err := host.ResolveService(pluginapi.ServiceUserManagement)
 	require.NoError(t, err)
 	require.Same(t, userPlugin.Service(), service)
-	cache, err := host.ResolveService(core.ServiceSubscriptionCache)
+	cache, err := host.ResolveService(pluginapi.ServiceSubscriptionRuntime)
 	require.NoError(t, err)
 	require.Same(t, runtimePlugin.CacheManager(), cache)
 	require.Same(t, autoBalancerPlugin, runtimePlugin.CacheManager().SubscriptionTemplateProcessor())
@@ -74,11 +74,11 @@ func TestCoreServicesAreComposedByDedicatedPlugins(t *testing.T) {
 	require.True(t, snapshotOK)
 	require.Len(t, snapshot.ActiveClients, 1)
 	require.Equal(t, "alice@example.test", snapshot.ActiveClients[0].Email)
-	handler, err := host.ResolveService(api.ServiceHTTPHandler)
+	handler, err := host.ResolveService(pluginapi.ServiceHTTPHandler)
 	require.NoError(t, err)
 	require.Same(t, apiPlugin.HTTPHandler(), handler)
 
-	protected := corePlugin.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	protected := apiPlugin.ProtectedMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

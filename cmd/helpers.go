@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"xraytool/internal/domain"
-	"xraytool/internal/plugins/core/user"
+	"xraytool/internal/plugins/user_management/service"
 )
 
 // ---------------------------------------------------------------------------

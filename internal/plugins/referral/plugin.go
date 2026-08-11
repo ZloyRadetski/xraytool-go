@@ -23,9 +23,9 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Kind:        "event_sink",
 		Version:     "1.0.0",
 		APIVersion:  pluginapi.CurrentAPIVersion,
-		Description: "Referral reward manager",
+		Description: "Referral reward event handler.",
 		Requires: []pluginapi.ServiceRef{
-			{Name: "domain_registry"},
+			{Name: pluginapi.ServiceDomainRegistry},
 		},
 	}
 }
@@ -33,15 +33,20 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg pluginapi.ServiceResolver) error {
 	p.log = reg.Logger()
 
-	domainReg, err := reg.Resolve("domain_registry")
+	domainReg, err := reg.Resolve(pluginapi.ServiceDomainRegistry)
 	if err != nil {
 		return err
 	}
-	p.registry = domainReg.(domain.Registry)
+	registry, ok := domainReg.(domain.Registry)
+	if !ok || registry == nil {
+		return fmt.Errorf("referral: %s has unexpected type %T", pluginapi.ServiceDomainRegistry, domainReg)
+	}
+	p.registry = registry
 	return nil
 }
 
 func (p *Plugin) Start(ctx context.Context) error {
+	<-ctx.Done()
 	return nil
 }
 
@@ -50,6 +55,9 @@ func (p *Plugin) Stop(ctx context.Context) error {
 }
 
 func (p *Plugin) Health(ctx context.Context) error {
+	if p.registry == nil {
+		return fmt.Errorf("referral: not initialized")
+	}
 	return nil
 }
 

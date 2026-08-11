@@ -17,8 +17,8 @@ import (
 	"xraytool/internal/logger"
 	"xraytool/internal/plugins/billing"
 	clusterreplication "xraytool/internal/plugins/cluster_replication"
-	"xraytool/internal/plugins/core/user"
 	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/plugins/user_management/service"
 )
 
 // LoadOptions controls the small set of command-specific resource choices.

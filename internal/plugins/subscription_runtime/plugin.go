@@ -9,8 +9,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/plugins/core"
-	"xraytool/internal/plugins/core/subscription"
+	"xraytool/internal/plugins/subscription_runtime/runtime"
 )
 
 type Plugin struct {
@@ -28,10 +27,10 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		APIVersion:  pluginapi.CurrentAPIVersion,
 		Description: "Cached subscription delivery runtime and provider integration point.",
 		Publishes: []pluginapi.ServiceRef{
-			{Name: core.ServiceSubscriptionCache},
+			{Name: pluginapi.ServiceSubscriptionRuntime},
 		},
 		Requires: []pluginapi.ServiceRef{
-			{Name: core.ServiceDomainEngine},
+			{Name: pluginapi.ServiceDomainEngine},
 			{Name: pluginapi.ServiceSubscriptionTemplateProcessor},
 			{Name: pluginapi.ServiceClientConfigContributor, Optional: true},
 			{Name: pluginapi.ServiceSubscriptionConfigProvider, Optional: true},
@@ -46,13 +45,13 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 	if p.cfg == nil {
 		return fmt.Errorf("subscription_runtime: app config must not be nil")
 	}
-	engineValue, err := reg.Resolve(core.ServiceDomainEngine)
+	engineValue, err := reg.Resolve(pluginapi.ServiceDomainEngine)
 	if err != nil {
 		return err
 	}
 	engine, ok := engineValue.(domain.Engine)
 	if !ok || engine == nil {
-		return fmt.Errorf("subscription_runtime: %s has unexpected type %T", core.ServiceDomainEngine, engineValue)
+		return fmt.Errorf("subscription_runtime: %s has unexpected type %T", pluginapi.ServiceDomainEngine, engineValue)
 	}
 	p.cache = subscription.NewCacheManager(p.cfg, engine)
 	processorValue, err := reg.Resolve(pluginapi.ServiceSubscriptionTemplateProcessor)
@@ -108,7 +107,7 @@ func (p *Plugin) PublishedServices() map[string]any {
 	if p.cache == nil {
 		return nil
 	}
-	return map[string]any{core.ServiceSubscriptionCache: p.cache}
+	return map[string]any{pluginapi.ServiceSubscriptionRuntime: p.cache}
 }
 
 func (p *Plugin) CacheManager() *subscription.CacheManager { return p.cache }

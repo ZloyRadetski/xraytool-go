@@ -1,0 +1,14 @@
+name: billing
+kind: payment
+version: 1.0.0
+api_version: "1"
+description: Billing API and payment orchestration.
+type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
+publishes:
+  - payment_service
+requires:
+  - domain_registry
+  - event_dispatcher
+  - user_service
+  - protected_middleware

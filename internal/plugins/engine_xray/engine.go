@@ -9,8 +9,8 @@
 //   - Log rotation via the Xray LoggerService gRPC endpoint
 //
 // No file outside this package (or xrayapi / xrayconfig) should ever import
-// xray-core types directly. Business logic (worker, server, user.Service) must
-// use the Engine interface exclusively.
+// xray-core types directly. Business logic (lifecycle, API, user management)
+// must use the Engine interface exclusively.
 package engine_xray
 
 import (

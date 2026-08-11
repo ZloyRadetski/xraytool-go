@@ -15,9 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"xraytool/internal/domain"
-	"xraytool/internal/events"
 	"xraytool/internal/generate"
-	"xraytool/internal/plugins/core/subscription"
 )
 
 // Service handles user lifecycle operations: creation, blocking, removal,
@@ -63,10 +61,6 @@ func (s *Service) GetBlockedSubscriptions(ctx context.Context) ([]domain.Subscri
 
 func (s *Service) GetSubscriptionByEmail(ctx context.Context, email string) (*domain.Subscription, error) {
 	return s.registry.Subscriptions().FindLatestByEmail(ctx, email)
-}
-
-func (s *Service) ProcessSQLSubscription(ctx context.Context, cm *subscription.CacheManager, dispatcher *events.Dispatcher, subReq *subscription.Request, isBanned func(string) bool) *subscription.Response {
-	return subscription.ProcessSQL(ctx, s.registry, cm, dispatcher, subReq, isBanned)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

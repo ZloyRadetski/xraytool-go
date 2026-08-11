@@ -2,7 +2,7 @@ package server_test
 
 import (
 	"xraytool/internal/domain"
-	"xraytool/internal/plugins/core/user"
+	"xraytool/internal/plugins/user_management/service"
 
 	"gorm.io/gorm"
 
@@ -16,9 +16,9 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
-	"xraytool/internal/plugins/core/server"
-	"xraytool/internal/plugins/core/subscription"
+	"xraytool/internal/plugins/api_server/server"
 	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/plugins/subscription_runtime/runtime"
 )
 
 var (
@@ -42,7 +42,7 @@ func newTestRouter(t *testing.T) *server.Router {
 	t.Cleanup(func() { os.Remove(f.Name()) })
 
 	cfg := &appconfig.Config{
-		Server:            appconfig.ServerConf{Domain: "test.example.com"},
+		Server: appconfig.ServerConf{Domain: "test.example.com"},
 
 		PlategaMerchantID: "test-platega-merchant-id",
 		PlategaSecret:     "test-platega-secret",

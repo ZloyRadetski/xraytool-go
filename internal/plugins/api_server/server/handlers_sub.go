@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"xraytool/internal/plugins/core/subscription"
+	"xraytool/internal/plugins/subscription_runtime/runtime"
 )
 
 // handleSubscriptionV2 is the new endpoint that serves Xray configurations
@@ -54,8 +54,10 @@ func (r *Router) handleSubscriptionV2(w http.ResponseWriter, req *http.Request) 
 		Headers:    headers,
 	}
 
-	// 5. Execute subscription process directly in memory using SQL Database
-	subRes := r.userSvc.ProcessSQLSubscription(req.Context(), r.cm, r.dispatcher, subReq, r.isBanned)
+	// 5. The subscription-runtime plugin owns SQL delivery and cache policy.
+	// User management is deliberately not in this path: a subscription request
+	// must not depend on a user-lifecycle facade just to reach its own runtime.
+	subRes := subscription.ProcessSQL(req.Context(), r.registry, r.cm, r.dispatcher, subReq, r.isBanned)
 
 	// 6. Send headers and write body
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")

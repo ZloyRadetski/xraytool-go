@@ -3,8 +3,6 @@ package server
 import (
 	"testing"
 	"time"
-
-	"xraytool/internal/plugins/core/convert"
 )
 
 func TestParseExpiryDate(t *testing.T) {
@@ -58,7 +56,7 @@ func TestParseExpiryDate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := convert.ParseExpiryDate(tt.input)
+			got, err := parseExpiryDate(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseExpiryDate() error = %v, wantErr %v", err, tt.wantErr)
 				return

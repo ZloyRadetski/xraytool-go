@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"xraytool/internal/plugins/core/convert"
+	"xraytool/internal/plugins/subscription_format_legacy/convert"
 )
 
 func TestPluginProcessesV2AndSeparatesPortableEndpoints(t *testing.T) {
