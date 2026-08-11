@@ -237,3 +237,94 @@ func TestAdapter_SyncUsersHashOptimization(t *testing.T) {
 		t.Errorf("expected hash file to be recreated after sync, but it was not")
 	}
 }
+
+func TestAdapter_AddUserRepairsPartialInboundMembership(t *testing.T) {
+	handler := &mockHandlerServer{}
+	addr, cleanup := startMockGRPCServer(t, nil, handler)
+	defer cleanup()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	partialConfig := `{
+		"inbounds": [
+			{"tag":"vless-one","protocol":"vless","settings":{"clients":[{"id":"11111111-1111-1111-1111-111111111111","email":"partial@example.test"}]}},
+			{"tag":"vless-two","protocol":"vless","settings":{"clients":[]}}
+		]
+	}`
+	if err := os.WriteFile(configPath, []byte(partialConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := NewAdapter(addr, configPath, "", false, "", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	user := domain.VPNUserConfig{Email: "partial@example.test", UUID: "11111111-1111-1111-1111-111111111111"}
+	if err := adapter.AddUser(context.Background(), user); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	cfg, err := Read(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, err := InboundTagsForUser(cfg, user.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tags, ",") != "vless-one,vless-two" {
+		t.Fatalf("user must be present in every client inbound, got %v", tags)
+	}
+	if handler.lastAlterReq == nil || handler.lastAlterReq.Tag != "vless-two" {
+		t.Fatalf("expected hot-add only for missing inbound vless-two, got %#v", handler.lastAlterReq)
+	}
+}
+
+func TestAdapter_SyncUsersRepairsPartialInboundMembership(t *testing.T) {
+	handler := &mockHandlerServer{}
+	addr, cleanup := startMockGRPCServer(t, nil, handler)
+	defer cleanup()
+
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.json")
+	templatePath := filepath.Join(tmp, "template.json")
+	template := `{
+		"inbounds": [
+			{"tag":"vless-one","protocol":"vless","settings":{"clients":[]}},
+			{"tag":"vless-two","protocol":"vless","settings":{"clients":[]}}
+		]
+	}`
+	partialConfig := `{
+		"inbounds": [
+			{"tag":"vless-one","protocol":"vless","settings":{"clients":[{"id":"22222222-2222-2222-2222-222222222222","email":"snapshot@example.test"}]}},
+			{"tag":"vless-two","protocol":"vless","settings":{"clients":[]}}
+		]
+	}`
+	if err := os.WriteFile(templatePath, []byte(template), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(partialConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := NewAdapter(addr, configPath, templatePath, false, "", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	user := domain.VPNUserConfig{Email: "snapshot@example.test", UUID: "22222222-2222-2222-2222-222222222222"}
+	result, err := adapter.SyncUsers(context.Background(), []domain.VPNUserConfig{user}, true)
+	if err != nil {
+		t.Fatalf("SyncUsers: %v", err)
+	}
+	if result.Added != 1 {
+		t.Fatalf("expected one repaired user, got %d", result.Added)
+	}
+
+	cfg, err := Read(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, err := InboundTagsForUser(cfg, user.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tags, ",") != "vless-one,vless-two" {
+		t.Fatalf("snapshot must restore every inbound, got %v", tags)
+	}
+	if handler.lastAlterReq == nil || handler.lastAlterReq.Tag != "vless-two" {
+		t.Fatalf("expected snapshot hot-add for missing inbound vless-two, got %#v", handler.lastAlterReq)
+	}
+}

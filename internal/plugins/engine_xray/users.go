@@ -209,6 +209,121 @@ func ClientInbounds(cfg RawConfig) ([]InboundInfo, error) {
 	return result, nil
 }
 
+// MissingClientPayload returns only the requested client entries that are absent
+// from their respective inbound. A client in one inbound must never make the
+// same user appear present in another inbound.
+func MissingClientPayload(cfg RawConfig, payload []TaggedClient) ([]TaggedClient, error) {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return nil, err
+	}
+
+	clientsByTag := make(map[string]map[string]bool, len(inbounds))
+	for _, inbound := range inbounds {
+		clients, err := inbound.GetClients()
+		if err != nil {
+			return nil, fmt.Errorf("inbound %q: %w", inbound.Tag(), err)
+		}
+		if clients == nil || inbound.Tag() == "" {
+			continue
+		}
+		emails := make(map[string]bool, len(clients))
+		for _, client := range clients {
+			if email := client.Email(); email != "" {
+				emails[email] = true
+			}
+		}
+		clientsByTag[inbound.Tag()] = emails
+	}
+
+	missing := make([]TaggedClient, 0, len(payload))
+	for _, tagged := range payload {
+		if tagged.Tag == "" || tagged.Client == nil || tagged.Client.Email() == "" {
+			continue
+		}
+		if !clientsByTag[tagged.Tag][tagged.Client.Email()] {
+			missing = append(missing, tagged)
+		}
+	}
+	return missing, nil
+}
+
+// DesiredUserClientPayload returns the exact generated client entries for the
+// supplied dynamic users. Unlike ListUsers it preserves the inbound tag, which
+// is required to reconcile a partially applied Xray configuration.
+func DesiredUserClientPayload(cfg RawConfig, emails map[string]bool) ([]TaggedClient, error) {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return nil, err
+	}
+
+	payload := make([]TaggedClient, 0)
+	for _, inbound := range inbounds {
+		if inbound.Tag() == "" {
+			continue
+		}
+		clients, err := inbound.GetClients()
+		if err != nil {
+			return nil, fmt.Errorf("inbound %q: %w", inbound.Tag(), err)
+		}
+		for _, client := range clients {
+			if email := client.Email(); email != "" && emails[email] {
+				payload = append(payload, TaggedClient{Tag: inbound.Tag(), Client: client})
+			}
+		}
+	}
+	return payload, nil
+}
+
+// DiffClientPayload compares the previous on-disk configuration with the
+// desired clients. It tracks membership by both inbound tag and email instead
+// of collapsing all inbound state into one record per user.
+func DiffClientPayload(previous RawConfig, desired []TaggedClient) (adds []TaggedClient, removals map[string][]string, err error) {
+	removals = make(map[string][]string)
+	if previous == nil {
+		return append([]TaggedClient(nil), desired...), removals, nil
+	}
+
+	inbounds, err := previous.GetInbounds()
+	if err != nil {
+		return nil, nil, err
+	}
+	previousByTag := make(map[string]map[string]RawClient, len(inbounds))
+	for _, inbound := range inbounds {
+		clients, err := inbound.GetClients()
+		if err != nil {
+			return nil, nil, fmt.Errorf("inbound %q: %w", inbound.Tag(), err)
+		}
+		if clients == nil || inbound.Tag() == "" {
+			continue
+		}
+		byEmail := make(map[string]RawClient, len(clients))
+		for _, client := range clients {
+			if email := client.Email(); email != "" {
+				byEmail[email] = client
+			}
+		}
+		previousByTag[inbound.Tag()] = byEmail
+	}
+
+	for _, tagged := range desired {
+		if tagged.Tag == "" || tagged.Client == nil || tagged.Client.Email() == "" {
+			continue
+		}
+		email := tagged.Client.Email()
+		previousClient, exists := previousByTag[tagged.Tag][email]
+		if !exists {
+			adds = append(adds, tagged)
+			continue
+		}
+		if rawClientKey(previousClient) != rawClientKey(tagged.Client) {
+			removals[email] = append(removals[email], tagged.Tag)
+			adds = append(adds, tagged)
+		}
+	}
+	return adds, removals, nil
+}
+
 // ---------------------------------------------------------------------------
 // User mutations (operate on a RawConfig in memory; caller writes to disk)
 // ---------------------------------------------------------------------------

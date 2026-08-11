@@ -188,6 +188,27 @@ func TestClientInbounds(t *testing.T) {
 	}
 }
 
+func TestMissingClientPayloadIsInboundAware(t *testing.T) {
+	cfg := RawConfig{
+		"inbounds": []byte(`[
+			{"tag":"one","protocol":"vless","settings":{"clients":[{"id":"1","email":"partial@example.test"}]}},
+			{"tag":"two","protocol":"vless","settings":{"clients":[]}}
+		]`),
+	}
+	payload := []TaggedClient{
+		{Tag: "one", Client: RawClient{"id": []byte(`"1"`), "email": []byte(`"partial@example.test"`)}},
+		{Tag: "two", Client: RawClient{"id": []byte(`"1"`), "email": []byte(`"partial@example.test"`)}},
+	}
+
+	missing, err := MissingClientPayload(cfg, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0].Tag != "two" {
+		t.Fatalf("expected only missing inbound two, got %#v", missing)
+	}
+}
+
 func TestAddUserToInbounds(t *testing.T) {
 	cfg := buildTestConfig()
 	payload := []TaggedClient{

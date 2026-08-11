@@ -209,13 +209,6 @@ func (a *Adapter) addUserLocked(ctx context.Context, user domain.VPNUserConfig) 
 	var clientsPayload []TaggedClient
 
 	err := Modify(a.configPath, func(cfg RawConfig) error {
-		// Idempotency: skip if already present.
-		exists, _ := UserExists(cfg, user.Email)
-		if exists {
-			a.log.Info("xray adapter: user already in config, skipping write", "email", user.Email)
-			return nil
-		}
-
 		params := configToParams(user)
 		payload, err := BuildForAllInbounds(cfg, params)
 		if err != nil {
@@ -224,12 +217,20 @@ func (a *Adapter) addUserLocked(ctx context.Context, user domain.VPNUserConfig) 
 		if len(payload) == 0 {
 			return fmt.Errorf("no client inbounds found in xray config")
 		}
+		missing, err := MissingClientPayload(cfg, payload)
+		if err != nil {
+			return fmt.Errorf("finding missing client inbounds: %w", err)
+		}
+		if len(missing) == 0 {
+			a.log.Info("xray adapter: user already present in every client inbound", "email", user.Email)
+			return nil
+		}
 
-		if err := AddUserToInbounds(cfg, payload); err != nil {
+		if err := AddUserToInbounds(cfg, missing); err != nil {
 			return fmt.Errorf("adding user to inbounds: %w", err)
 		}
 
-		clientsPayload = payload
+		clientsPayload = missing
 		return nil
 	})
 	if err != nil {
@@ -242,6 +243,7 @@ func (a *Adapter) addUserLocked(ctx context.Context, user domain.VPNUserConfig) 
 			a.markDirty()
 			a.log.Warn("xray adapter: hot-add via gRPC failed (config already updated on disk)",
 				"email", user.Email, "err", err)
+			a.rebuildInboundTags(ctx, clientsPayload, nil)
 		}
 	}
 
@@ -291,10 +293,6 @@ func (a *Adapter) addUsersBulkLocked(ctx context.Context, users []domain.VPNUser
 			if user.Email == "" {
 				continue
 			}
-			exists, _ := UserExists(cfg, user.Email)
-			if exists {
-				continue
-			}
 			params := configToParams(user)
 			payload, err := BuildForAllInbounds(cfg, params)
 			if err != nil {
@@ -303,12 +301,21 @@ func (a *Adapter) addUsersBulkLocked(ctx context.Context, users []domain.VPNUser
 					"email", user.Email, "err", err)
 				continue
 			}
-			if err := AddUserToInbounds(cfg, payload); err != nil {
+			missing, err := MissingClientPayload(cfg, payload)
+			if err != nil {
+				a.log.Warn("xray adapter: skipping user in bulk add due to inbound lookup error",
+					"email", user.Email, "err", err)
+				continue
+			}
+			if len(missing) == 0 {
+				continue
+			}
+			if err := AddUserToInbounds(cfg, missing); err != nil {
 				a.log.Warn("xray adapter: skipping user in bulk add due to inbound write error",
 					"email", user.Email, "err", err)
 				continue
 			}
-			allPayloads = append(allPayloads, payload...)
+			allPayloads = append(allPayloads, missing...)
 		}
 		return nil
 	})
@@ -322,6 +329,7 @@ func (a *Adapter) addUsersBulkLocked(ctx context.Context, users []domain.VPNUser
 			a.markDirty()
 			a.log.Warn("xray adapter: bulk hot-add via gRPC failed (config already updated on disk)",
 				"count", len(users), "err", err)
+			a.rebuildInboundTags(ctx, allPayloads, nil)
 		}
 	}
 
@@ -809,58 +817,76 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 			return result, fmt.Errorf("xray adapter SyncUsers: regenerate config: %w", err)
 		}
 		a.log.Info("xray adapter: config regenerated from template", "users", len(dbUsers))
+	} else if len(dbUsers) > 0 {
+		// Installations without a template keep their current config as the
+		// desired shape. In that mode addUsersBulkLocked performs the same
+		// per-inbound repair directly against the current config.
+		if err := a.addUsersBulkLocked(ctx, dbUsers); err != nil {
+			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(dbUsers), "err", err)
+		} else {
+			result.Added = len(dbUsers)
+		}
 	}
 
-	// 3. Build lookup sets.
+	// 3. Read the regenerated desired config and compare it to the pre-sync
+	// configuration by (inbound tag, email). A single email-level set is not
+	// sufficient: the user may exist in one inbound and still be absent from
+	// another one.
+	desiredCfg, err := Read(a.configPath)
+	if err != nil {
+		return result, fmt.Errorf("xray adapter SyncUsers: read regenerated config: %w", err)
+	}
+	var toAdd []TaggedClient
+	toUpdateRemove := make(map[string][]string)
+	if a.templatePath != "" {
+		desiredPayload, err := DesiredUserClientPayload(desiredCfg, dbEmails)
+		if err != nil {
+			return result, fmt.Errorf("xray adapter SyncUsers: read desired inbound clients: %w", err)
+		}
+		toAdd, toUpdateRemove, err = DiffClientPayload(oldCfg, desiredPayload)
+		if err != nil {
+			return result, fmt.Errorf("xray adapter SyncUsers: diff inbound clients: %w", err)
+		}
+	}
+
+	// 4. Build lookup sets for orphan handling. The values are deliberately
+	// still one-per-email here; orphan removal is about ownership, not inbound
+	// membership, which was handled by the tag-aware diff above.
 	dbSet := make(map[string]domain.VPNUserConfig, len(dbUsers))
 	for _, u := range dbUsers {
 		if u.Email != "" {
 			dbSet[u.Email] = u
 		}
 	}
-	liveSet := make(map[string]domain.VPNUserConfig, len(liveUsers))
-	for _, u := range liveUsers {
-		if u.Email != "" {
-			liveSet[u.Email] = u
+
+	// Apply changed clients first by removing the old client from only the
+	// affected inbound, then adding the exact generated client to that inbound.
+	// When an Xray API operation reports a partial failure, rebuild precisely the
+	// involved inbound from the just-written config instead of leaving it stale.
+	repairRemovals := make(map[string][]string)
+	for email, tags := range toUpdateRemove {
+		if err := a.grpc.RemoveUser(ctx, email, tags); err != nil {
+			a.markDirty()
+			a.log.Warn("xray adapter: SyncUsers: hot-remove for inbound update failed", "email", email, "tags", tags, "err", err)
+			repairRemovals[email] = append(repairRemovals[email], tags...)
 		}
 	}
-
-	// 4. Identify users to add or update.
-	var toAdd []domain.VPNUserConfig
-	var toUpdateRemove []string
-
-	// Helper to check if properties differ
-	compareVPNUserConfigs := func(u1, u2 domain.VPNUserConfig) bool {
-		return u1.UUID == u2.UUID &&
-			u1.Auth == u2.Auth &&
-			u1.Expire == u2.Expire &&
-			u1.Subfile == u2.Subfile &&
-			u1.MaxDevices == u2.MaxDevices
-	}
-
-	for email, dbUser := range dbSet {
-		liveUser, exists := liveSet[email]
-		if !exists {
-			toAdd = append(toAdd, dbUser)
-		} else if !compareVPNUserConfigs(liveUser, dbUser) {
-			toAdd = append(toAdd, dbUser)
-			toUpdateRemove = append(toUpdateRemove, email)
-		}
-	}
-
-	// Hot-remove users we need to update first to avoid duplicates/errors
-	if len(toUpdateRemove) > 0 {
-		if err := a.removeUsersBulkLocked(WithBypassProtection(ctx, true), toUpdateRemove); err != nil {
-			a.log.Warn("xray adapter: SyncUsers: bulk hot-remove for update failed", "count", len(toUpdateRemove), "err", err)
-		}
-	}
-
 	if len(toAdd) > 0 {
-		if err := a.addUsersBulkLocked(ctx, toAdd); err != nil {
-			a.log.Warn("xray adapter: SyncUsers: bulk hot-add failed", "count", len(toAdd), "err", err)
+		if err := a.grpc.AddUser(ctx, toAdd, a.configPath); err != nil {
+			a.markDirty()
+			a.log.Warn("xray adapter: SyncUsers: hot-add for inbound reconciliation failed", "clients", len(toAdd), "err", err)
+			a.rebuildInboundTags(ctx, toAdd, repairRemovals)
 		} else {
-			result.Added = len(toAdd)
+			seen := make(map[string]bool, len(toAdd))
+			for _, tagged := range toAdd {
+				if email := tagged.Client.Email(); email != "" && !seen[email] {
+					seen[email] = true
+					result.Added++
+				}
+			}
 		}
+	} else if len(repairRemovals) > 0 {
+		a.rebuildInboundTags(ctx, nil, repairRemovals)
 	}
 
 	// 5. Hot-remove orphans (only when explicitly requested).
@@ -889,8 +915,20 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 					len(toRemove), len(liveUsers), threshold)
 			}
 
-			if err := a.removeUsersBulkLocked(ctx, toRemove); err != nil {
-				a.log.Warn("xray adapter: SyncUsers: bulk hot-remove failed", "count", len(toRemove), "err", err)
+			oldTags, tagsErr := InboundTagsForUsers(oldCfg, toRemove)
+			if tagsErr != nil {
+				return result, fmt.Errorf("xray adapter SyncUsers: resolve orphan inbound tags: %w", tagsErr)
+			}
+			failedRemovals := make(map[string][]string)
+			for email, tags := range oldTags {
+				if err := a.grpc.RemoveUser(ctx, email, tags); err != nil {
+					a.markDirty()
+					a.log.Warn("xray adapter: SyncUsers: hot-remove orphan failed", "email", email, "tags", tags, "err", err)
+					failedRemovals[email] = append(failedRemovals[email], tags...)
+				}
+			}
+			if len(failedRemovals) > 0 {
+				a.rebuildInboundTags(ctx, nil, failedRemovals)
 			} else {
 				result.Removed = len(toRemove)
 			}
@@ -968,6 +1006,37 @@ func (a *Adapter) rebuildInboundLocked(ctx context.Context, tag string) error {
 	}
 
 	return nil
+}
+
+// rebuildInboundTags is the last-resort repair path for a partial Xray gRPC
+// result. The config on disk is already the desired state, so rebuilding only
+// the affected inbounds makes the runtime match it without restarting Xray or
+// disturbing unrelated inbounds.
+func (a *Adapter) rebuildInboundTags(ctx context.Context, additions []TaggedClient, removals map[string][]string) {
+	tagSet := make(map[string]bool, len(additions))
+	for _, tagged := range additions {
+		if tagged.Tag != "" {
+			tagSet[tagged.Tag] = true
+		}
+	}
+	for _, tags := range removals {
+		for _, tag := range tags {
+			if tag != "" {
+				tagSet[tag] = true
+			}
+		}
+	}
+
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	for _, tag := range tags {
+		if err := a.rebuildInboundLocked(ctx, tag); err != nil {
+			a.log.Warn("xray adapter: failed to rebuild inbound after partial gRPC sync", "tag", tag, "err", err)
+		}
+	}
 }
 
 // rebuildHysteriaInbounds reads the current config and hot-rebuilds every
