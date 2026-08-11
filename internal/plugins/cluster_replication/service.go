@@ -198,6 +198,18 @@ func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string) 
 		if snapshotErr != nil {
 			return 0, fmt.Errorf("build static client artifact: %w", snapshotErr)
 		}
+		// Static hardcoded users are a cluster-wide identity set. Let the master
+		// apply its own projection too: its inbound tags may differ from every
+		// slave, and each node must contain every static user in each compatible
+		// local inbound. Re-read after the projection so the stored artifact is a
+		// faithful representation of the current master template.
+		if applyErr := synchronizer.ApplyStaticClientSnapshot(ctx, clients); applyErr != nil {
+			return 0, fmt.Errorf("project static client artifact on master: %w", applyErr)
+		}
+		clients, snapshotErr = synchronizer.StaticClientSnapshot(ctx, users)
+		if snapshotErr != nil {
+			return 0, fmt.Errorf("refresh static client artifact: %w", snapshotErr)
+		}
 		payload, marshalErr := json.Marshal(clients)
 		if marshalErr != nil {
 			return 0, marshalErr

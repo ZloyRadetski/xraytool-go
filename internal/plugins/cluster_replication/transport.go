@@ -358,7 +358,10 @@ func (s *replicationServer) sendEventsAfter(ctx context.Context, stream protocol
 				return snapshotErr
 			}
 			*lastSent = revision
-			continue
+			// The snapshot already includes the latest state and artifacts. Do not
+			// continue iterating a batch read before it: it can contain stale
+			// resnapshot markers and would stream the same full snapshot repeatedly.
+			return nil
 		}
 		payload, marshalErr := json.Marshal(wireEvent{
 			Kind: event.Kind, Checksum: event.Checksum, Payload: base64.StdEncoding.EncodeToString(event.Payload),

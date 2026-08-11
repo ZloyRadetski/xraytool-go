@@ -101,12 +101,9 @@ func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []doma
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 
-	replacements, err := parseStaticClientSnapshot(snapshot)
+	parsed, err := parseStaticClientSnapshot(snapshot)
 	if err != nil {
 		return err
-	}
-	if len(replacements) == 0 {
-		return nil
 	}
 
 	var previous map[string][]RawClient
@@ -120,12 +117,13 @@ func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []doma
 			return err
 		}
 
-		changed, skipped, err := replaceStaticClients(template, replacements, nil)
+		replacements, err := parsed.replacementsFor(template)
+		if err != nil {
+			return fmt.Errorf("build template static clients: %w", err)
+		}
+		changed, err := replaceStaticClients(template, replacements)
 		if err != nil {
 			return fmt.Errorf("apply template static clients: %w", err)
-		}
-		for _, tag := range skipped {
-			a.log.Warn("xray adapter: static client snapshot inbound is absent on this node", "tag", tag)
 		}
 		if len(changed) > 0 {
 			if err := Write(a.templatePath, template); err != nil {
@@ -139,16 +137,22 @@ func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []doma
 		}
 	}
 
-	changed, skipped, err := a.replaceActiveStaticClients(replacements, previous, a.templatePath == "")
+	active, err := Read(a.configPath)
+	if err != nil {
+		return fmt.Errorf("read active config %q: %w", a.configPath, err)
+	}
+	replacements, err := parsed.replacementsFor(active)
+	if err != nil {
+		return fmt.Errorf("build active static clients: %w", err)
+	}
+
+	changed, err := a.replaceActiveStaticClients(replacements, previous, a.templatePath == "")
 	if err != nil {
 		return err
 	}
-	for _, tag := range skipped {
-		a.log.Warn("xray adapter: static client snapshot inbound is absent on this node", "tag", tag)
-	}
 
 	if a.templatePath == "" {
-		if err := a.writeStaticClientState(snapshot); err != nil {
+		if err := a.writeStaticClientState(snapshotFromReplacements(replacements)); err != nil {
 			return err
 		}
 	}
@@ -191,38 +195,220 @@ type staticClientReplacement struct {
 	clients  []RawClient
 }
 
-func parseStaticClientSnapshot(snapshot []domain.StaticInboundClients) (map[string]staticClientReplacement, error) {
-	replacements := make(map[string]staticClientReplacement, len(snapshot))
+// parsedStaticClientSnapshot represents replicated hardcoded users by their
+// identity rather than by the master inbound tag. A cluster deliberately allows
+// every node to have its own inbound layout; a user from the master must
+// therefore be projected onto every compatible local inbound.
+type parsedStaticClientSnapshot struct {
+	profiles  []staticClientProfile
+	anonymous map[string]staticClientReplacement
+}
+
+type staticClientProfile struct {
+	email       string
+	uuid        string
+	subfile     string
+	expire      string
+	flow        string
+	limit       *float64
+	authByProto map[string]string
+	prototype   map[string]RawClient
+}
+
+func parseStaticClientSnapshot(snapshot []domain.StaticInboundClients) (parsedStaticClientSnapshot, error) {
+	parsed := parsedStaticClientSnapshot{
+		anonymous: make(map[string]staticClientReplacement),
+	}
+	profiles := make(map[string]*staticClientProfile)
+	seenTags := make(map[string]struct{}, len(snapshot))
 	for _, inbound := range snapshot {
 		tag := strings.TrimSpace(inbound.InboundTag)
 		if tag == "" {
-			return nil, fmt.Errorf("static client snapshot contains an inbound without tag")
+			return parsedStaticClientSnapshot{}, fmt.Errorf("static client snapshot contains an inbound without tag")
 		}
-		if _, exists := replacements[tag]; exists {
-			return nil, fmt.Errorf("static client snapshot contains duplicate inbound tag %q", tag)
+		if _, exists := seenTags[tag]; exists {
+			return parsedStaticClientSnapshot{}, fmt.Errorf("static client snapshot contains duplicate inbound tag %q", tag)
 		}
+		seenTags[tag] = struct{}{}
+		protocol := strings.ToLower(strings.TrimSpace(inbound.Protocol))
 
 		clients := make([]RawClient, 0)
 		if len(inbound.Clients) > 0 && string(inbound.Clients) != "null" {
 			if err := json.Unmarshal(inbound.Clients, &clients); err != nil {
-				return nil, fmt.Errorf("static client snapshot inbound %q has invalid clients: %w", tag, err)
+				return parsedStaticClientSnapshot{}, fmt.Errorf("static client snapshot inbound %q has invalid clients: %w", tag, err)
 			}
 		}
 		if clients == nil {
 			clients = make([]RawClient, 0)
 		}
+		anonymous := make([]RawClient, 0)
 		for index, client := range clients {
 			if client == nil {
-				return nil, fmt.Errorf("static client snapshot inbound %q has null client at index %d", tag, index)
+				return parsedStaticClientSnapshot{}, fmt.Errorf("static client snapshot inbound %q has null client at index %d", tag, index)
+			}
+			email := strings.TrimSpace(client.Email())
+			if email == "" {
+				// A client without an email cannot be identified as a user. Keep it
+				// only for an exact local inbound match, so it is never silently
+				// copied into unrelated node-specific inbounds.
+				anonymous = append(anonymous, cloneRawClient(client))
+				continue
+			}
+			profile := profiles[email]
+			if profile == nil {
+				profile = &staticClientProfile{
+					email:       email,
+					authByProto: make(map[string]string),
+					prototype:   make(map[string]RawClient),
+				}
+				profiles[email] = profile
+			}
+			if err := profile.merge(protocol, client); err != nil {
+				return parsedStaticClientSnapshot{}, fmt.Errorf("static client snapshot user %q: %w", email, err)
 			}
 		}
 
-		replacements[tag] = staticClientReplacement{
-			protocol: strings.ToLower(strings.TrimSpace(inbound.Protocol)),
-			clients:  clients,
+		parsed.anonymous[tag] = staticClientReplacement{
+			protocol: protocol,
+			clients:  anonymous,
 		}
 	}
+	parsed.profiles = make([]staticClientProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		parsed.profiles = append(parsed.profiles, *profile)
+	}
+	sort.Slice(parsed.profiles, func(i, j int) bool {
+		return parsed.profiles[i].email < parsed.profiles[j].email
+	})
+	return parsed, nil
+}
+
+func (p *staticClientProfile) merge(protocol string, client RawClient) error {
+	if err := mergeStaticString(&p.uuid, client.GetString("id"), "id"); err != nil {
+		return err
+	}
+	if err := mergeStaticString(&p.subfile, client.GetString("subfile"), "subfile"); err != nil {
+		return err
+	}
+	if err := mergeStaticString(&p.expire, client.GetString("expire"), "expire"); err != nil {
+		return err
+	}
+	if err := mergeStaticString(&p.flow, client.GetString("flow"), "flow"); err != nil {
+		return err
+	}
+	if value, ok := client.GetNumber("limit"); ok {
+		if p.limit != nil && *p.limit != value {
+			return fmt.Errorf("conflicting limit values")
+		}
+		if p.limit == nil {
+			p.limit = &value
+		}
+	}
+
+	credentialProto := staticCredentialProtocol(protocol)
+	if credentialProto != "" {
+		auth := staticClientAuth(protocol, client)
+		if current := p.authByProto[credentialProto]; current != "" && auth != "" && current != auth {
+			return fmt.Errorf("conflicting %s credentials", credentialProto)
+		}
+		if auth != "" {
+			p.authByProto[credentialProto] = auth
+		}
+	}
+	if _, exists := p.prototype[protocol]; !exists {
+		p.prototype[protocol] = cloneRawClient(client)
+	}
+	return nil
+}
+
+func mergeStaticString(current *string, next, field string) error {
+	if next == "" {
+		return nil
+	}
+	if *current != "" && *current != next {
+		return fmt.Errorf("conflicting %s values", field)
+	}
+	*current = next
+	return nil
+}
+
+func staticCredentialProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "trojan":
+		return "trojan"
+	case "shadowsocks":
+		return "shadowsocks"
+	case "hysteria", "hysteria2", "hy2":
+		return "hy2"
+	default:
+		return ""
+	}
+}
+
+func staticClientAuth(protocol string, client RawClient) string {
+	switch staticCredentialProtocol(protocol) {
+	case "hy2":
+		if auth := client.GetString("auth"); auth != "" {
+			return auth
+		}
+	}
+	return client.GetString("password")
+}
+
+func (p parsedStaticClientSnapshot) replacementsFor(cfg RawConfig) (map[string]staticClientReplacement, error) {
+	inbounds, err := cfg.GetInbounds()
+	if err != nil {
+		return nil, fmt.Errorf("read local inbounds: %w", err)
+	}
+	replacements := make(map[string]staticClientReplacement, len(inbounds))
+	for _, inbound := range inbounds {
+		if !inbound.HasClientList() || inbound.Tag() == "" {
+			continue
+		}
+		clients := make([]RawClient, 0, len(p.profiles))
+		if anonymous, ok := p.anonymous[inbound.Tag()]; ok && anonymous.protocol == inbound.Protocol() {
+			for _, client := range anonymous.clients {
+				clients = append(clients, cloneRawClient(client))
+			}
+		}
+		for _, profile := range p.profiles {
+			client, err := profile.buildFor(inbound)
+			if err != nil {
+				return nil, fmt.Errorf("build user %q for inbound %q: %w", profile.email, inbound.Tag(), err)
+			}
+			clients = append(clients, client)
+		}
+		replacements[inbound.Tag()] = staticClientReplacement{protocol: inbound.Protocol(), clients: clients}
+	}
 	return replacements, nil
+}
+
+func (p staticClientProfile) buildFor(inbound RawInbound) (RawClient, error) {
+	protocol := inbound.Protocol()
+	if prototype, exists := p.prototype[protocol]; exists {
+		return cloneRawClient(prototype), nil
+	}
+	flow := ""
+	if protocol == "vless" {
+		flow = p.flow
+	}
+	return BuildClient(inbound, ClientParams{
+		Email:   p.email,
+		UUID:    p.uuid,
+		Auth:    p.authByProto[staticCredentialProtocol(protocol)],
+		Subfile: p.subfile,
+		Expire:  p.expire,
+		Flow:    flow,
+		Limit:   p.limit,
+	})
+}
+
+func cloneRawClient(client RawClient) RawClient {
+	clone := make(RawClient, len(client))
+	for key, value := range client {
+		clone[key] = append(json.RawMessage(nil), value...)
+	}
+	return clone
 }
 
 func staticClientsByInbound(cfg RawConfig) (map[string][]RawClient, error) {
@@ -245,71 +431,66 @@ func staticClientsByInbound(cfg RawConfig) (map[string][]RawClient, error) {
 	return result, nil
 }
 
-// replaceStaticClients replaces the source/static list. previous is ignored:
-// the template is itself the source of truth and contains no dynamic clients.
-func replaceStaticClients(cfg RawConfig, replacements map[string]staticClientReplacement, _ map[string][]RawClient) ([]string, []string, error) {
+// replaceStaticClients replaces the static list in a template. The caller has
+// already projected every replicated user onto this node's own inbound layout.
+func replaceStaticClients(cfg RawConfig, replacements map[string]staticClientReplacement) ([]string, error) {
 	inbounds, err := cfg.GetInbounds()
 	if err != nil {
-		return nil, nil, fmt.Errorf("read inbounds: %w", err)
+		return nil, fmt.Errorf("read inbounds: %w", err)
 	}
 
-	found := make(map[string]bool, len(replacements))
 	changed := make([]string, 0, len(replacements))
 	for index, inbound := range inbounds {
 		replacement, exists := replacements[inbound.Tag()]
 		if !exists {
 			continue
 		}
-		found[inbound.Tag()] = true
 		if !inbound.HasClientList() {
 			continue
 		}
 		if replacement.protocol != "" && replacement.protocol != inbound.Protocol() {
-			return nil, nil, fmt.Errorf("inbound %q protocol mismatch: master=%q slave=%q", inbound.Tag(), replacement.protocol, inbound.Protocol())
+			return nil, fmt.Errorf("inbound %q protocol mismatch: expected=%q actual=%q", inbound.Tag(), replacement.protocol, inbound.Protocol())
 		}
 
 		current, err := inbound.GetClients()
 		if err != nil {
-			return nil, nil, fmt.Errorf("read clients for inbound %q: %w", inbound.Tag(), err)
+			return nil, fmt.Errorf("read clients for inbound %q: %w", inbound.Tag(), err)
 		}
 		if rawClientListsEqual(current, replacement.clients) {
 			continue
 		}
 		if err := inbounds[index].SetClients(replacement.clients); err != nil {
-			return nil, nil, fmt.Errorf("set clients for inbound %q: %w", inbound.Tag(), err)
+			return nil, fmt.Errorf("set clients for inbound %q: %w", inbound.Tag(), err)
 		}
 		changed = append(changed, inbound.Tag())
 	}
 
 	if len(changed) > 0 {
 		if err := cfg.SetInbounds(inbounds); err != nil {
-			return nil, nil, fmt.Errorf("write inbounds: %w", err)
+			return nil, fmt.Errorf("write inbounds: %w", err)
 		}
 	}
-	return changed, missingStaticTags(replacements, found), nil
+	return changed, nil
 }
 
-func (a *Adapter) replaceActiveStaticClients(replacements map[string]staticClientReplacement, previous map[string][]RawClient, removeFirstMatchingEmails bool) ([]string, []string, error) {
+func (a *Adapter) replaceActiveStaticClients(replacements map[string]staticClientReplacement, previous map[string][]RawClient, removeFirstMatchingEmails bool) ([]string, error) {
 	changed := make([]string, 0, len(replacements))
-	skipped := make([]string, 0)
 	err := Modify(a.configPath, func(cfg RawConfig) error {
 		inbounds, err := cfg.GetInbounds()
 		if err != nil {
 			return fmt.Errorf("read inbounds: %w", err)
 		}
 
-		found := make(map[string]bool, len(replacements))
 		for index, inbound := range inbounds {
 			replacement, exists := replacements[inbound.Tag()]
 			if !exists {
 				continue
 			}
-			found[inbound.Tag()] = true
 			if !inbound.HasClientList() {
 				continue
 			}
 			if replacement.protocol != "" && replacement.protocol != inbound.Protocol() {
-				return fmt.Errorf("inbound %q protocol mismatch: master=%q slave=%q", inbound.Tag(), replacement.protocol, inbound.Protocol())
+				return fmt.Errorf("inbound %q protocol mismatch: expected=%q actual=%q", inbound.Tag(), replacement.protocol, inbound.Protocol())
 			}
 
 			current, err := inbound.GetClients()
@@ -326,7 +507,6 @@ func (a *Adapter) replaceActiveStaticClients(replacements map[string]staticClien
 			changed = append(changed, inbound.Tag())
 		}
 
-		skipped = missingStaticTags(replacements, found)
 		if len(changed) == 0 {
 			return nil
 		}
@@ -336,9 +516,9 @@ func (a *Adapter) replaceActiveStaticClients(replacements map[string]staticClien
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("apply active static clients: %w", err)
+		return nil, fmt.Errorf("apply active static clients: %w", err)
 	}
-	return changed, skipped, nil
+	return changed, nil
 }
 
 func mergeStaticClients(current, previous, desired []RawClient, removeFirstMatchingEmails bool) []RawClient {
@@ -420,17 +600,6 @@ func rawClientKey(client RawClient) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func missingStaticTags(replacements map[string]staticClientReplacement, found map[string]bool) []string {
-	missing := make([]string, 0)
-	for tag := range replacements {
-		if !found[tag] {
-			missing = append(missing, tag)
-		}
-	}
-	sort.Strings(missing)
-	return missing
-}
-
 func (a *Adapter) staticClientStatePath() string {
 	return a.configPath + ".static-clients.json"
 }
@@ -447,7 +616,7 @@ func (a *Adapter) readStaticClientState() (map[string][]RawClient, error) {
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		return nil, fmt.Errorf("parse static client state: %w", err)
 	}
-	replacements, err := parseStaticClientSnapshot(snapshot)
+	replacements, err := decodeStaticClientReplacements(snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -456,6 +625,60 @@ func (a *Adapter) readStaticClientState() (map[string][]RawClient, error) {
 		state[tag] = replacement.clients
 	}
 	return state, nil
+}
+
+func decodeStaticClientReplacements(snapshot []domain.StaticInboundClients) (map[string]staticClientReplacement, error) {
+	replacements := make(map[string]staticClientReplacement, len(snapshot))
+	for _, inbound := range snapshot {
+		tag := strings.TrimSpace(inbound.InboundTag)
+		if tag == "" {
+			return nil, fmt.Errorf("static client state contains an inbound without tag")
+		}
+		if _, exists := replacements[tag]; exists {
+			return nil, fmt.Errorf("static client state contains duplicate inbound tag %q", tag)
+		}
+		clients := make([]RawClient, 0)
+		if len(inbound.Clients) > 0 && string(inbound.Clients) != "null" {
+			if err := json.Unmarshal(inbound.Clients, &clients); err != nil {
+				return nil, fmt.Errorf("static client state inbound %q has invalid clients: %w", tag, err)
+			}
+		}
+		for index, client := range clients {
+			if client == nil {
+				return nil, fmt.Errorf("static client state inbound %q has null client at index %d", tag, index)
+			}
+		}
+		replacements[tag] = staticClientReplacement{
+			protocol: strings.ToLower(strings.TrimSpace(inbound.Protocol)),
+			clients:  clients,
+		}
+	}
+	return replacements, nil
+}
+
+func snapshotFromReplacements(replacements map[string]staticClientReplacement) []domain.StaticInboundClients {
+	tags := make([]string, 0, len(replacements))
+	for tag := range replacements {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	snapshot := make([]domain.StaticInboundClients, 0, len(tags))
+	for _, tag := range tags {
+		replacement := replacements[tag]
+		clients, err := json.Marshal(replacement.clients)
+		if err != nil {
+			// RawClient has already been parsed from valid JSON; this branch is
+			// unreachable in normal operation. Keep a valid empty state rather
+			// than persisting invalid data.
+			clients = []byte("[]")
+		}
+		snapshot = append(snapshot, domain.StaticInboundClients{
+			InboundTag: tag,
+			Protocol:   replacement.protocol,
+			Clients:    clients,
+		})
+	}
+	return snapshot
 }
 
 func (a *Adapter) writeStaticClientState(snapshot []domain.StaticInboundClients) error {

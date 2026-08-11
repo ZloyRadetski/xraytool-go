@@ -162,6 +162,65 @@ func TestStaticClientSnapshotProtectsDirectConfigClients(t *testing.T) {
 	}
 }
 
+func TestStaticClientSnapshotProjectsUserToNodeSpecificInbounds(t *testing.T) {
+	dir := t.TempDir()
+	masterTemplatePath := filepath.Join(dir, "master-template.json")
+	masterTemplate := `{
+  "inbounds": [
+    {"tag":"master-vless","protocol":"vless","settings":{"clients":[{"email":"ops-access","id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","level":7}]}}
+  ]
+}`
+	if err := os.WriteFile(masterTemplatePath, []byte(masterTemplate), 0o600); err != nil {
+		t.Fatalf("write master template: %v", err)
+	}
+	master := NewAdapter("127.0.0.1:1", filepath.Join(dir, "master-config.json"), masterTemplatePath, false, "", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	snapshot, err := master.StaticClientSnapshot(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("snapshot master static clients: %v", err)
+	}
+
+	// Tags and protocols intentionally differ from the master. The replicated
+	// hardcoded user must still be generated for every local client inbound.
+	slaveTemplatePath := filepath.Join(dir, "slave-template.json")
+	slaveConfigPath := filepath.Join(dir, "slave-config.json")
+	slaveTemplate := `{
+  "inbounds": [
+    {"tag":"msk-xhttp","protocol":"xhttp","settings":{"clients":[]}},
+    {"tag":"msk-trojan","protocol":"trojan","settings":{"clients":[]}},
+    {"tag":"msk-hy2","protocol":"hy2","settings":{"users":[]}}
+  ]
+}`
+	if err := os.WriteFile(slaveTemplatePath, []byte(slaveTemplate), 0o600); err != nil {
+		t.Fatalf("write slave template: %v", err)
+	}
+	if err := os.WriteFile(slaveConfigPath, []byte(slaveTemplate), 0o600); err != nil {
+		t.Fatalf("write slave config: %v", err)
+	}
+
+	addr, cleanup := startMockGRPCServer(t, nil, &mockHandlerServer{})
+	defer cleanup()
+	slave := NewAdapter(addr, slaveConfigPath, slaveTemplatePath, false, "", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := slave.ApplyStaticClientSnapshot(ctx, snapshot); err != nil {
+		t.Fatalf("apply node-specific static clients: %v", err)
+	}
+
+	active := readRawConfig(t, slaveConfigPath)
+	xhttp := clientByEmail(clientsForInbound(t, active, "msk-xhttp"), "ops-access")
+	if xhttp == nil || xhttp.GetString("id") != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("static user was not generated for local xhttp inbound: %+v", xhttp)
+	}
+	trojan := clientByEmail(clientsForInbound(t, active, "msk-trojan"), "ops-access")
+	if trojan == nil || trojan.GetString("password") != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("static user was not generated for local trojan inbound: %+v", trojan)
+	}
+	hy2 := clientByEmail(clientsForInbound(t, active, "msk-hy2"), "ops-access")
+	if hy2 == nil || hy2.GetString("auth") != BuildDeterministicHy2Pass("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "ops-access") {
+		t.Fatalf("static user was not generated for local hy2 inbound: %+v", hy2)
+	}
+}
+
 func clientsForInbound(t *testing.T, cfg RawConfig, tag string) []RawClient {
 	t.Helper()
 	inbounds, err := cfg.GetInbounds()
