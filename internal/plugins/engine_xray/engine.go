@@ -136,6 +136,13 @@ func (a *Adapter) calculateStateHash(dbUsers []domain.VPNUserConfig) (string, er
 			h.Write([]byte("template_err"))
 		}
 	}
+	// Replicated hardcoded clients live outside the user-owned template. Hash
+	// the overlay so a changed artifact cannot be hidden by the ordinary DB
+	// desired-state hash.
+	if data, err := os.ReadFile(a.staticClientStatePath()); err == nil {
+		h.Write([]byte("static:"))
+		h.Write(data)
+	}
 
 	// 2. Hash reality rotation settings
 	h.Write([]byte(fmt.Sprintf("rot:%t;keys:%s;", a.realityRotation, a.realityKeysPath)))
@@ -816,6 +823,9 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, dbUsers []domain.VPNUserC
 		if err := RegenerateConfig(a.templatePath, a.configPath, dbUsers, a.realityRotation, a.realityKeysPath, a.blacklistedAdmins); err != nil {
 			return result, fmt.Errorf("xray adapter SyncUsers: regenerate config: %w", err)
 		}
+		if err := a.restoreStaticClientsToGeneratedConfig(); err != nil {
+			return result, fmt.Errorf("xray adapter SyncUsers: restore replicated static clients: %w", err)
+		}
 		a.log.Info("xray adapter: config regenerated from template", "users", len(dbUsers))
 	} else if len(dbUsers) > 0 {
 		// Installations without a template keep their current config as the
@@ -1221,24 +1231,6 @@ func shouldBypassProtection(ctx context.Context) bool {
 
 func (a *Adapter) getProtectedTemplateUsers(dbEmails map[string]bool) map[string]bool {
 	protected := make(map[string]bool)
-	if a.templatePath == "" {
-		// Direct-config deployments do not have a template from which static
-		// clients can be recovered. Their last filtered static snapshot serves
-		// as the protected set, so a cluster self-heal does not delete clients
-		// that were explicitly hardcoded in config.json.
-		if staticClients, err := a.readStaticClientState(); err == nil {
-			for _, clients := range staticClients {
-				for _, client := range clients {
-					email := client.Email()
-					if email != "" && (dbEmails == nil || !dbEmails[email]) {
-						protected[email] = true
-					}
-				}
-			}
-		}
-		return protected
-	}
-
 	blacklist := make(map[string]bool)
 	for _, email := range a.blacklistedAdmins {
 		if email != "" {
@@ -1246,14 +1238,30 @@ func (a *Adapter) getProtectedTemplateUsers(dbEmails map[string]bool) map[string
 		}
 	}
 
-	if templateCfg, err := Read(a.templatePath); err == nil {
-		if templateUsers, err := ListUsers(templateCfg); err == nil {
-			for _, u := range templateUsers {
-				email := u.Email()
-				if email != "" && !blacklist[email] {
-					if dbEmails == nil || !dbEmails[email] {
-						protected[email] = true
+	if a.templatePath != "" {
+		templateCfg, err := Read(a.templatePath)
+		if err == nil {
+			if templateUsers, err := ListUsers(templateCfg); err == nil {
+				for _, u := range templateUsers {
+					email := u.Email()
+					if email != "" && !blacklist[email] {
+						if dbEmails == nil || !dbEmails[email] {
+							protected[email] = true
+						}
 					}
+				}
+			}
+		}
+	}
+	// Both direct-config static clients and replicated template overlays are
+	// persisted in the same sidecar. They must be protected from orphan cleanup
+	// even though the overlay never changes the template.
+	if staticClients, err := a.readStaticClientState(); err == nil {
+		for _, clients := range staticClients {
+			for _, client := range clients {
+				email := client.Email()
+				if email != "" && !blacklist[email] && (dbEmails == nil || !dbEmails[email]) {
+					protected[email] = true
 				}
 			}
 		}

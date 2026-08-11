@@ -100,6 +100,10 @@ func TestStaticClientSnapshotAndApplyPreservesDynamicClients(t *testing.T) {
 	if err := os.WriteFile(slaveConfigPath, []byte(staticClientSlaveConfig), 0o600); err != nil {
 		t.Fatalf("write slave config: %v", err)
 	}
+	templateBefore, err := os.ReadFile(slaveTemplatePath)
+	if err != nil {
+		t.Fatalf("read slave template before apply: %v", err)
+	}
 
 	addr, cleanup := startMockGRPCServer(t, nil, &mockHandlerServer{})
 	defer cleanup()
@@ -110,13 +114,15 @@ func TestStaticClientSnapshotAndApplyPreservesDynamicClients(t *testing.T) {
 		t.Fatalf("ApplyStaticClientSnapshot: %v", err)
 	}
 
-	template := readRawConfig(t, slaveTemplatePath)
-	vlessTemplateClients := clientsForInbound(t, template, "vless-main")
-	if len(vlessTemplateClients) != 1 || vlessTemplateClients[0].GetString("id") != "static-new" {
-		t.Fatalf("slave template did not receive the static VLESS client: %+v", vlessTemplateClients)
+	templateAfter, err := os.ReadFile(slaveTemplatePath)
+	if err != nil {
+		t.Fatalf("read slave template after apply: %v", err)
 	}
-	if level, ok := vlessTemplateClients[0].GetNumber("level"); !ok || level != 7 {
-		t.Fatalf("static VLESS fields were not preserved: %+v", vlessTemplateClients[0])
+	if string(templateAfter) != string(templateBefore) {
+		t.Fatalf("static replication must not modify the slave template\nbefore: %s\nafter: %s", templateBefore, templateAfter)
+	}
+	if _, err := os.Stat(slaveConfigPath + ".static-clients.json"); err != nil {
+		t.Fatalf("replicated static client state was not persisted: %v", err)
 	}
 
 	active := readRawConfig(t, slaveConfigPath)
@@ -135,9 +141,27 @@ func TestStaticClientSnapshotAndApplyPreservesDynamicClients(t *testing.T) {
 	if clientByEmail(trojanActive, "ops-access").GetString("password") != "static-password" {
 		t.Fatalf("static Trojan client was not updated: %+v", trojanActive)
 	}
+	// Database reconciliation must keep the replicated static users in
+	// config.json while still leaving the local template byte-for-byte intact.
+	if _, err := slave.ReconcileUsers(ctx, []domain.VPNUserConfig{{
+		Email: "db-user@example.test", UUID: "db-live-id", Subfile: "db-subfile",
+	}}); err != nil {
+		t.Fatalf("reconcile after static replication: %v", err)
+	}
+	templateAfterReconcile, err := os.ReadFile(slaveTemplatePath)
+	if err != nil {
+		t.Fatalf("read slave template after reconcile: %v", err)
+	}
+	if string(templateAfterReconcile) != string(templateBefore) {
+		t.Fatalf("reconciliation must not modify the slave template\nbefore: %s\nafter: %s", templateBefore, templateAfterReconcile)
+	}
+	activeAfterReconcile := readRawConfig(t, slaveConfigPath)
+	if clientByEmail(clientsForInbound(t, activeAfterReconcile, "vless-main"), "ops-access").GetString("id") != "static-new" {
+		t.Fatalf("replicated VLESS client was not restored after regeneration")
+	}
 
 	// A reconnect can replay the artifact. It must be a no-op when the
-	// template-generated active config already contains the same static users;
+	// sidecar-overlaid active config already contains the same static users;
 	// otherwise every replay would remove and rebuild all local inbounds.
 	replayedChanges := 0
 	slave.OnConfigModified = func() { replayedChanges++ }

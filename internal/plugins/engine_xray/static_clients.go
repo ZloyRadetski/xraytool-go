@@ -84,7 +84,7 @@ func (a *Adapter) StaticClientSnapshot(_ context.Context, managedUsers []domain.
 		// A direct config has no separate source file from which SyncUsers can
 		// recognise static clients later. Persist the filtered snapshot as the
 		// protected set before removeOrphans is allowed to run.
-		if err := a.writeStaticClientState(snapshot); err != nil {
+		if _, err := a.writeStaticClientState(snapshot); err != nil {
 			return nil, err
 		}
 	}
@@ -92,11 +92,11 @@ func (a *Adapter) StaticClientSnapshot(_ context.Context, managedUsers []domain.
 	return snapshot, nil
 }
 
-// ApplyStaticClientSnapshot updates static clients on a slave without
-// replacing the dynamic clients which are managed by the subscription DB.
-// The active config is rebuilt immediately and the affected inbounds are
-// hot-reloaded, therefore a state-hash match cannot leave new static clients
-// waiting for the next full database snapshot.
+// ApplyStaticClientSnapshot updates replicated static clients on a slave
+// without ever modifying its user-owned template. The projected client lists
+// are persisted in a sidecar state file and overlaid onto config.json; the
+// affected inbounds are then hot-reloaded. This keeps the template a durable,
+// read-only description of the node's local transport layout.
 func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []domain.StaticInboundClients) error {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
@@ -106,35 +106,24 @@ func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []doma
 		return err
 	}
 
-	var previous map[string][]RawClient
-	if a.templatePath != "" {
-		template, err := Read(a.templatePath)
-		if err != nil {
-			return fmt.Errorf("read template %q: %w", a.templatePath, err)
-		}
-		previous, err = staticClientsByInbound(template)
-		if err != nil {
-			return err
-		}
-
-		replacements, err := parsed.replacementsFor(template)
-		if err != nil {
-			return fmt.Errorf("build template static clients: %w", err)
-		}
-		changed, err := replaceStaticClients(template, replacements)
-		if err != nil {
-			return fmt.Errorf("apply template static clients: %w", err)
-		}
-		if len(changed) > 0 {
-			if err := Write(a.templatePath, template); err != nil {
-				return fmt.Errorf("write template %q: %w", a.templatePath, err)
-			}
-		}
-	} else {
-		previous, err = a.readStaticClientState()
-		if err != nil {
-			return err
-		}
+	// Project against the local template (or config for direct deployments) so
+	// the sidecar survives every later config regeneration without changing the
+	// template itself.
+	localShape, err := Read(a.staticClientsSourcePath())
+	if err != nil {
+		return fmt.Errorf("read local static-client shape %q: %w", a.staticClientsSourcePath(), err)
+	}
+	persisted, err := parsed.replacementsFor(localShape)
+	if err != nil {
+		return fmt.Errorf("build persisted static clients: %w", err)
+	}
+	previous, err := a.readStaticClientState()
+	if err != nil {
+		return err
+	}
+	stateChanged, err := a.writeStaticClientState(snapshotFromReplacements(persisted))
+	if err != nil {
+		return err
 	}
 
 	active, err := Read(a.configPath)
@@ -146,18 +135,18 @@ func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []doma
 		return fmt.Errorf("build active static clients: %w", err)
 	}
 
-	changed, err := a.replaceActiveStaticClients(replacements, previous, a.templatePath == "")
+	// A replicated hardcoded user is authoritative for its email. On the first
+	// artifact there is no previous state yet, so remove an old same-email
+	// client from config.json before adding the master projection.
+	changed, err := a.replaceActiveStaticClients(replacements, previous, true)
 	if err != nil {
 		return err
 	}
 
-	if a.templatePath == "" {
-		if err := a.writeStaticClientState(snapshotFromReplacements(replacements)); err != nil {
-			return err
-		}
-	}
-
 	if len(changed) == 0 {
+		if stateChanged {
+			a.invalidateHash()
+		}
 		return nil
 	}
 
@@ -170,6 +159,24 @@ func (a *Adapter) ApplyStaticClientSnapshot(ctx context.Context, snapshot []doma
 	a.invalidateHash()
 	a.notifyConfigModified()
 	a.log.Info("xray adapter: applied static client snapshot", "inbounds", len(changed))
+	return nil
+}
+
+// restoreStaticClientsToGeneratedConfig reapplies the replicated sidecar after
+// RegenerateConfig has rebuilt config.json from the untouched local template.
+// It intentionally changes only config.json; ApplyStaticClientSnapshot owns
+// the hot-reload path when an artifact itself changes.
+func (a *Adapter) restoreStaticClientsToGeneratedConfig() error {
+	replacements, err := a.readStaticClientReplacements()
+	if err != nil {
+		return err
+	}
+	if len(replacements) == 0 {
+		return nil
+	}
+	if _, err := a.replaceActiveStaticClients(replacements, nil, true); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -418,68 +425,6 @@ func cloneRawClient(client RawClient) RawClient {
 	return clone
 }
 
-func staticClientsByInbound(cfg RawConfig) (map[string][]RawClient, error) {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return nil, fmt.Errorf("read static client inbounds: %w", err)
-	}
-
-	result := make(map[string][]RawClient, len(inbounds))
-	for _, inbound := range inbounds {
-		if !inbound.HasClientList() || inbound.Tag() == "" {
-			continue
-		}
-		clients, err := inbound.GetClients()
-		if err != nil {
-			return nil, fmt.Errorf("read clients for inbound %q: %w", inbound.Tag(), err)
-		}
-		result[inbound.Tag()] = clients
-	}
-	return result, nil
-}
-
-// replaceStaticClients replaces the static list in a template. The caller has
-// already projected every replicated user onto this node's own inbound layout.
-func replaceStaticClients(cfg RawConfig, replacements map[string]staticClientReplacement) ([]string, error) {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return nil, fmt.Errorf("read inbounds: %w", err)
-	}
-
-	changed := make([]string, 0, len(replacements))
-	for index, inbound := range inbounds {
-		replacement, exists := replacements[inbound.Tag()]
-		if !exists {
-			continue
-		}
-		if !inbound.HasClientList() {
-			continue
-		}
-		if replacement.protocol != "" && replacement.protocol != inbound.Protocol() {
-			return nil, fmt.Errorf("inbound %q protocol mismatch: expected=%q actual=%q", inbound.Tag(), replacement.protocol, inbound.Protocol())
-		}
-
-		current, err := inbound.GetClients()
-		if err != nil {
-			return nil, fmt.Errorf("read clients for inbound %q: %w", inbound.Tag(), err)
-		}
-		if rawClientListsEqual(current, replacement.clients) {
-			continue
-		}
-		if err := inbounds[index].SetClients(replacement.clients); err != nil {
-			return nil, fmt.Errorf("set clients for inbound %q: %w", inbound.Tag(), err)
-		}
-		changed = append(changed, inbound.Tag())
-	}
-
-	if len(changed) > 0 {
-		if err := cfg.SetInbounds(inbounds); err != nil {
-			return nil, fmt.Errorf("write inbounds: %w", err)
-		}
-	}
-	return changed, nil
-}
-
 func (a *Adapter) replaceActiveStaticClients(replacements map[string]staticClientReplacement, previous map[string][]RawClient, removeFirstMatchingEmails bool) ([]string, error) {
 	changed := make([]string, 0, len(replacements))
 	err := Modify(a.configPath, func(cfg RawConfig) error {
@@ -633,18 +578,7 @@ func (a *Adapter) staticClientStatePath() string {
 }
 
 func (a *Adapter) readStaticClientState() (map[string][]RawClient, error) {
-	data, err := os.ReadFile(a.staticClientStatePath())
-	if os.IsNotExist(err) {
-		return make(map[string][]RawClient), nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read static client state: %w", err)
-	}
-	var snapshot []domain.StaticInboundClients
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return nil, fmt.Errorf("parse static client state: %w", err)
-	}
-	replacements, err := decodeStaticClientReplacements(snapshot)
+	replacements, err := a.readStaticClientReplacements()
 	if err != nil {
 		return nil, err
 	}
@@ -653,6 +587,21 @@ func (a *Adapter) readStaticClientState() (map[string][]RawClient, error) {
 		state[tag] = replacement.clients
 	}
 	return state, nil
+}
+
+func (a *Adapter) readStaticClientReplacements() (map[string]staticClientReplacement, error) {
+	data, err := os.ReadFile(a.staticClientStatePath())
+	if os.IsNotExist(err) {
+		return make(map[string]staticClientReplacement), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read static client state: %w", err)
+	}
+	var snapshot []domain.StaticInboundClients
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("parse static client state: %w", err)
+	}
+	return decodeStaticClientReplacements(snapshot)
 }
 
 func decodeStaticClientReplacements(snapshot []domain.StaticInboundClients) (map[string]staticClientReplacement, error) {
@@ -709,19 +658,19 @@ func snapshotFromReplacements(replacements map[string]staticClientReplacement) [
 	return snapshot
 }
 
-func (a *Adapter) writeStaticClientState(snapshot []domain.StaticInboundClients) error {
+func (a *Adapter) writeStaticClientState(snapshot []domain.StaticInboundClients) (bool, error) {
 	data, err := json.Marshal(snapshot)
 	if err != nil {
-		return fmt.Errorf("marshal static client state: %w", err)
+		return false, fmt.Errorf("marshal static client state: %w", err)
 	}
 	path := a.staticClientStatePath()
 	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		return nil
+		return false, nil
 	}
 	if err := safeio.WriteToFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write static client state: %w", err)
+		return false, fmt.Errorf("write static client state: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 var _ domain.StaticClientSynchronizer = (*Adapter)(nil)
