@@ -61,6 +61,7 @@ type MultiEngine struct {
 
 var _ domain.Engine = (*MultiEngine)(nil)
 var _ pluginapi.ClientConfigContributor = (*MultiEngine)(nil)
+var _ domain.StaticClientSynchronizer = (*MultiEngine)(nil)
 
 // NewMultiEngine creates a MultiEngine with the broadcast router.
 //
@@ -119,6 +120,57 @@ func (m *MultiEngine) WithRouter(r EngineRouter) *MultiEngine {
 		m.router = r
 	}
 	return m
+}
+
+// SupportsStaticClientSync reports whether exactly one configured engine owns
+// hardcoded template clients. Static client artifacts have no engine ID in
+// their wire format, so delegating to more than one engine would be ambiguous
+// and unsafe. A single Xray engine remains supported alongside ordinary ones.
+func (m *MultiEngine) SupportsStaticClientSync() bool {
+	_, ok := m.staticClientSynchronizer()
+	return ok
+}
+
+// StaticClientSnapshot delegates the optional static/template-client
+// capability to its single supporting engine. This keeps cluster replication
+// working when the kernel passes the MultiEngine facade instead of Xray.
+func (m *MultiEngine) StaticClientSnapshot(ctx context.Context, users []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
+	synchronizer, ok := m.staticClientSynchronizer()
+	if !ok {
+		return nil, fmt.Errorf("pluginhost: static client synchronization requires exactly one capable engine")
+	}
+	return synchronizer.StaticClientSnapshot(ctx, users)
+}
+
+// ApplyStaticClientSnapshot delegates replicated hardcoded clients to the
+// same engine. Dynamic database users remain routed by MultiEngine normally.
+func (m *MultiEngine) ApplyStaticClientSnapshot(ctx context.Context, clients []domain.StaticInboundClients) error {
+	synchronizer, ok := m.staticClientSynchronizer()
+	if !ok {
+		return fmt.Errorf("pluginhost: static client synchronization requires exactly one capable engine")
+	}
+	return synchronizer.ApplyStaticClientSnapshot(ctx, clients)
+}
+
+func (m *MultiEngine) staticClientSynchronizer() (domain.StaticClientSynchronizer, bool) {
+	if m == nil {
+		return nil, false
+	}
+	var selected domain.StaticClientSynchronizer
+	for _, ref := range m.engines {
+		if probe, ok := ref.provider.(interface{ SupportsStaticClientSync() bool }); ok && !probe.SupportsStaticClientSync() {
+			continue
+		}
+		synchronizer, ok := ref.provider.(domain.StaticClientSynchronizer)
+		if !ok {
+			continue
+		}
+		if selected != nil {
+			return nil, false
+		}
+		selected = synchronizer
+	}
+	return selected, selected != nil
 }
 
 func refsToProviders(refs []engineRef) []pluginapi.EngineProvider {

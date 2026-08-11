@@ -10,3 +10,4 @@ publishes:
   - name: support_chat_provider
 requires:
   - name: user_repository
+  - name: protected_middleware

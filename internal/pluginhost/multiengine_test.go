@@ -44,6 +44,28 @@ type fakeEngine struct {
 
 var _ pluginapi.EngineProvider = (*fakeEngine)(nil)
 
+type staticFakeEngine struct {
+	*fakeEngine
+
+	snapshot []domain.StaticInboundClients
+	applied  []domain.StaticInboundClients
+}
+
+var _ domain.StaticClientSynchronizer = (*staticFakeEngine)(nil)
+
+func (e *staticFakeEngine) StaticClientSnapshot(_ context.Context, _ []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]domain.StaticInboundClients(nil), e.snapshot...), nil
+}
+
+func (e *staticFakeEngine) ApplyStaticClientSnapshot(_ context.Context, clients []domain.StaticInboundClients) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.applied = append([]domain.StaticInboundClients(nil), clients...)
+	return nil
+}
+
 func (e *fakeEngine) ID() string { return e.id }
 
 func (e *fakeEngine) AddUser(_ context.Context, user pluginapi.VPNUserConfig) error {
@@ -149,6 +171,39 @@ type routerFunc func(pluginapi.VPNUserConfig) []pluginapi.EngineProvider
 
 func (f routerFunc) EnginesFor(user pluginapi.VPNUserConfig) []pluginapi.EngineProvider {
 	return f(user)
+}
+
+func TestMultiEngineDelegatesStaticClientsToSingleCapableEngine(t *testing.T) {
+	t.Parallel()
+
+	xray := &staticFakeEngine{
+		fakeEngine: &fakeEngine{id: "xray"},
+		snapshot:   []domain.StaticInboundClients{{InboundTag: "vless-main", Protocol: "vless", Clients: []byte("[]")}},
+	}
+	singbox := &fakeEngine{id: "singbox"}
+	multi := NewMultiEngine([]pluginapi.EngineProvider{xray, singbox}, nil)
+
+	require.True(t, multi.SupportsStaticClientSync())
+	snapshot, err := multi.StaticClientSnapshot(context.Background(), []domain.VPNUserConfig{{Email: "db-user@example.test"}})
+	require.NoError(t, err)
+	require.Equal(t, xray.snapshot, snapshot)
+
+	desired := []domain.StaticInboundClients{{InboundTag: "vless-main", Protocol: "vless", Clients: []byte(`[{"email":"manual"}]`)}}
+	require.NoError(t, multi.ApplyStaticClientSnapshot(context.Background(), desired))
+	require.Equal(t, desired, xray.applied)
+}
+
+func TestMultiEngineRejectsAmbiguousStaticClientTargets(t *testing.T) {
+	t.Parallel()
+
+	first := &staticFakeEngine{fakeEngine: &fakeEngine{id: "xray-a"}}
+	second := &staticFakeEngine{fakeEngine: &fakeEngine{id: "xray-b"}}
+	multi := NewMultiEngine([]pluginapi.EngineProvider{first, second}, nil)
+
+	require.False(t, multi.SupportsStaticClientSync())
+	_, err := multi.StaticClientSnapshot(context.Background(), nil)
+	require.Error(t, err)
+	require.Error(t, multi.ApplyStaticClientSnapshot(context.Background(), nil))
 }
 
 func TestMultiEngineImplementsDomainEngineAndConvertsValues(t *testing.T) {

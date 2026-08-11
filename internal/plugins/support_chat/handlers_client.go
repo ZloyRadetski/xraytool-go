@@ -1,25 +1,73 @@
 package support_chat
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
+
+	"xraytool/internal/pluginapi"
 )
 
-// getUserID extracts the user identifier from context, headers, or query parameters.
+// getUserID accepts identity only from the authenticated reverse-proxy request.
+// Query parameters are deliberately excluded: allowing user_id in a URL turns
+// identity into attacker-controlled input that is commonly logged and shared.
 func getUserID(r *http.Request) string {
 	if uid, ok := r.Context().Value("user_id").(string); ok && uid != "" {
+		return strings.TrimSpace(uid)
+	}
+	if uid := strings.TrimSpace(r.Header.Get("X-User-ID")); uid != "" {
 		return uid
 	}
-	if uid := r.Header.Get("X-User-ID"); uid != "" {
-		return uid
-	}
-	if uid := r.Header.Get("X-Telegram-ID"); uid != "" {
-		return uid
-	}
-	if uid := r.URL.Query().Get("user_id"); uid != "" {
+	if uid := strings.TrimSpace(r.Header.Get("X-Telegram-ID")); uid != "" {
 		return uid
 	}
 	return ""
+}
+
+// requireAdmin determines the role on the server, not from a query parameter
+// or a header sent by a browser. The outer API-key middleware ensures headers
+// are accepted only from a trusted service such as the web application.
+func (p *Plugin) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, err := p.lookupRequestUser(r.Context(), getUserID(r))
+		if err != nil || user == nil || !user.IsAdmin {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (p *Plugin) requestIsAdmin(ctx context.Context, userID string) bool {
+	user, err := p.lookupRequestUser(ctx, userID)
+	return err == nil && user != nil && user.IsAdmin
+}
+
+func (p *Plugin) lookupRequestUser(ctx context.Context, userID string) (*pluginapi.User, error) {
+	if p.users == nil {
+		return nil, http.ErrNotSupported
+	}
+
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, http.ErrNoCookie
+	}
+
+	telegramID := strings.TrimPrefix(userID, "telegram:")
+	if id, err := strconv.ParseInt(telegramID, 10, 64); err == nil && id > 0 {
+		user, lookupErr := p.users.FindByTelegramID(ctx, id)
+		if lookupErr == nil || user != nil {
+			return user, lookupErr
+		}
+		// Older deployments stored Telegram clients under platform=telegram,
+		// while newer integrations use platform=bot. Support both during the
+		// transition without trusting a role supplied by the caller.
+		return p.users.FindByPlatformID(ctx, "bot", telegramID)
+	}
+
+	return p.users.FindByEmailOrUsername(ctx, strings.ToLower(userID))
 }
 
 // To access URL params from http.ServeMux in go 1.22+ we can use r.PathValue("id")
@@ -251,12 +299,12 @@ func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
 
 		// Notify via websocket (phase 6)
 		if bMsg, err := json.Marshal(map[string]any{
-			"type": "new_message",
+			"type":    "new_message",
 			"payload": msg,
 		}); err == nil {
 			p.hub.BroadcastToAdmins(bMsg)
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(msg)
 	}

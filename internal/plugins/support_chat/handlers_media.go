@@ -156,18 +156,13 @@ func (p *Plugin) handleDownloadAttachment() http.HandlerFunc {
 		}
 
 		// Access control:
-		// If linked to a message, verify conversation ownership
+		// If linked to a message, allow either its owner or an administrator
+		// resolved from the server-side user repository. Never treat a query
+		// parameter as an authorization decision.
 		if att.MessageID != nil && *att.MessageID != "" {
-			// Find conversation
-			// We need to fetch the message, then the conversation
-			// To keep it simple, just allow it if the user is an admin OR they are the owner of the conversation
-			isAdmin := r.URL.Query().Get("admin") == "true" // Basic admin check (in prod should use RBAC middleware)
-			if !isAdmin {
-				// We need a helper to check ownership
-				if !p.store.UserOwnsAttachment(r.Context(), userID, att) {
-					http.Error(w, "Forbidden", http.StatusForbidden)
-					return
-				}
+			if !p.requestIsAdmin(r.Context(), userID) && !p.store.UserOwnsAttachment(r.Context(), userID, att) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
 			}
 		} else {
 			// Unlinked attachment: only uploader can view

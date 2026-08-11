@@ -42,10 +42,23 @@ type Plugin struct {
 	cfg      pluginConfig
 	db       *gorm.DB
 	provider *Provider
-	users    pluginapi.UserRepository
-	store    *Store
-	wg       sync.WaitGroup
-	hub      *Hub
+	users    supportUserLookup
+	// authMiddleware is supplied by api_server. Every HTTP endpoint in this
+	// plugin is an internal API endpoint and must reject direct, unauthenticated
+	// requests before considering caller-supplied identity headers.
+	authMiddleware func(http.Handler) http.Handler
+	store          *Store
+	wg             sync.WaitGroup
+	hub            *Hub
+}
+
+// supportUserLookup deliberately contains only the identity lookups the
+// support boundary needs. Keeping it small makes the authorization rules easy
+// to test without coupling handlers to the complete repository contract.
+type supportUserLookup interface {
+	FindByEmailOrUsername(ctx context.Context, email string) (*pluginapi.User, error)
+	FindByTelegramID(ctx context.Context, telegramID int64) (*pluginapi.User, error)
+	FindByPlatformID(ctx context.Context, platform, id string) (*pluginapi.User, error)
 }
 
 // New creates an uninitialised plugin. Call via BuiltinRegistry factory.
@@ -66,7 +79,10 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Description: "Encrypted support chat between authenticated users and admins.",
 		Mandatory:   false,
 		Publishes:   []pluginapi.ServiceRef{{Name: "support_chat_provider"}},
-		Requires:    []pluginapi.ServiceRef{{Name: "user_repository", Optional: false}},
+		Requires: []pluginapi.ServiceRef{
+			{Name: "user_repository", Optional: false},
+			{Name: pluginapi.ServiceProtectedMiddleware},
+		},
 	}
 }
 
@@ -122,6 +138,16 @@ func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg plugi
 		return fmt.Errorf("support_chat: user_repository has wrong type")
 	}
 
+	authMw, err := reg.Resolve(pluginapi.ServiceProtectedMiddleware)
+	if err != nil {
+		return fmt.Errorf("support_chat: failed to resolve protected middleware: %w", err)
+	}
+	protected, ok := authMw.(func(http.Handler) http.Handler)
+	if !ok || protected == nil {
+		return fmt.Errorf("support_chat: protected middleware has wrong type")
+	}
+	p.authMiddleware = protected
+
 	p.hub = newHub(p.log)
 
 	p.log.Info("support_chat: initialised", "driver", cfg.Database.Driver)
@@ -152,7 +178,7 @@ func (p *Plugin) Stop(_ context.Context) error {
 }
 
 func (p *Plugin) Health(_ context.Context) error {
-	if p.db == nil {
+	if p.db == nil || p.users == nil || p.authMiddleware == nil {
 		return fmt.Errorf("support_chat: not initialised")
 	}
 	if p.cfg.MasterKey == "" {
@@ -177,24 +203,31 @@ func (p *Plugin) PublishedServices() map[string]any {
 // ── pluginapi.HTTPContributor ────────────────────────────────────────────────
 
 func (p *Plugin) RegisterRoutes(mux *http.ServeMux) {
+	protected := func(handler http.HandlerFunc) http.Handler {
+		return p.authMiddleware(handler)
+	}
+	adminOnly := func(handler http.HandlerFunc) http.Handler {
+		return p.authMiddleware(p.requireAdmin(handler))
+	}
+
 	// Client routes
-	mux.HandleFunc("POST /api/v1/support/conversations", p.handleClientCreateConversation())
-	mux.HandleFunc("GET /api/v1/support/conversations", p.handleClientListConversations())
-	mux.HandleFunc("GET /api/v1/support/conversations/{id}", p.handleClientGetConversation())
-	mux.HandleFunc("GET /api/v1/support/conversations/{id}/messages", p.handleClientListMessages())
-	mux.HandleFunc("POST /api/v1/support/conversations/{id}/messages", p.handleClientCreateMessage())
-	mux.HandleFunc("POST /api/v1/support/attachments", p.handleUploadAttachment())
-	mux.HandleFunc("GET /api/v1/support/attachments/{id}/download", p.handleDownloadAttachment())
+	mux.Handle("POST /api/v1/support/conversations", protected(p.handleClientCreateConversation()))
+	mux.Handle("GET /api/v1/support/conversations", protected(p.handleClientListConversations()))
+	mux.Handle("GET /api/v1/support/conversations/{id}", protected(p.handleClientGetConversation()))
+	mux.Handle("GET /api/v1/support/conversations/{id}/messages", protected(p.handleClientListMessages()))
+	mux.Handle("POST /api/v1/support/conversations/{id}/messages", protected(p.handleClientCreateMessage()))
+	mux.Handle("POST /api/v1/support/attachments", protected(p.handleUploadAttachment()))
+	mux.Handle("GET /api/v1/support/attachments/{id}/download", protected(p.handleDownloadAttachment()))
 
 	// Admin routes
-	mux.HandleFunc("GET /api/v1/admin/support/conversations", p.handleAdminListConversations())
-	mux.HandleFunc("GET /api/v1/admin/support/conversations/{id}/messages", p.handleAdminListMessages())
-	mux.HandleFunc("POST /api/v1/admin/support/conversations/{id}/messages", p.handleAdminCreateMessage())
-	mux.HandleFunc("PATCH /api/v1/admin/support/conversations/{id}/status", p.handleAdminPatchStatus())
+	mux.Handle("GET /api/v1/admin/support/conversations", adminOnly(p.handleAdminListConversations()))
+	mux.Handle("GET /api/v1/admin/support/conversations/{id}/messages", adminOnly(p.handleAdminListMessages()))
+	mux.Handle("POST /api/v1/admin/support/conversations/{id}/messages", adminOnly(p.handleAdminCreateMessage()))
+	mux.Handle("PATCH /api/v1/admin/support/conversations/{id}/status", adminOnly(p.handleAdminPatchStatus()))
 
 	// WebSocket routes
-	mux.HandleFunc("GET /api/v1/support/conversations/{id}/ws", p.serveWs("client"))
-	mux.HandleFunc("GET /api/v1/admin/support/ws", p.serveWs("admin"))
+	mux.Handle("GET /api/v1/support/conversations/{id}/ws", protected(p.serveWs("client")))
+	mux.Handle("GET /api/v1/admin/support/ws", adminOnly(p.serveWs("admin")))
 }
 
 // Compile-time interface checks.

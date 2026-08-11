@@ -233,6 +233,34 @@ func (p *Plugin) SyncUsers(ctx context.Context, dbUsers []pluginapi.VPNUserConfi
 	return &pluginapi.EngineSyncResult{Added: result.Added, Removed: result.Removed}, nil
 }
 
+// SupportsStaticClientSync exposes the optional template-client replication
+// capability through the plugin boundary. The kernel normally wraps engines in
+// MultiEngine, so the wrapper must be able to discover the Xray adapter.
+func (p *Plugin) SupportsStaticClientSync() bool {
+	_, ok := p.engine.(domain.StaticClientSynchronizer)
+	return ok
+}
+
+// StaticClientSnapshot preserves hardcoded template clients separately from
+// database-managed users for cluster replication.
+func (p *Plugin) StaticClientSnapshot(ctx context.Context, users []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
+	synchronizer, ok := p.engine.(domain.StaticClientSynchronizer)
+	if !ok {
+		return nil, fmt.Errorf("engine_xray: static client sync is unavailable")
+	}
+	return synchronizer.StaticClientSnapshot(ctx, users)
+}
+
+// ApplyStaticClientSnapshot applies replicated hardcoded template clients and
+// hot-rebuilds the affected Xray inbounds through the underlying adapter.
+func (p *Plugin) ApplyStaticClientSnapshot(ctx context.Context, clients []domain.StaticInboundClients) error {
+	synchronizer, ok := p.engine.(domain.StaticClientSynchronizer)
+	if !ok {
+		return fmt.Errorf("engine_xray: static client sync is unavailable")
+	}
+	return synchronizer.ApplyStaticClientSnapshot(ctx, clients)
+}
+
 // ── pluginapi.ClientConfigContributor ────────────────────────────────────────
 
 // ── Adapter accessor (Phase 1.5 → Phase 3 bridge) ────────────────────────────
@@ -331,3 +359,4 @@ var _ pluginapi.Plugin = (*Plugin)(nil)
 var _ pluginapi.EngineProvider = (*Plugin)(nil)
 var _ pluginapi.ClientConfigContributor = (*Plugin)(nil)
 var _ pluginapi.ServiceProvider = (*Plugin)(nil)
+var _ domain.StaticClientSynchronizer = (*Plugin)(nil)
