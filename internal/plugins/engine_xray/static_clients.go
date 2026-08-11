@@ -530,7 +530,7 @@ func mergeStaticClients(current, previous, desired []RawClient, removeFirstMatch
 		}
 	}
 
-	kept := make([]RawClient, 0, len(current)+len(desired))
+	kept := make([]RawClient, 0, len(current))
 	keptKeys := make(map[string]bool, len(current)+len(desired))
 	keptEmails := make(map[string]bool, len(current))
 	for _, client := range current {
@@ -551,9 +551,16 @@ func mergeStaticClients(current, previous, desired []RawClient, removeFirstMatch
 		}
 	}
 
+	// Keep the template order stable: RegenerateConfig writes static clients
+	// first and database users after them. Returning the same ordering here
+	// makes replaying an unchanged artifact a no-op instead of rebuilding every
+	// inbound solely because the two groups were swapped.
+	merged := make([]RawClient, 0, len(kept)+len(desired))
+	mergedKeys := make(map[string]bool, len(kept)+len(desired))
+	mergedEmails := make(map[string]bool, len(kept)+len(desired))
 	for _, client := range desired {
 		key := rawClientKey(client)
-		if keptKeys[key] {
+		if keptKeys[key] || mergedKeys[key] {
 			continue
 		}
 		// A database user already present in the active config wins over a
@@ -562,13 +569,27 @@ func mergeStaticClients(current, previous, desired []RawClient, removeFirstMatch
 		if email := client.Email(); email != "" && keptEmails[email] {
 			continue
 		}
-		kept = append(kept, client)
-		keptKeys[key] = true
+		merged = append(merged, client)
+		mergedKeys[key] = true
 		if email := client.Email(); email != "" {
-			keptEmails[email] = true
+			mergedEmails[email] = true
 		}
 	}
-	return kept
+	for _, client := range kept {
+		key := rawClientKey(client)
+		if mergedKeys[key] {
+			continue
+		}
+		if email := client.Email(); email != "" && mergedEmails[email] {
+			continue
+		}
+		merged = append(merged, client)
+		mergedKeys[key] = true
+		if email := client.Email(); email != "" {
+			mergedEmails[email] = true
+		}
+	}
+	return merged
 }
 
 func rawClientListsEqual(left, right []RawClient) bool {

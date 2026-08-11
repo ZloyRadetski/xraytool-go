@@ -135,6 +135,18 @@ func TestStaticClientSnapshotAndApplyPreservesDynamicClients(t *testing.T) {
 	if clientByEmail(trojanActive, "ops-access").GetString("password") != "static-password" {
 		t.Fatalf("static Trojan client was not updated: %+v", trojanActive)
 	}
+
+	// A reconnect can replay the artifact. It must be a no-op when the
+	// template-generated active config already contains the same static users;
+	// otherwise every replay would remove and rebuild all local inbounds.
+	replayedChanges := 0
+	slave.OnConfigModified = func() { replayedChanges++ }
+	if err := slave.ApplyStaticClientSnapshot(ctx, snapshot); err != nil {
+		t.Fatalf("replay static client snapshot: %v", err)
+	}
+	if replayedChanges != 0 {
+		t.Fatalf("unchanged static snapshot modified config %d time(s)", replayedChanges)
+	}
 }
 
 func TestStaticClientSnapshotProtectsDirectConfigClients(t *testing.T) {
