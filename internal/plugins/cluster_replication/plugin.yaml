@@ -10,3 +10,5 @@ publishes:
 requires:
   - domain_registry
   - domain_engine
+  - name: traffic_snapshot_provider
+    optional: true

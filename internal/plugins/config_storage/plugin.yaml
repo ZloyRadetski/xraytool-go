@@ -4,6 +4,7 @@ version: 1.0.0
 api_version: "1"
 description: Authorized storage for configuration assets.
 type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
 requires:
   - protected_middleware
   - event_dispatcher

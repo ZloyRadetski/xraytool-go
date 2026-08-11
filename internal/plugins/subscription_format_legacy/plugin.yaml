@@ -4,5 +4,6 @@ version: 1.0.0
 api_version: "1"
 description: Legacy VLESS text and Clash YAML subscription renderer.
 type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
 publishes:
   - subscription_format_provider

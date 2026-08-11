@@ -85,6 +85,8 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		Publishes: []pluginapi.ServiceRef{
 			{Name: "engine.softban"},
 			{Name: "engine.logger_control"},
+			{Name: pluginapi.ServiceClientConfigContributor},
+			{Name: pluginapi.ServiceSubscriptionConfigProvider},
 		},
 	}
 }
@@ -152,8 +154,10 @@ func (p *Plugin) PublishedServices() map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"engine.softban":        p,
-		"engine.logger_control": p,
+		"engine.softban":                            p,
+		"engine.logger_control":                     p,
+		pluginapi.ServiceClientConfigContributor:    pluginapi.ClientConfigContributor(p),
+		pluginapi.ServiceSubscriptionConfigProvider: pluginapi.SubscriptionConfigProvider(p),
 	}
 }
 

@@ -15,19 +15,18 @@ import (
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/cluster_replication/protocol"
 	vpn "xraytool/internal/plugins/engine_xray"
-	clusterstats "xraytool/internal/stats"
 )
 
 const ServiceClusterReplicationProvider = pluginapi.ServiceClusterReplicationProvider
 
 type Runtime struct {
-	Registry  domain.Registry
-	Engine    domain.Engine
-	AppConfig *appconfig.Config
+	Registry domain.Registry
+	Engine   domain.Engine
 	// Service is supplied by the composition root on a master before core is
 	// loaded, so the engine publisher and the transport use one outbox.
-	Service *Service
-	Logger  *slog.Logger
+	Service   *Service
+	Logger    *slog.Logger
+	FraudSink func(context.Context, string, []pluginapi.FraudEvent) error
 }
 
 type Status struct {
@@ -40,15 +39,16 @@ type Status struct {
 type Plugin struct {
 	runtime Runtime
 
-	mu        sync.RWMutex
-	config    Config
-	service   *Service
-	log       *slog.Logger
-	stopGRPC  func() error
-	running   bool
-	cliConfig *appconfig.Config
-	fraudSink func(context.Context, string, []pluginapi.FraudEvent) error
-	session   *slaveSession
+	mu              sync.RWMutex
+	config          Config
+	service         *Service
+	log             *slog.Logger
+	stopGRPC        func() error
+	running         bool
+	cliConfig       *appconfig.Config
+	fraudSink       func(context.Context, string, []pluginapi.FraudEvent) error
+	trafficSnapshot pluginapi.TrafficSnapshotProvider
+	session         *slaveSession
 }
 
 func New() *Plugin { return &Plugin{} }
@@ -71,6 +71,7 @@ func (*Plugin) Metadata() pluginapi.Metadata {
 		Requires: []pluginapi.ServiceRef{
 			{Name: "domain_registry"},
 			{Name: "domain_engine"},
+			{Name: pluginapi.ServiceTrafficSnapshotProvider, Optional: true},
 		},
 		Publishes: []pluginapi.ServiceRef{{Name: ServiceClusterReplicationProvider}},
 	}
@@ -110,6 +111,11 @@ func (p *Plugin) Init(_ context.Context, raw pluginapi.RawConfig, resolver plugi
 				return fmt.Errorf("domain_engine has unexpected type %T", value)
 			}
 		}
+		if value, resolveErr := resolver.Resolve(pluginapi.ServiceTrafficSnapshotProvider); resolveErr == nil {
+			if provider, ok := value.(pluginapi.TrafficSnapshotProvider); ok {
+				p.trafficSnapshot = provider
+			}
+		}
 	}
 	if registry == nil || engine == nil {
 		return fmt.Errorf("runtime Registry and Engine are required")
@@ -132,6 +138,9 @@ func (p *Plugin) Init(_ context.Context, raw pluginapi.RawConfig, resolver plugi
 	p.config = config
 	p.log = log.With("plugin", "cluster_replication", "node", config.NodeID)
 	p.service = service
+	if p.runtime.FraudSink != nil {
+		p.fraudSink = p.runtime.FraudSink
+	}
 	p.mu.Unlock()
 	return nil
 }
@@ -239,19 +248,18 @@ func (p *Plugin) setSlaveSession(session *slaveSession) {
 
 func (p *Plugin) reportSlaveStats(ctx context.Context) error {
 	p.mu.RLock()
-	config := p.runtime.AppConfig
-	engine := p.service.engine
+	provider := p.trafficSnapshot
 	p.mu.RUnlock()
-	if config == nil || engine == nil {
-		return nil
+	if provider == nil {
+		return fmt.Errorf("traffic snapshot provider is unavailable")
 	}
-	report := clusterstats.GenerateLocalStats(config, engine)
-	if !report.Ok {
-		return fmt.Errorf("generate local statistics: %s", report.Error)
+	snapshot, err := provider.LocalTrafficSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("generate local traffic snapshot: %w", err)
 	}
-	points := make([]statsPoint, 0, len(report.Users))
-	for _, user := range report.Users {
-		points = append(points, statsPoint{Email: user.Email, Total: user.Total.Combined})
+	points := make([]statsPoint, 0, len(snapshot))
+	for _, user := range snapshot {
+		points = append(points, statsPoint{Email: user.Email, Total: user.Usage.UploadBytes + user.Usage.DownloadBytes})
 	}
 	return p.ReportStatistics(ctx, points)
 }

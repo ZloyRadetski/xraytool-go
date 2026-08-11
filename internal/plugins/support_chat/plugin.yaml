@@ -4,6 +4,7 @@ version: 1.0.0
 api_version: "1"
 description: "Encrypted support chat between authenticated users and admins."
 type: internal
+config_schema: ../../pluginmanifest/schemas/support_chat.schema.json
 mandatory: false
 publishes:
   - name: support_chat_provider

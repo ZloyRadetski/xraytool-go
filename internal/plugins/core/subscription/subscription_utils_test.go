@@ -1,12 +1,10 @@
 package subscription
 
 import (
-	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	vpn "xraytool/internal/plugins/engine_xray"
 )
 
 func TestParseDateToTimestamp(t *testing.T) {
@@ -185,49 +183,5 @@ func TestGenerateHeader(t *testing.T) {
 	}
 	if !strings.Contains(out, "#is-user-blocked: 0") {
 		t.Errorf("Expected blocked tag added automatically")
-	}
-}
-
-func TestRealityUtils(t *testing.T) {
-	cfgJSON := `{
-		"inbounds": [
-			{
-				"protocol": "vless",
-				"streamSettings": {
-					"realitySettings": {
-						"privateKey": "private_key_123",
-						"publicKey": "public_key_456",
-						"shortIds": ["abc1", "abc2"],
-						"serverNames": ["example.com", "test.com"]
-					}
-				}
-			}
-		]
-	}`
-	var cfg vpn.RawConfig
-	err := json.Unmarshal([]byte(cfgJSON), &cfg)
-	if err != nil {
-		t.Fatalf("Failed to parse config: %v", err)
-	}
-
-	if pk := firstRealityPrivateKey(cfg); pk != "private_key_123" {
-		t.Errorf("Unexpected private key: %s", pk)
-	}
-	if pub := firstRealityPublicKey(cfg); pub != "public_key_456" {
-		t.Errorf("Unexpected public key: %s", pub)
-	}
-	sni := firstRealitySNI(cfg)
-	if sni != "example.com" && sni != "test.com" {
-		t.Errorf("Unexpected SNI: %s", sni)
-	}
-	sid := randomRealityShortID(cfg)
-	if sid != "abc1" && sid != "abc2" {
-		t.Errorf("Unexpected ShortID: %s", sid)
-	}
-
-	var emptyCfg vpn.RawConfig
-	json.Unmarshal([]byte("{}"), &emptyCfg) //nolint:errcheck
-	if pk := firstRealityPrivateKey(emptyCfg); pk != "" {
-		t.Errorf("Expected empty private key, got %s", pk)
 	}
 }

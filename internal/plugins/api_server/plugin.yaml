@@ -4,6 +4,7 @@ version: 1.0.0
 api_version: "1"
 description: "HTTP API routes, authentication middleware, and plugin route composition."
 type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
 publishes:
   - auth_middleware
   - protected_middleware
@@ -15,3 +16,5 @@ requires:
   - user_service
   - subscription_cache
   - event_dispatcher
+  - name: identity_provider
+    optional: true

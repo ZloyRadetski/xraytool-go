@@ -16,6 +16,15 @@ type contributorEngine struct {
 	received pluginapi.VPNUserConfig
 }
 
+type snapshotEngine struct {
+	vpn.NoopEngine
+	snapshot pluginapi.SubscriptionConfigSnapshot
+}
+
+func (e *snapshotEngine) SubscriptionConfigSnapshot(context.Context) (pluginapi.SubscriptionConfigSnapshot, error) {
+	return e.snapshot, nil
+}
+
 func (e *contributorEngine) BuildClientLinks(_ context.Context, user pluginapi.VPNUserConfig) ([]pluginapi.ClientLink, error) {
 	e.received = user
 	return []pluginapi.ClientLink{
@@ -45,4 +54,29 @@ func TestCacheManager_ClientConfigContributorIsOptional(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, available)
 	require.Nil(t, links)
+}
+
+func TestCacheManager_UsesEngineSubscriptionConfigSnapshot(t *testing.T) {
+	engine := &snapshotEngine{snapshot: pluginapi.SubscriptionConfigSnapshot{
+		Revision: 1,
+		ActiveClients: []pluginapi.SubscriptionClient{{
+			Email: "alice@example.test", ID: "uuid", Subfile: "Alice.txt", Password: "ss-secret", Auth: "hy2-secret", MaxDevices: 5,
+		}},
+	}}
+	cache := NewCacheManager(&appconfig.Config{}, engine)
+	cache.Refresh()
+
+	user := cache.GetUserBySubfile("alice")
+	require.NotNil(t, user)
+	require.Equal(t, "alice@example.test", user.Email)
+	require.Equal(t, "ss-secret", user.Password)
+	require.Equal(t, "hy2-secret", user.Hy2Auth)
+	require.Equal(t, 5, user.Limit)
+
+	snapshot, ok := cache.SubscriptionConfigSnapshot()
+	require.True(t, ok)
+	snapshot.ActiveClients[0].Email = "changed@example.test"
+	stored, ok := cache.SubscriptionConfigSnapshot()
+	require.True(t, ok)
+	require.Equal(t, "alice@example.test", stored.ActiveClients[0].Email)
 }

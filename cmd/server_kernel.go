@@ -27,7 +27,6 @@ import (
 	apiServerPlugin "xraytool/internal/plugins/api_server"
 	corePlugin "xraytool/internal/plugins/core"
 	vpn "xraytool/internal/plugins/engine_xray"
-	subscriptionRuntimePlugin "xraytool/internal/plugins/subscription_runtime"
 )
 
 func startServerKernelCmd(deps *AppDeps) *cobra.Command {
@@ -132,25 +131,6 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	}
 
 	// ── Step 4: Resolve the fully initialised core plugin ─────────────────────
-	subscriptionRuntime, err := getPlugin[*subscriptionRuntimePlugin.Plugin](host, "subscription_runtime")
-	if err != nil {
-		return err
-	}
-	trafficSvc, trafficErr := host.ResolveService(pluginapi.ServiceTrafficProvider)
-	quotaSvc, quotaErr := host.ResolveService(pluginapi.ServiceTrafficQuotaProvider)
-	trafficProvider, trafficOK := trafficSvc.(pluginapi.TrafficProvider)
-	quotaProvider, quotaOK := quotaSvc.(pluginapi.TrafficQuotaProvider)
-	if (trafficErr == nil && trafficOK) || (quotaErr == nil && quotaOK) {
-		subscriptionRuntime.CacheManager().SetTrafficProviders(trafficProvider, quotaProvider)
-		slog.Info("[KERNEL] Traffic providers wired", "usage", trafficOK, "quota", quotaOK)
-	}
-	if formatSvc, err := host.ResolveService(pluginapi.ServiceSubscriptionFormatProvider); err == nil {
-		if provider, ok := formatSvc.(pluginapi.SubscriptionFormatProvider); ok {
-			subscriptionRuntime.CacheManager().SetSubscriptionFormatProvider(provider)
-			slog.Info("[KERNEL] Subscription format provider wired", "plugin", "subscription_format_legacy")
-		}
-	}
-
 	// ── Step 5: Log eventsink_webhook status (best-effort) ───────────────────
 	slog.Info("[KERNEL] Plugin Host loaded", "event_sinks", len(host.EventSinks()), "payment_providers", len(host.PaymentProviders()))
 
@@ -160,12 +140,6 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		return err
 	}
 	apiRouter := apiServer.Router()
-	if identitySvc, err := host.ResolveService(pluginapi.ServiceIdentityProvider); err == nil {
-		if identityProvider, ok := identitySvc.(pluginapi.IdentityProvider); ok {
-			apiRouter = apiRouter.WithIdentityProvider(identityProvider)
-			slog.Info("[KERNEL] Identity provider wired")
-		}
-	}
 
 	paymentProviders := host.PaymentProviders()
 	if len(paymentProviders) > 0 {

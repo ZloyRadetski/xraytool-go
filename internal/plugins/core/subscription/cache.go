@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"context"
 	"os"
 	"strings"
 	"sync"
@@ -10,195 +11,158 @@ import (
 	"xraytool/internal/domain"
 	"xraytool/internal/logger"
 	"xraytool/internal/pluginapi"
-	"xraytool/internal/xrayconfig"
 )
 
-// CacheManager handles in-memory caching of frequently read files
-// (config.json, templates, limited_users.db) to eliminate disk I/O
-// and parsing overhead during subscription delivery.
+// CacheManager holds subscription templates and the engine-neutral
+// configuration projection used to serve subscriptions. Native engine files
+// are intentionally never read from this package.
 type CacheManager struct {
 	mu        sync.RWMutex
 	refreshMu sync.Mutex
 
-	cfg    *appconfig.Config
-	engine domain.Engine
-	// clientConfigContributor is intentionally stored behind the
-	// engine-agnostic pluginapi boundary (see client_config.go). Keeping it
-	// separate from domain.Engine lets the legacy single-engine path retain its
-	// exact behaviour while MultiEngine can opt in to plugin-produced links.
+	cfg *appconfig.Config
+
 	clientConfigContributor any
+	configProvider          pluginapi.SubscriptionConfigProvider
 	trafficProvider         pluginapi.TrafficProvider
 	trafficQuotaProvider    pluginapi.TrafficQuotaProvider
 	formatProvider          pluginapi.SubscriptionFormatProvider
 	templateProcessor       pluginapi.SubscriptionTemplateProcessor
 
-	// Cached Data
-	xrayConfig  xrayconfig.RawConfig
-	activeUsers map[string]*ActiveUser
-	subTemplate string
-	routeGlobal string
-	routeRU     string
-	realityKeys *xrayconfig.RealityKeys
+	subscriptionConfig      pluginapi.SubscriptionConfigSnapshot
+	subscriptionConfigReady bool
+	activeUsers             map[string]*ActiveUser
+	subTemplate             string
+	routeGlobal             string
+	routeRU                 string
 
-	// ModTimes to detect file changes on disk
-	xrayConfigModTime  time.Time
-	limitedDBModTime   time.Time //nolint:unused
 	subTemplateModTime time.Time
 	routeGlobalModTime time.Time
 	routeRUModTime     time.Time
-	realityKeysModTime time.Time
 
-	// done is closed by Stop() to signal the flush worker to exit.
 	done chan struct{}
 }
 
-// NewCacheManager initializes a new cache manager.
+// NewCacheManager initializes a cache. The engine is used only for optional
+// engine-neutral capabilities; it is never type-asserted to an Xray adapter.
 func NewCacheManager(cfg *appconfig.Config, engine domain.Engine) *CacheManager {
 	cm := &CacheManager{
 		cfg:         cfg,
-		engine:      engine,
 		activeUsers: make(map[string]*ActiveUser),
 		done:        make(chan struct{}),
 	}
 	cm.setEngineClientConfigContributor(engine)
+	cm.setEngineSubscriptionConfigProvider(engine)
 	return cm
 }
 
-// Refresh checks all cached files and reloads them if their Modification Time changed.
-// This implements a Stale-While-Revalidate pattern using TryLock to avoid blocking
-// the hot path when the cache is already populated.
+// Refresh uses stale-while-revalidate semantics. The first successful load is
+// synchronous; subsequent calls leave a previous complete snapshot available
+// while another goroutine refreshes it.
 func (c *CacheManager) Refresh() {
 	c.mu.RLock()
-	empty := c.xrayConfig == nil || c.subTemplate == ""
+	empty := !c.subscriptionConfigReady || c.subTemplate == ""
 	c.mu.RUnlock()
 
 	if empty {
-		// First load must be synchronous
 		c.refreshMu.Lock()
 		defer c.refreshMu.Unlock()
 		c.refreshAll()
-	} else {
-		// Subsequent loads can be asynchronous/non-blocking
-		if !c.refreshMu.TryLock() {
-			return // Use stale cache while another goroutine refreshes
-		}
-		defer c.refreshMu.Unlock()
-		c.refreshAll()
+		return
 	}
+	if !c.refreshMu.TryLock() {
+		return
+	}
+	defer c.refreshMu.Unlock()
+	c.refreshAll()
 }
 
 func (c *CacheManager) refreshAll() {
-	c.refreshXrayConfig()
+	c.refreshSubscriptionConfig()
 	c.refreshTemplates()
-	c.refreshRealityKeys()
 }
 
-func (c *CacheManager) refreshXrayConfig() {
-	path := firstReadablePath(
-		c.cfg.Paths.XrayConfig,
-		"/usr/local/etc/xray/config.json",
-		"/usr/local/etc/xray/config/config.json",
-	)
-	if path == "" {
+func (c *CacheManager) refreshSubscriptionConfig() {
+	provider := c.SubscriptionConfigProvider()
+	if provider == nil {
 		return
 	}
-	info, err := os.Stat(path)
+	snapshot, err := provider.SubscriptionConfigSnapshot(context.Background())
 	if err != nil {
+		logger.Warnf("[Cache] Engine subscription configuration is unavailable: %v", err)
 		return
 	}
+
 	c.mu.RLock()
-	modTime := c.xrayConfigModTime
+	unchanged := c.subscriptionConfigReady && snapshot.Revision != 0 && snapshot.Revision == c.subscriptionConfig.Revision
 	c.mu.RUnlock()
-
-	if info.ModTime().Equal(modTime) {
-		return // No changes
-	}
-
-	logger.Infof("[Cache] Обнаружено изменение %s. Обновление индекса пользователей...", path)
-	cfg, err := xrayconfig.Read(path)
-	if err != nil {
-		logger.Errorf("[Cache] Ошибка чтения Xray config: %v", err)
+	if unchanged {
 		return
 	}
 
-	// Rebuild active users index O(N) -> O(1)
-	newActiveUsers := make(map[string]*ActiveUser)
-	defaultExpire := defaultExpireDate()
+	users := activeUsersFromSubscriptionClients(snapshot.ActiveClients, defaultExpireDate())
+	c.mu.Lock()
+	c.subscriptionConfig = cloneSubscriptionConfigSnapshot(snapshot)
+	c.subscriptionConfigReady = true
+	c.activeUsers = users
+	c.mu.Unlock()
+}
 
-	inbounds, err := cfg.GetInbounds()
-	if err == nil {
-		for _, ib := range inbounds {
-			clients, err := ib.GetClients()
-			if err != nil {
-				continue
-			}
-			for _, client := range clients {
-				sub := client.GetString("subfile")
-				if sub == "" {
-					continue
-				}
-				targetNorm := normalizeSubfileToID(sub)
-				email := client.Email()
-				if email == "" {
-					continue
-				}
-
-				limitVal := 3
-				if lv, ok := client.GetNumber("limit"); ok && lv > 0 {
-					limitVal = int(lv)
-				}
-
-				hy2Auth := client.GetString("auth")
-
-				row := &ActiveUser{
-					Email:    email,
-					ID:       client.GetString("id"),
-					Subfile:  sub,
-					Password: client.GetString("password"),
-					Expire:   client.GetString("expire"),
-					Hy2Auth:  hy2Auth,
-					Hy2Obfs:  client.GetString("hy2_obfs"),
-					Limit:    limitVal,
-				}
-				if row.Expire == "" {
-					row.Expire = defaultExpire
-				}
-
-				// Handle merging multiple inbounds per user (e.g. VLESS + Hysteria2)
-				if best, exists := newActiveUsers[targetNorm]; exists {
-					if best.Hy2Auth == "" && row.Hy2Auth != "" {
-						best.Hy2Auth = row.Hy2Auth
-					}
-					if best.Password == "" && row.Password != "" {
-						best.Password = row.Password
-					}
-					if best.ID == "" && row.ID != "" {
-						best.ID = row.ID
-					}
-					if best.Hy2Obfs == "" && row.Hy2Obfs != "" {
-						best.Hy2Obfs = row.Hy2Obfs
-					}
-					if best.Expire == "" && row.Expire != "" {
-						best.Expire = row.Expire
-					}
-				} else {
-					newActiveUsers[targetNorm] = row
-				}
-			}
+func activeUsersFromSubscriptionClients(clients []pluginapi.SubscriptionClient, defaultExpire string) map[string]*ActiveUser {
+	users := make(map[string]*ActiveUser)
+	for _, client := range clients {
+		target := normalizeSubfileToID(client.Subfile)
+		if target == "" || client.Email == "" {
+			continue
+		}
+		limit := client.MaxDevices
+		if limit <= 0 {
+			limit = 3
+		}
+		row := &ActiveUser{
+			Email: client.Email, ID: client.ID, Subfile: client.Subfile,
+			Password: client.Password, Expire: client.Expire, Hy2Auth: client.Auth,
+			Hy2Obfs: client.Obfs, Limit: limit,
+		}
+		if row.Expire == "" {
+			row.Expire = defaultExpire
+		}
+		if best, exists := users[target]; exists {
+			mergeActiveUser(best, row)
+		} else {
+			users[target] = row
 		}
 	}
+	return users
+}
 
-	c.mu.Lock()
-	c.xrayConfig = cfg
-	c.activeUsers = newActiveUsers
-	c.xrayConfigModTime = info.ModTime()
-	c.mu.Unlock()
+func mergeActiveUser(best, row *ActiveUser) {
+	if best.Hy2Auth == "" && row.Hy2Auth != "" {
+		best.Hy2Auth = row.Hy2Auth
+	}
+	if best.Password == "" && row.Password != "" {
+		best.Password = row.Password
+	}
+	if best.ID == "" && row.ID != "" {
+		best.ID = row.ID
+	}
+	if best.Hy2Obfs == "" && row.Hy2Obfs != "" {
+		best.Hy2Obfs = row.Hy2Obfs
+	}
+	if best.Expire == "" && row.Expire != "" {
+		best.Expire = row.Expire
+	}
+}
 
-	logger.Infof("[Cache] Индекс Xray обновлен. Загружено %d пользователей.", len(newActiveUsers))
+func cloneSubscriptionConfigSnapshot(snapshot pluginapi.SubscriptionConfigSnapshot) pluginapi.SubscriptionConfigSnapshot {
+	copySnapshot := snapshot
+	copySnapshot.ActiveClients = append([]pluginapi.SubscriptionClient(nil), snapshot.ActiveClients...)
+	copySnapshot.TemplateClients = append([]pluginapi.SubscriptionClient(nil), snapshot.TemplateClients...)
+	copySnapshot.RealityShortIDs = append([]string(nil), snapshot.RealityShortIDs...)
+	return copySnapshot
 }
 
 func (c *CacheManager) refreshTemplates() {
-	// Sub Template
 	subTmplPath := firstReadablePath(
 		c.cfg.Paths.JSONSubscriptionTemplate,
 		strings.ReplaceAll(c.cfg.Paths.JSONSubscriptionTemplate, "/helpful_bots/Dev/", "/helpful_bots/dev/"),
@@ -210,18 +174,16 @@ func (c *CacheManager) refreshTemplates() {
 	c.mu.RLock()
 	tmplModTime := c.subTemplateModTime
 	c.mu.RUnlock()
-
 	if info, err := os.Stat(subTmplPath); err == nil && !info.ModTime().Equal(tmplModTime) {
-		if data, err := os.ReadFile(subTmplPath); err == nil {
+		if data, readErr := os.ReadFile(subTmplPath); readErr == nil {
 			c.mu.Lock()
 			c.subTemplate = string(data)
 			c.subTemplateModTime = info.ModTime()
 			c.mu.Unlock()
-			logger.Infof("[Cache] Шаблон подписок обновлен.")
+			logger.Infof("[Cache] Subscription template refreshed.")
 		}
 	}
 
-	// Routing Global
 	routingPath := firstReadablePath(
 		c.cfg.Paths.RoutingTemplate,
 		strings.ReplaceAll(c.cfg.Paths.RoutingTemplate, "/helpful_bots/Dev/", "/helpful_bots/dev/"),
@@ -231,20 +193,17 @@ func (c *CacheManager) refreshTemplates() {
 		"./routing.json",
 	)
 	c.mu.RLock()
-	rgModTime := c.routeGlobalModTime
+	routeModTime := c.routeGlobalModTime
 	c.mu.RUnlock()
-
-	if info, err := os.Stat(routingPath); err == nil && !info.ModTime().Equal(rgModTime) {
-		if data, err := os.ReadFile(routingPath); err == nil {
+	if info, err := os.Stat(routingPath); err == nil && !info.ModTime().Equal(routeModTime) {
+		if data, readErr := os.ReadFile(routingPath); readErr == nil {
 			c.mu.Lock()
 			c.routeGlobal = strings.TrimSpace(string(data))
 			c.routeGlobalModTime = info.ModTime()
 			c.mu.Unlock()
-			logger.Infof("[Cache] Глобальный роутинг обновлен.")
 		}
 	}
 
-	// Routing RU
 	routingRUPath := firstReadablePath(
 		c.cfg.Paths.RoutingRUTemplate,
 		strings.ReplaceAll(c.cfg.Paths.RoutingRUTemplate, "/helpful_bots/Dev/", "/helpful_bots/dev/"),
@@ -254,16 +213,14 @@ func (c *CacheManager) refreshTemplates() {
 		"./routing_ALL_RU.json",
 	)
 	c.mu.RLock()
-	ruModTime := c.routeRUModTime
+	routeRUModTime := c.routeRUModTime
 	c.mu.RUnlock()
-
-	if info, err := os.Stat(routingRUPath); err == nil && !info.ModTime().Equal(ruModTime) {
-		if data, err := os.ReadFile(routingRUPath); err == nil {
+	if info, err := os.Stat(routingRUPath); err == nil && !info.ModTime().Equal(routeRUModTime) {
+		if data, readErr := os.ReadFile(routingRUPath); readErr == nil {
 			c.mu.Lock()
 			c.routeRU = strings.TrimSpace(string(data))
 			c.routeRUModTime = info.ModTime()
 			c.mu.Unlock()
-			logger.Infof("[Cache] RU роутинг обновлен.")
 		}
 	}
 }
@@ -272,120 +229,62 @@ func (c *CacheManager) refreshTemplates() {
 func (c *CacheManager) GetUserBySubfile(filename string) *ActiveUser {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	targetNorm := normalizeSubfileToID(filename)
-	if targetNorm == "" {
+	target := normalizeSubfileToID(filename)
+	user := c.activeUsers[target]
+	if user == nil {
 		return nil
 	}
-	u, exists := c.activeUsers[targetNorm]
-	if !exists {
-		return nil
-	}
-	// Return a copy to prevent concurrent mutation
-	copyUser := *u
+	copyUser := *user
 	return &copyUser
 }
 
-// GetTemplates returns the cached templates.
 func (c *CacheManager) GetTemplates() (sub string, routeGlobal string, routeRU string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if c.routeGlobal == "" {
+	routeGlobal = c.routeGlobal
+	if routeGlobal == "" {
 		routeGlobal = `{"rules":[]}`
-	} else {
-		routeGlobal = c.routeGlobal
 	}
-
-	if c.routeRU == "" {
+	routeRU = c.routeRU
+	if routeRU == "" {
 		routeRU = `{"rules":[]}`
-	} else {
-		routeRU = c.routeRU
 	}
-
 	return c.subTemplate, routeGlobal, routeRU
 }
 
-// GetRawConfig returns a copy of the xray config if needed for reading reality keys etc.
-func (c *CacheManager) GetRawConfig() xrayconfig.RawConfig {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.xrayConfig
-}
-
-// SetTrafficProviders injects optional accounting and quota implementations.
-// They are wired by the composition root after all plugins have loaded, so the
-// legacy file-based fallback remains available to the non-plugin server path.
 func (c *CacheManager) SetTrafficProviders(traffic pluginapi.TrafficProvider, quota pluginapi.TrafficQuotaProvider) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.trafficProvider = traffic
 	c.trafficQuotaProvider = quota
+	c.mu.Unlock()
 }
 
-// TrafficProviders returns the currently configured optional providers.
 func (c *CacheManager) TrafficProviders() (pluginapi.TrafficProvider, pluginapi.TrafficQuotaProvider) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.trafficProvider, c.trafficQuotaProvider
 }
 
-// SetSubscriptionFormatProvider installs the optional renderer for
-// client-specific subscription formats. A nil provider preserves the legacy
-// in-core conversion path for callers that do not run Plugin Host.
 func (c *CacheManager) SetSubscriptionFormatProvider(provider pluginapi.SubscriptionFormatProvider) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.formatProvider = provider
+	c.mu.Unlock()
 }
 
-// SubscriptionFormatProvider returns the currently configured renderer.
 func (c *CacheManager) SubscriptionFormatProvider() pluginapi.SubscriptionFormatProvider {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.formatProvider
 }
 
-// SetSubscriptionTemplateProcessor installs the optional plugin which owns
-// high-level subscription source formats. The cache itself remains agnostic to
-// every concrete format and simply exposes the processor to delivery code.
 func (c *CacheManager) SetSubscriptionTemplateProcessor(processor pluginapi.SubscriptionTemplateProcessor) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.templateProcessor = processor
+	c.mu.Unlock()
 }
 
-// SubscriptionTemplateProcessor returns the currently configured source
-// template processor, if any.
 func (c *CacheManager) SubscriptionTemplateProcessor() pluginapi.SubscriptionTemplateProcessor {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.templateProcessor
-}
-
-func (c *CacheManager) refreshRealityKeys() {
-	if !c.cfg.Reality.RotationEnabled || c.cfg.Reality.KeysFilepath == "" {
-		return
-	}
-	c.mu.RLock()
-	keysModTime := c.realityKeysModTime
-	c.mu.RUnlock()
-
-	if info, err := os.Stat(c.cfg.Reality.KeysFilepath); err == nil && !info.ModTime().Equal(keysModTime) {
-		keys, err := xrayconfig.LoadOrCreateRealityKeys(c.cfg.Reality.KeysFilepath)
-		if err == nil {
-			c.mu.Lock()
-			c.realityKeys = keys
-			c.realityKeysModTime = info.ModTime()
-			c.mu.Unlock()
-			logger.Infof("[Cache] Файл Reality ключей обновлен.")
-		}
-	}
-}
-
-// GetRealityKeys returns the cached Reality keys, if loaded.
-func (c *CacheManager) GetRealityKeys() *xrayconfig.RealityKeys {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.realityKeys
 }

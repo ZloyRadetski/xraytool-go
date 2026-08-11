@@ -47,6 +47,7 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 			{Name: core.ServiceUserService},
 			{Name: core.ServiceSubscriptionCache},
 			{Name: core.ServiceEventDispatcher},
+			{Name: pluginapi.ServiceIdentityProvider, Optional: true},
 		},
 	}
 }
@@ -115,6 +116,11 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 		registry,
 		server.Options{},
 	)
+	if value, resolveErr := reg.Resolve(pluginapi.ServiceIdentityProvider); resolveErr == nil {
+		if provider, providerOK := value.(pluginapi.IdentityProvider); providerOK && provider != nil {
+			p.router.WithIdentityProvider(provider)
+		}
+	}
 	coreProvider.SetAuthMiddleware(p.AuthMiddleware)
 	return nil
 }

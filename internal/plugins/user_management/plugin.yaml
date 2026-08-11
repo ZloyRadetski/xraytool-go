@@ -4,6 +4,7 @@ version: 1.0.0
 api_version: "1"
 description: "User lifecycle service backed by the core domain registry."
 type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
 publishes:
   - user_service
 requires:

@@ -41,6 +41,16 @@ func TestBuiltinManifestFilesAreValid(t *testing.T) {
 		filepath.Join("..", "plugins", "pricing_default", "plugin.yaml"),
 		filepath.Join("..", "plugins", "payment_platega", "plugin.yaml"),
 		filepath.Join("..", "plugins", "cluster_replication", "plugin.yaml"),
+		filepath.Join("..", "plugins", "api_server", "plugin.yaml"),
+		filepath.Join("..", "plugins", "config_storage", "plugin.yaml"),
+		filepath.Join("..", "plugins", "identity_memory", "plugin.yaml"),
+		filepath.Join("..", "plugins", "subscription_autobalancer", "plugin.yaml"),
+		filepath.Join("..", "plugins", "subscription_format_legacy", "plugin.yaml"),
+		filepath.Join("..", "plugins", "subscription_lifecycle", "plugin.yaml"),
+		filepath.Join("..", "plugins", "subscription_runtime", "plugin.yaml"),
+		filepath.Join("..", "plugins", "traffic_file", "plugin.yaml"),
+		filepath.Join("..", "plugins", "user_management", "plugin.yaml"),
+		filepath.Join("..", "plugins", "support_chat", "plugin.yaml"),
 	}
 	for _, path := range paths {
 		path := path
@@ -54,18 +64,7 @@ func TestBuiltinManifestFilesAreValid(t *testing.T) {
 }
 
 func TestBuiltinManifestFilesWithoutConfigSchemaAreValid(t *testing.T) {
-	paths := []string{
-		filepath.Join("..", "plugins", "config_storage", "plugin.yaml"),
-		filepath.Join("..", "plugins", "api_server", "plugin.yaml"),
-		filepath.Join("..", "plugins", "identity_memory", "plugin.yaml"),
-		filepath.Join("..", "plugins", "subscription_format_legacy", "plugin.yaml"),
-		filepath.Join("..", "plugins", "subscription_lifecycle", "plugin.yaml"),
-		filepath.Join("..", "plugins", "subscription_runtime", "plugin.yaml"),
-		filepath.Join("..", "plugins", "subscription_autobalancer", "plugin.yaml"),
-		filepath.Join("..", "plugins", "support_chat", "plugin.yaml"),
-		filepath.Join("..", "plugins", "traffic_file", "plugin.yaml"),
-		filepath.Join("..", "plugins", "user_management", "plugin.yaml"),
-	}
+	paths := []string{}
 	for _, path := range paths {
 		path := path
 		t.Run(path, func(t *testing.T) {

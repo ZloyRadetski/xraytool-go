@@ -4,6 +4,11 @@ version: 1.0.0
 api_version: "1"
 description: File-backed cumulative traffic accounting.
 type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
 publishes:
   - traffic_provider
   - traffic_quota_provider
+  - traffic_snapshot_provider
+requires:
+  - name: domain_engine
+    optional: true

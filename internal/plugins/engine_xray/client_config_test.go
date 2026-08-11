@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"xraytool/internal/pluginapi"
-	
 )
 
 func TestBuildClientLinks_UsesXrayInboundConfiguration(t *testing.T) {
@@ -118,4 +117,43 @@ func TestBuildClientLinks_RequiresPluginOwnedEndpoint(t *testing.T) {
 
 	_, err := p.BuildClientLinks(context.Background(), pluginapi.VPNUserConfig{})
 	require.ErrorContains(t, err, "server_address")
+}
+
+func TestSubscriptionConfigSnapshot_ProjectsOnlySubscriptionData(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "xray.json")
+	templatePath := filepath.Join(dir, "template.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{
+  "inbounds": [{
+    "tag": "vless", "protocol": "vless",
+    "settings": {"clients": [{"email": "alice@example.test", "id": "user-id", "subfile": "alice", "limit": 7}]},
+    "streamSettings": {"realitySettings": {"publicKey": "public-key", "serverNames": ["cdn.example.test"], "shortIds": ["one", "two"]}}
+  }, {
+    "tag": "ss2022-in", "protocol": "shadowsocks", "settings": {"password": "server-secret"}
+  }, {
+    "tag": "hy2", "protocol": "hysteria2", "settings": {"obfs": {"password": "obfs-secret"}}
+  }]
+}`), 0o600))
+	require.NoError(t, os.WriteFile(templatePath, []byte(`{"inbounds":[{"settings":{"clients":[{"email":"admin@example.test","id":"admin-id","subfile":"admin"}]}}]}`), 0o600))
+
+	p := NewFromEngine(&NoopEngine{})
+	require.NoError(t, p.Init(context.Background(), pluginapi.RawConfig{
+		"config_path": configPath, "template_path": templatePath,
+	}, nil))
+
+	snapshot, err := p.SubscriptionConfigSnapshot(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.ActiveClients, 1)
+	require.Equal(t, "alice@example.test", snapshot.ActiveClients[0].Email)
+	require.Equal(t, 7, snapshot.ActiveClients[0].MaxDevices)
+	require.Len(t, snapshot.TemplateClients, 1)
+	require.Equal(t, "admin@example.test", snapshot.TemplateClients[0].Email)
+	require.Equal(t, "public-key", snapshot.RealityPublicKey)
+	require.Equal(t, []string{"one", "two"}, snapshot.RealityShortIDs)
+	require.Equal(t, "cdn.example.test", snapshot.RealityServerName)
+	require.Equal(t, "server-secret", snapshot.ShadowSocksSecret)
+	require.Equal(t, "obfs-secret", snapshot.HysteriaObfsSecret)
+	require.NotZero(t, snapshot.Revision)
 }

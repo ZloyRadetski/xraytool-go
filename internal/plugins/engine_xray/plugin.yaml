@@ -8,4 +8,6 @@ config_schema: ../../pluginmanifest/schemas/engine_xray.schema.json
 publishes:
   - engine.softban
   - engine.logger_control
+  - client_config_contributor
+  - subscription_config_provider
 requires: []

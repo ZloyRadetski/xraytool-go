@@ -16,7 +16,6 @@ import (
 	"xraytool/internal/logger"
 	"xraytool/internal/pluginapi"
 	"xraytool/internal/plugins/core/convert"
-	"xraytool/internal/xrayconfig"
 )
 
 // ProcessSQL is the next-generation subscription handler using the SQL database
@@ -64,10 +63,10 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		return failResponse(500, "Database error")
 	}
 
-	cm.Refresh() // Ensure templates and Xray config are loaded
-	xrayCfg := cm.GetRawConfig()
-	if xrayCfg == nil {
-		return failResponse(500, "xray config not loaded in cache")
+	cm.Refresh() // Ensure templates and the engine snapshot are loaded.
+	snapshot, hasSnapshot := cm.SubscriptionConfigSnapshot()
+	if !hasSnapshot {
+		return failResponse(500, "engine configuration not loaded in cache")
 	}
 
 	var source string
@@ -75,55 +74,30 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	var user domain.User
 
 	if subPtr == nil {
-		source = "xray config"
-		// Fallback: Check if user exists in xray_config.json directly (e.g. admin)
+		source = "engine config"
+		// Check engine-projected active clients first. This is the normal
+		// Plugin Host path and keeps native engine JSON out of subscription
+		// delivery.
 		var foundEmail string
 		var foundUUID string
 		var isBlacklistedAdmin bool
 
-		inbounds, err := xrayCfg.GetInbounds()
-		if err == nil {
-			for _, ib := range inbounds {
-				if ib.HasClientList() {
-					clients, _ := ib.GetClients()
-					for _, c := range clients {
-						if c.GetString("id") == clientId || c.GetString("password") == clientId || c.GetString("subfile") == clientId || c.GetString("subfile") == clientId+".txt" {
-							foundEmail = c.Email()
-							foundUUID = c.GetString("id")
-							break
-						}
-					}
-				}
-				if foundEmail != "" {
-					break
-				}
+		if hasSnapshot {
+			if client := findSubscriptionClient(snapshot.ActiveClients, clientId); client != nil {
+				foundEmail = client.Email
+				foundUUID = client.ID
 			}
 		}
 
-		// If not found in active config, check template config to see if they are a blacklisted admin
-		if foundEmail == "" && cm.cfg.Paths.XrayTemplate != "" {
-			if tmplCfg, err := xrayconfig.Read(cm.cfg.Paths.XrayTemplate); err == nil {
-				if tmplInbounds, err := tmplCfg.GetInbounds(); err == nil {
-					for _, ib := range tmplInbounds {
-						if ib.HasClientList() {
-							clients, _ := ib.GetClients()
-							for _, c := range clients {
-								if c.GetString("id") == clientId || c.GetString("password") == clientId || c.GetString("subfile") == clientId || c.GetString("subfile") == clientId+".txt" {
-									foundEmail = c.Email()
-									foundUUID = c.GetString("id")
-									isBlacklistedAdmin = true
-									break
-								}
-							}
-						}
-						if foundEmail != "" {
-							break
-						}
-					}
-				}
+		// If not found in active config, check the engine-projected template to
+		// see if it belongs to a blacklisted admin.
+		if foundEmail == "" && hasSnapshot {
+			if client := findSubscriptionClient(snapshot.TemplateClients, clientId); client != nil {
+				foundEmail = client.Email
+				foundUUID = client.ID
+				isBlacklistedAdmin = true
 			}
 		}
-
 		if foundEmail != "" {
 			// User exists only in config/template! Mock the sub and user objects
 			sub = domain.Subscription{
@@ -178,24 +152,19 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		return res
 	}
 
-	// We still need to pull user's specific passwords from Xray config
-	// because they are generated dynamically or stored only in Xray.
+	// Pull engine-managed user secrets from the projected snapshot. The legacy
+	// raw-config fallback remains only for the old non-plugin entry point.
 	if !isBlockedUser {
-		inbounds, err := xrayCfg.GetInbounds()
-		if err == nil {
-			for _, ib := range inbounds {
-				if ib.HasClientList() {
-					clients, _ := ib.GetClients()
-					for _, c := range clients {
-						if c.Email() == email {
-							if p := c.GetString("password"); p != "" {
-								userPassSs = p
-							}
-							if a := c.GetString("auth"); a != "" {
-								rawHy2Auth = a
-							}
-						}
-					}
+		if hasSnapshot {
+			for _, client := range snapshot.ActiveClients {
+				if client.Email != email {
+					continue
+				}
+				if client.Password != "" {
+					userPassSs = client.Password
+				}
+				if client.Auth != "" {
+					rawHy2Auth = client.Auth
 				}
 			}
 		}
@@ -270,30 +239,15 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	var pbk string
 	var sid string
 
-	keys := cm.GetRealityKeys()
-	if keys != nil {
-		pbk = keys.PublicKey
-		if len(keys.ShortIDs) > 0 {
-			h := sha256.Sum256([]byte(sub.ID))
-			val := binary.BigEndian.Uint64(h[:8])
-			idx := val % uint64(len(keys.ShortIDs))
-			sid = keys.ShortIDs[idx]
-		}
+	pbk = snapshot.RealityPublicKey
+	sid = subscriptionShortID(snapshot.RealityShortIDs, sub.ID)
+	sni := snapshot.RealityServerName
+	if sni == "" {
+		sni = "google.com"
 	}
-
-	if pbk == "" {
-		pbk = derivePublicKey(firstRealityPrivateKey(xrayCfg))
-		if pbk == "" {
-			pbk = firstRealityPublicKey(xrayCfg)
-		}
-	}
-	if sid == "" {
-		sid = randomRealityShortID(xrayCfg)
-	}
-	sni := firstRealitySNI(xrayCfg)
 	serverIp := cfg.Server.IP
 
-	ssServerPass := ssServerPassword(xrayCfg)
+	ssServerPass := snapshot.ShadowSocksSecret
 	mySsAuth := ""
 	if ssServerPass != "" {
 		if !isBlockedUser && userPassSs != "" && strings.ToLower(userPassSs) != "null" {
@@ -309,7 +263,7 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	}
 	hy2Auth := hy2Pass
 	hysteria2Auth := hy2Pass
-	hy2Obfs := getOrCreateHy2ObfsPassword(cfg.Paths.Hy2ConfigYAML, xrayCfg)
+	hy2Obfs := snapshot.HysteriaObfsSecret
 
 	// Fetch traffic bytes: try inferred (combined master+slave) stats first,
 	// falling back to local master stats if the user isn't found there.
@@ -587,4 +541,22 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 	res.StatusCode = 200
 	res.Body = deliveryJSON
 	return res
+}
+
+func findSubscriptionClient(clients []pluginapi.SubscriptionClient, clientID string) *pluginapi.SubscriptionClient {
+	for index := range clients {
+		client := &clients[index]
+		if client.ID == clientID || client.Password == clientID || client.Subfile == clientID || client.Subfile == clientID+".txt" {
+			return client
+		}
+	}
+	return nil
+}
+
+func subscriptionShortID(ids []string, subscriptionID string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(subscriptionID))
+	return ids[binary.BigEndian.Uint64(hash[:8])%uint64(len(ids))]
 }

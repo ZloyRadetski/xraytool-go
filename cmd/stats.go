@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"time"
 
-	"xraytool/internal/stats"
+	trafficfile "xraytool/internal/plugins/traffic_file"
 
 	"github.com/spf13/cobra"
 )
@@ -41,13 +41,8 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 				statePath = deps.Cfg.Paths.InferredStats
 			}
 
-			svc := stats.NewService(stats.Config{
-				IsMaster:                 deps.Cfg.IsMaster(),
-				StatsStatePath:           deps.Cfg.Paths.StatsState,
-				InferredStatsPath:        deps.Cfg.Paths.InferredStats,
-				DetailedRetentionSeconds: deps.Cfg.DetailedRetentionSeconds(),
-			}, deps.Engine, deps.ClusterProvider)
-			merged, slaveReport, err := svc.GenerateClusterStats(inferredMode, statePath)
+			trafficPlugin := trafficfile.New(deps.Cfg)
+			merged, slaveReport, err := trafficPlugin.GenerateClusterStats(inferredMode, statePath, deps.Engine, deps.ClusterProvider)
 			if err != nil {
 				if apiMode {
 					printJSON(map[string]interface{}{"ok": false, "error": "STATS_UPDATE_FAILED", "message": err.Error()})
@@ -123,7 +118,7 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 					},
 					"users": merged,
 					"totals": map[string]interface{}{
-						"xray":    map[string]int64{"up": sumField(merged, func(u stats.MergedUser) int64 { return u.Xray.Up }), "down": sumField(merged, func(u stats.MergedUser) int64 { return u.Xray.Down }), "total": xTotal},
+						"xray":    map[string]int64{"up": sumField(merged, func(u trafficfile.MergedUser) int64 { return u.Xray.Up }), "down": sumField(merged, func(u trafficfile.MergedUser) int64 { return u.Xray.Down }), "total": xTotal},
 						"slave":   map[string]int64{"total": slaveTotal},
 						"cluster": map[string]int64{"combined": clTotal},
 					},
@@ -153,14 +148,14 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 	return cmd
 }
 
-func clusterTotal(u stats.MergedUser) int64 {
+func clusterTotal(u trafficfile.MergedUser) int64 {
 	if u.ClusterTotal == nil {
 		return 0
 	}
 	return *u.ClusterTotal
 }
 
-func sumField(users []stats.MergedUser, f func(stats.MergedUser) int64) int64 {
+func sumField(users []trafficfile.MergedUser, f func(trafficfile.MergedUser) int64) int64 {
 	var sum int64
 	for _, u := range users {
 		sum += f(u)
@@ -168,13 +163,13 @@ func sumField(users []stats.MergedUser, f func(stats.MergedUser) int64) int64 {
 	return sum
 }
 
-func printAllStatsTable(users []stats.MergedUser) {
+func printAllStatsTable(users []trafficfile.MergedUser) {
 	cyan := "\033[0;36m"
 	green := "\033[1;32m"
 	nc := "\033[0m"
 
 	// Only show users with traffic.
-	var active []stats.MergedUser
+	var active []trafficfile.MergedUser
 	for _, u := range users {
 		if clusterTotal(u) > 0 || u.Slave > 0 {
 			active = append(active, u)
@@ -192,9 +187,9 @@ func printAllStatsTable(users []stats.MergedUser) {
 	for _, u := range active {
 		fmt.Printf("%-28s %12s %12s %12s\n",
 			u.Email,
-			stats.HumanBytes(u.Xray.Total),
-			stats.HumanBytes(u.Slave),
-			stats.HumanBytes(clusterTotal(u)),
+			trafficfile.HumanBytes(u.Xray.Total),
+			trafficfile.HumanBytes(u.Slave),
+			trafficfile.HumanBytes(clusterTotal(u)),
 		)
 		sumX += u.Xray.Total
 		sumSlave += u.Slave
@@ -202,21 +197,21 @@ func printAllStatsTable(users []stats.MergedUser) {
 	}
 	fmt.Println("--------------------------------------------------------------")
 	fmt.Printf("%-28s %12s %12s %12s\n", "SUBTOTALS",
-		stats.HumanBytes(sumX), stats.HumanBytes(sumSlave), stats.HumanBytes(sumTotal))
+		trafficfile.HumanBytes(sumX), trafficfile.HumanBytes(sumSlave), trafficfile.HumanBytes(sumTotal))
 	fmt.Printf("\n%sGLOBAL TOTAL: %.3f GB (%d users)%s\n",
 		green, float64(sumTotal)/1024/1024/1024, len(active), nc)
 }
 
-func printUserStatsTable(u stats.MergedUser) {
+func printUserStatsTable(u trafficfile.MergedUser) {
 	fmt.Printf("%-25s %12s %12s\n", "Field", "Direction", "Traffic")
 	fmt.Println("-------------------------------------------------------")
-	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray up", stats.HumanBytes(u.Xray.Up))
-	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray down", stats.HumanBytes(u.Xray.Down))
-	fmt.Printf("%-25s %12s %12s\n", u.Email, "Slave", stats.HumanBytes(u.Slave))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray up", trafficfile.HumanBytes(u.Xray.Up))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Xray down", trafficfile.HumanBytes(u.Xray.Down))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Slave", trafficfile.HumanBytes(u.Slave))
 	fmt.Println("-------------------------------------------------------")
-	fmt.Printf("%-25s %12s %12s\n", u.Email, "Total up", stats.HumanBytes(u.Total.Up))
-	fmt.Printf("%-25s %12s %12s\n", u.Email, "Total down", stats.HumanBytes(u.Total.Down))
-	fmt.Printf("%-25s %12s %12s\n", u.Email, "TOTAL", stats.HumanBytes(clusterTotal(u)))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Total up", trafficfile.HumanBytes(u.Total.Up))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "Total down", trafficfile.HumanBytes(u.Total.Down))
+	fmt.Printf("%-25s %12s %12s\n", u.Email, "TOTAL", trafficfile.HumanBytes(clusterTotal(u)))
 }
 
 func printJSON(v interface{}) {

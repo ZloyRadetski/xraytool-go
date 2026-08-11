@@ -1,14 +1,11 @@
 package subscription
 
 import (
-	"crypto/ecdh"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	json "github.com/goccy/go-json"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,11 +13,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"xraytool/internal/xrayconfig"
 )
 
 // Package-level compiled regexes (avoids recompilation on every call).
@@ -197,83 +192,6 @@ func userAgentHasToken(uaLower, token string) bool {
 	return before && after
 }
 
-//nolint:unused
-func findActiveUserBySubfile(cfg xrayconfig.RawConfig, filename string, defaultExpire string) *ActiveUser {
-	targetNorm := normalizeSubfileToID(filename)
-	if targetNorm == "" {
-		return nil
-	}
-
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return nil
-	}
-
-	var best *ActiveUser
-	for _, ib := range inbounds {
-		clients, err := ib.GetClients()
-		if err != nil {
-			continue
-		}
-		for _, c := range clients {
-			sub := c.GetString("subfile")
-			if sub == "" {
-				continue
-			}
-			if normalizeSubfileToID(sub) == targetNorm {
-				email := c.Email()
-				if email == "" {
-					continue
-				}
-
-				limitVal := 3
-				if lv, ok := c.GetNumber("limit"); ok && lv > 0 {
-					limitVal = int(lv)
-				}
-
-				hy2Auth := c.GetString("auth")
-
-				row := &ActiveUser{
-					Email:    email,
-					ID:       c.GetString("id"),
-					Subfile:  sub,
-					Password: c.GetString("password"),
-					Expire:   c.GetString("expire"),
-					Hy2Auth:  hy2Auth,
-					Hy2Obfs:  c.GetString("hy2_obfs"),
-					Limit:    limitVal,
-				}
-				if row.Expire == "" {
-					row.Expire = defaultExpire
-				}
-
-				if best == nil {
-					best = row
-					continue
-				}
-
-				// Merge
-				if best.Hy2Auth == "" && row.Hy2Auth != "" {
-					best.Hy2Auth = row.Hy2Auth
-				}
-				if best.Password == "" && row.Password != "" {
-					best.Password = row.Password
-				}
-				if best.ID == "" && row.ID != "" {
-					best.ID = row.ID
-				}
-				if best.Hy2Obfs == "" && row.Hy2Obfs != "" {
-					best.Hy2Obfs = row.Hy2Obfs
-				}
-				if best.Expire == "" && row.Expire != "" {
-					best.Expire = row.Expire
-				}
-			}
-		}
-	}
-	return best
-}
-
 func pickRequestValue(req *Request, queryKeys, headerKeys []string) string {
 	for _, qk := range queryKeys {
 		if v, ok := req.Query[qk]; ok && strings.TrimSpace(v) != "" {
@@ -311,207 +229,6 @@ func normalizeHwid(s string) string {
 	return s
 }
 
-func firstRealityPrivateKey(cfg xrayconfig.RawConfig) string {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return ""
-	}
-	for _, ib := range inbounds {
-		if stream, ok := ib["streamSettings"]; ok {
-			var ss map[string]json.RawMessage
-			if json.Unmarshal(stream, &ss) == nil {
-				if reality, ok := ss["realitySettings"]; ok {
-					var rs map[string]interface{}
-					if json.Unmarshal(reality, &rs) == nil {
-						if pkey, ok := rs["privateKey"]; ok {
-							if s, ok := pkey.(string); ok {
-								return strings.TrimSpace(s)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func firstRealityPublicKey(cfg xrayconfig.RawConfig) string {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return ""
-	}
-	for _, ib := range inbounds {
-		if stream, ok := ib["streamSettings"]; ok {
-			var ss map[string]json.RawMessage
-			if json.Unmarshal(stream, &ss) == nil {
-				if reality, ok := ss["realitySettings"]; ok {
-					var rs map[string]interface{}
-					if json.Unmarshal(reality, &rs) == nil {
-						if pkey, ok := rs["publicKey"]; ok {
-							if s, ok := pkey.(string); ok {
-								return strings.TrimSpace(s)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func randomRealityShortID(cfg xrayconfig.RawConfig) string {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return ""
-	}
-	for _, ib := range inbounds {
-		if stream, ok := ib["streamSettings"]; ok {
-			var ss map[string]json.RawMessage
-			if json.Unmarshal(stream, &ss) == nil {
-				if reality, ok := ss["realitySettings"]; ok {
-					var rs map[string]interface{}
-					if json.Unmarshal(reality, &rs) == nil {
-						if sids, ok := rs["shortIds"]; ok {
-							if arr, ok := sids.([]interface{}); ok {
-								var validSIDs []string
-								for _, item := range arr {
-									if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-										validSIDs = append(validSIDs, strings.TrimSpace(s))
-									}
-								}
-								if len(validSIDs) > 0 {
-									n, err := rand.Int(rand.Reader, big.NewInt(int64(len(validSIDs))))
-									if err == nil {
-										return validSIDs[n.Int64()]
-									}
-									return validSIDs[0] // fallback
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func firstRealitySNI(cfg xrayconfig.RawConfig) string {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return "google.com"
-	}
-	for _, ib := range inbounds {
-		if stream, ok := ib["streamSettings"]; ok {
-			var ss map[string]json.RawMessage
-			if json.Unmarshal(stream, &ss) == nil {
-				if reality, ok := ss["realitySettings"]; ok {
-					var rs map[string]interface{}
-					if json.Unmarshal(reality, &rs) == nil {
-						if snis, ok := rs["serverNames"]; ok {
-							if arr, ok := snis.([]interface{}); ok {
-								for _, item := range arr {
-									if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-										return strings.TrimSpace(s)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return "google.com"
-}
-
-var (
-	pubKeyCache   = make(map[string]string)
-	pubKeyCacheMu sync.RWMutex
-)
-
-func derivePublicKey(privateKey string) string {
-	privateKey = strings.TrimSpace(privateKey)
-	if privateKey == "" {
-		return ""
-	}
-
-	pubKeyCacheMu.RLock()
-	pub, ok := pubKeyCache[privateKey]
-	pubKeyCacheMu.RUnlock()
-	if ok {
-		return pub
-	}
-
-	pubKeyCacheMu.Lock()
-	defer pubKeyCacheMu.Unlock()
-
-	if pub, ok := pubKeyCache[privateKey]; ok {
-		return pub
-	}
-
-	// Validate to prevent any command injection vectors
-	if !regexp.MustCompile(`^[A-Za-z0-9\-_=]+$`).MatchString(privateKey) {
-		pubKeyCache[privateKey] = ""
-		return ""
-	}
-	// Decode private key
-	privBytes, err := base64.RawURLEncoding.DecodeString(privateKey)
-	if err != nil {
-		privBytes, err = base64.StdEncoding.DecodeString(privateKey)
-		if err != nil {
-			pubKeyCache[privateKey] = ""
-			return ""
-		}
-	}
-
-	if len(privBytes) != 32 {
-		pubKeyCache[privateKey] = ""
-		return ""
-	}
-
-	// Apply Curve25519 clamping (Xray compatibility)
-	privBytes[0] &= 248
-	privBytes[31] &= 127
-	privBytes[31] |= 64
-
-	key, err := ecdh.X25519().NewPrivateKey(privBytes)
-	if err != nil {
-		pubKeyCache[privateKey] = ""
-		return ""
-	}
-
-	pubBytes := key.PublicKey().Bytes()
-	pub = base64.RawURLEncoding.EncodeToString(pubBytes)
-
-	pubKeyCache[privateKey] = pub
-	return pub
-}
-
-func ssServerPassword(cfg xrayconfig.RawConfig) string {
-	inbounds, err := cfg.GetInbounds()
-	if err != nil {
-		return ""
-	}
-	for _, ib := range inbounds {
-		if ib.Tag() == "ss2022-in" {
-			if settings, ok := ib["settings"]; ok {
-				var s map[string]interface{}
-				if json.Unmarshal(settings, &s) == nil {
-					if pass, ok := s["password"]; ok {
-						if p, ok := pass.(string); ok {
-							return strings.TrimSpace(p)
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
 func extractHy2Pass(rawAuth string) string {
 	rawAuth = strings.TrimSpace(rawAuth)
 	if rawAuth == "" || strings.ToLower(rawAuth) == "null" {
@@ -529,83 +246,6 @@ func buildDeterministicHy2Pass(uuidHint, email string) string {
 	h := sha256.New()
 	h.Write([]byte(uuidHint + ":" + email + ":hy2"))
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-func getOrCreateHy2ObfsPassword(yamlPath string, cfg xrayconfig.RawConfig) string {
-	// 1. Try parsing directly from Xray Hysteria2 inbound settings (settings.obfs.password)
-	inbounds, err := cfg.GetInbounds()
-	if err == nil {
-		for _, ib := range inbounds {
-			p := ib.Protocol()
-			if p == "hysteria2" || p == "hysteria" || p == "hy2" {
-				if settings, ok := ib["settings"]; ok {
-					var s map[string]interface{}
-					if json.Unmarshal(settings, &s) == nil {
-						if obfs, ok := s["obfs"].(map[string]interface{}); ok {
-							if pass, ok := obfs["password"].(string); ok && strings.TrimSpace(pass) != "" {
-								return strings.TrimSpace(pass)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 2. Try legacy standalone hysteria yaml config fallback
-	val := getHy2ObfsPasswordFromYAML(yamlPath)
-	if val != "" {
-		return val
-	}
-
-	// 3. Try legacy client metadata fallback
-	if err == nil {
-		for _, ib := range inbounds {
-			clients, err := ib.GetClients()
-			if err == nil {
-				for _, c := range clients {
-					if obfs := c.GetString("hy2_obfs"); obfs != "" {
-						return obfs
-					}
-				}
-			}
-		}
-	}
-
-	// 4. Fallback to empty string (values must be taken from config, no random generation)
-	return ""
-}
-
-func getHy2ObfsPasswordFromYAML(yamlPath string) string {
-	if yamlPath == "" {
-		return ""
-	}
-	data, err := os.ReadFile(yamlPath)
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(data), "\n")
-	inObfs := false
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "obfs:") {
-			inObfs = true
-			continue
-		}
-		if inObfs && strings.Contains(line, ":") && !strings.HasPrefix(line, "password:") {
-			inObfs = false
-		}
-		if inObfs && strings.HasPrefix(line, "password:") {
-			val := strings.TrimPrefix(line, "password:")
-			if idx := strings.Index(val, "#"); idx >= 0 {
-				val = val[:idx]
-			}
-			val = strings.TrimSpace(val)
-			val = strings.Trim(val, `"'`)
-			return val
-		}
-	}
-	return ""
 }
 
 func getTrafficBytes(statsPath string, email string) (up int64, down int64, found bool) {

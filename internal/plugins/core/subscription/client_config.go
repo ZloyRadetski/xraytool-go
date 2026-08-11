@@ -30,6 +30,41 @@ func (c *CacheManager) SetClientConfigContributor(contributor pluginapi.ClientCo
 	c.mu.Unlock()
 }
 
+func (c *CacheManager) setEngineSubscriptionConfigProvider(engine domain.Engine) {
+	provider, ok := any(engine).(pluginapi.SubscriptionConfigProvider)
+	if ok {
+		c.SetSubscriptionConfigProvider(provider)
+	}
+}
+
+// SetSubscriptionConfigProvider installs the engine-owned configuration
+// projection. The provider is intentionally narrow: subscription code never
+// receives native Xray JSON.
+func (c *CacheManager) SetSubscriptionConfigProvider(provider pluginapi.SubscriptionConfigProvider) {
+	c.mu.Lock()
+	c.configProvider = provider
+	c.mu.Unlock()
+}
+
+func (c *CacheManager) SubscriptionConfigProvider() pluginapi.SubscriptionConfigProvider {
+	c.mu.RLock()
+	provider := c.configProvider
+	c.mu.RUnlock()
+	return provider
+}
+
+// SubscriptionConfigSnapshot returns the most recent immutable engine view.
+func (c *CacheManager) SubscriptionConfigSnapshot() (pluginapi.SubscriptionConfigSnapshot, bool) {
+	c.mu.RLock()
+	if !c.subscriptionConfigReady {
+		c.mu.RUnlock()
+		return pluginapi.SubscriptionConfigSnapshot{}, false
+	}
+	snapshot := cloneSubscriptionConfigSnapshot(c.subscriptionConfig)
+	c.mu.RUnlock()
+	return snapshot, true
+}
+
 // ClientConfigContributor returns the installed contributor, if any. It is
 // deliberately exposed as the pluginapi contract rather than an Xray type so
 // subscription never needs to import a concrete engine package.

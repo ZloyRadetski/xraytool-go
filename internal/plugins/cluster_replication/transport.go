@@ -190,21 +190,8 @@ func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) e
 				return
 			}
 			if frame.Kind == protocol.KindFraudEvents {
-				if s.fraudSink == nil {
-					receiveDone <- fmt.Errorf("replication anti-fraud sink is unavailable")
-					return
-				}
-				var events []pluginapi.FraudEvent
-				if decodeErr := json.Unmarshal(frame.Payload, &events); decodeErr != nil {
-					receiveDone <- fmt.Errorf("decode replication anti-fraud events: %w", decodeErr)
-					return
-				}
-				if len(events) == 0 {
-					receiveDone <- fmt.Errorf("replication anti-fraud events are empty")
-					return
-				}
-				if sinkErr := s.fraudSink(stream.Context(), hello.NodeID, events); sinkErr != nil {
-					receiveDone <- fmt.Errorf("ingest replication anti-fraud events: %w", sinkErr)
+				if fraudErr := s.ingestFraudEvents(stream.Context(), hello.NodeID, frame.Payload); fraudErr != nil {
+					receiveDone <- fraudErr
 					return
 				}
 				continue
@@ -270,6 +257,26 @@ func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) e
 		case <-ticker.C:
 		}
 	}
+}
+
+// ingestFraudEvents handles an auxiliary anti-fraud frame without allowing a
+// temporarily unavailable fraud processor to tear down user replication.
+func (s *replicationServer) ingestFraudEvents(ctx context.Context, sourceID string, payload []byte) error {
+	var events []pluginapi.FraudEvent
+	if err := json.Unmarshal(payload, &events); err != nil {
+		return fmt.Errorf("decode replication anti-fraud events: %w", err)
+	}
+	if len(events) == 0 {
+		return fmt.Errorf("replication anti-fraud events are empty")
+	}
+	if s.fraudSink == nil {
+		s.log.Warn("replication anti-fraud event ignored: sink is unavailable", "node", sourceID)
+		return nil
+	}
+	if err := s.fraudSink(ctx, sourceID, events); err != nil {
+		s.log.Warn("replication anti-fraud event rejected", "node", sourceID, "err", err)
+	}
+	return nil
 }
 
 func (s *replicationServer) sendEventsAfter(ctx context.Context, stream protocol.Replication_ConnectServer, lastSent *int64) error {

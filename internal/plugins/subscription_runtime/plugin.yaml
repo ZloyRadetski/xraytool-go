@@ -4,8 +4,19 @@ version: 1.0.0
 api_version: "1"
 description: "Cached subscription delivery runtime and provider integration point."
 type: internal
+config_schema: ../../pluginmanifest/schemas/empty.schema.json
 publishes:
   - subscription_cache
 requires:
   - domain_engine
   - subscription_template_processor
+  - name: client_config_contributor
+    optional: true
+  - name: subscription_config_provider
+    optional: true
+  - name: traffic_provider
+    optional: true
+  - name: traffic_quota_provider
+    optional: true
+  - name: subscription_format_provider
+    optional: true

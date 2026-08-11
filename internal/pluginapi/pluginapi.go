@@ -38,8 +38,11 @@ const (
 	ServiceIdentityProvider              = "identity_provider"
 	ServiceSubscriptionFormatProvider    = "subscription_format_provider"
 	ServiceSubscriptionTemplateProcessor = "subscription_template_processor"
+	ServiceSubscriptionConfigProvider    = "subscription_config_provider"
+	ServiceClientConfigContributor       = "client_config_contributor"
 	ServiceTrafficProvider               = "traffic_provider"
 	ServiceTrafficQuotaProvider          = "traffic_quota_provider"
+	ServiceTrafficSnapshotProvider       = "traffic_snapshot_provider"
 )
 
 // ReplicationFraudRelay is the narrow cross-plugin bridge used to carry
@@ -728,6 +731,20 @@ type TrafficProvider interface {
 	Usage(ctx context.Context, email string) (usage TrafficUsage, found bool, err error)
 }
 
+// TrafficSnapshot is one cumulative user record prepared by a traffic
+// backend. The data intentionally contains no storage or engine details.
+type TrafficSnapshot struct {
+	Email string
+	Usage TrafficUsage
+}
+
+// TrafficSnapshotProvider is used by cluster plugins to report a slave's
+// local totals. A traffic backend owns sampling, counter-reset handling and
+// persistence; cluster replication only serializes this narrow result.
+type TrafficSnapshotProvider interface {
+	LocalTrafficSnapshot(ctx context.Context) ([]TrafficSnapshot, error)
+}
+
 // TrafficQuotaDecision is the policy result for one subscription request.
 // An empty Reason is normal; when Exceeded is true it is exposed only as the
 // diagnostic X-Reject-Reason response header.
@@ -824,6 +841,40 @@ type ClientConfigContributor interface {
 	// for the given user, in the format specific to this engine.
 	// The engine reads its own running config to extract keys and endpoints.
 	BuildClientLinks(ctx context.Context, u VPNUserConfig) ([]ClientLink, error)
+}
+
+// SubscriptionClient is the engine-neutral subset of a client entry required
+// to serve a subscription. Engine plugins keep their native config format
+// private and project only these values to subscription_runtime.
+type SubscriptionClient struct {
+	Email      string
+	ID         string
+	Password   string
+	Auth       string
+	Obfs       string
+	Subfile    string
+	Expire     string
+	MaxDevices int
+}
+
+// SubscriptionConfigSnapshot is an immutable view of the engine data used by
+// subscription delivery. It deliberately exposes no raw engine JSON.
+type SubscriptionConfigSnapshot struct {
+	Revision           int64
+	ActiveClients      []SubscriptionClient
+	TemplateClients    []SubscriptionClient
+	RealityPublicKey   string
+	RealityShortIDs    []string
+	RealityServerName  string
+	ShadowSocksSecret  string
+	HysteriaObfsSecret string
+}
+
+// SubscriptionConfigProvider lets an engine own its configuration parsing
+// while subscription_runtime remains independent from Xray, Sing-box or any
+// future engine-specific schema.
+type SubscriptionConfigProvider interface {
+	SubscriptionConfigSnapshot(ctx context.Context) (SubscriptionConfigSnapshot, error)
 }
 
 // EngineProvider is the extension point for a VPN engine (Xray, Singbox, …).

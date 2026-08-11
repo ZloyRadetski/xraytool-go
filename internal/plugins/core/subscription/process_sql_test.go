@@ -13,6 +13,7 @@ import (
 	"xraytool/internal/appconfig"
 	"xraytool/internal/database"
 	"xraytool/internal/events"
+	"xraytool/internal/pluginapi"
 	vpn "xraytool/internal/plugins/engine_xray"
 	autoBalancerPlugin "xraytool/internal/plugins/subscription_autobalancer"
 )
@@ -27,6 +28,20 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 
 	return db
+}
+
+type testSubscriptionConfigProvider struct {
+	snapshot pluginapi.SubscriptionConfigSnapshot
+}
+
+func (p *testSubscriptionConfigProvider) SubscriptionConfigSnapshot(context.Context) (pluginapi.SubscriptionConfigSnapshot, error) {
+	return p.snapshot, nil
+}
+
+func newSubscriptionTestCache(cfg *appconfig.Config) *CacheManager {
+	cache := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cache.SetSubscriptionConfigProvider(&testSubscriptionConfigProvider{snapshot: pluginapi.SubscriptionConfigSnapshot{Revision: 1}})
+	return cache
 }
 
 func TestProcessSQL_AntiFraudBan(t *testing.T) {
@@ -70,7 +85,7 @@ func TestProcessSQL_AntiFraudBan(t *testing.T) {
 		Headers:    make(map[string]string),
 	}
 
-	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm := newSubscriptionTestCache(cfg)
 
 	// 2. Mock isBanned to return TRUE
 	isBanned := func(email string) bool {
@@ -128,7 +143,7 @@ func TestProcessSQL_Normal(t *testing.T) {
 		Headers:    make(map[string]string),
 	}
 
-	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm := newSubscriptionTestCache(cfg)
 
 	// 2. Mock isBanned to return FALSE
 	isBanned := func(email string) bool {
@@ -191,13 +206,10 @@ func TestProcessSQL_RealityRotationPlaceholders(t *testing.T) {
 		Headers:    make(map[string]string),
 	}
 
-	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
-	// Mock preloaded Reality keys in CacheManager
-	cm.realityKeys = &vpn.RealityKeys{
-		PrivateKey: "mock-priv",
-		PublicKey:  "mock-pub",
-		ShortIDs:   []string{"mock-sid"},
-	}
+	cm := newSubscriptionTestCache(cfg)
+	cm.SetSubscriptionConfigProvider(&testSubscriptionConfigProvider{snapshot: pluginapi.SubscriptionConfigSnapshot{
+		Revision: 2, RealityPublicKey: "mock-pub", RealityShortIDs: []string{"mock-sid"},
+	}})
 	cm.subTemplate = "# Header\n{\"pbk\": \"{PBK}\", \"sid\": \"{SID}\"}"
 
 	isBanned := func(email string) bool { return false }
@@ -232,7 +244,7 @@ func TestProcessSQLCompilesV2AutoBalancerTemplate(t *testing.T) {
 			UserAgentNoChecks:  []string{"testclient"},
 		},
 	}
-	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm := newSubscriptionTestCache(cfg)
 	cm.SetSubscriptionTemplateProcessor(autoBalancerPlugin.New())
 	cm.subTemplate = `{
   "version": 2,
@@ -331,7 +343,7 @@ func TestProcessSQL_InferredTrafficStats(t *testing.T) {
 		},
 	}
 
-	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm := newSubscriptionTestCache(cfg)
 	cm.subTemplate = "# Header\n{\"email\": \"{EMAIL}\", \"up\": {UP}, \"down\": {DOWN}}"
 	isBanned := func(email string) bool { return false }
 	dispatcher := events.NewDispatcher(&events.Config{})
@@ -408,7 +420,13 @@ func TestProcessSQL_BlacklistedAdmin(t *testing.T) {
 		},
 	}
 
-	cm := NewCacheManager(cfg, &vpn.NoopEngine{})
+	cm := newSubscriptionTestCache(cfg)
+	cm.SetSubscriptionConfigProvider(&testSubscriptionConfigProvider{snapshot: pluginapi.SubscriptionConfigSnapshot{
+		Revision: 2,
+		TemplateClients: []pluginapi.SubscriptionClient{{
+			Email: "admin-blacklisted@example.com", ID: "admin-blacklisted-id", Subfile: "admin-blacklisted-id",
+		}},
+	}})
 	isBanned := func(email string) bool { return false }
 	dispatcher := events.NewDispatcher(&events.Config{})
 
