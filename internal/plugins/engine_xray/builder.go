@@ -75,9 +75,15 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 		}
 		result.Set("id", params.UUID)
 
-		flow := params.Flow
-		if flow == "" && hasXTLS(ib) {
-			flow = "xtls-rprx-vision"
+		// An xHTTP inbound is still declared as protocol "vless" in Xray.
+		// Flow/Vision is invalid for both xHTTP and splitHTTP, so suppress an
+		// explicitly carried flow as well as the synthesized default.
+		flow := ""
+		if !isHTTPTransport(ib) {
+			flow = params.Flow
+			if flow == "" && hasXTLS(ib) {
+				flow = "xtls-rprx-vision"
+			}
 		}
 		if flow != "" {
 			result.Set("flow", flow)
@@ -124,6 +130,35 @@ func BuildClient(ib RawInbound, params ClientParams) (RawClient, error) {
 	}
 
 	return result, nil
+}
+
+// isHTTPTransport reports whether a VLESS inbound uses an HTTP-based Xray
+// transport. Such inbounds retain protocol "vless", so checking only the
+// inbound protocol would let a snapshot user's Vision flow leak into xHTTP.
+func isHTTPTransport(ib RawInbound) bool {
+	rawStream, ok := ib["streamSettings"]
+	if !ok {
+		return false
+	}
+
+	var stream map[string]json.RawMessage
+	if err := json.Unmarshal(rawStream, &stream); err != nil {
+		return false
+	}
+
+	var network string
+	if rawNetwork, ok := stream["network"]; ok {
+		if err := json.Unmarshal(rawNetwork, &network); err != nil {
+			return false
+		}
+	}
+
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "xhttp", "splithttp":
+		return true
+	default:
+		return false
+	}
 }
 
 // hasXTLS checks if the streamSettings indicate XTLS/Vision compatibility.

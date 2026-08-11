@@ -52,3 +52,4 @@ xraytool_server_save/
 tests/
 .VSCodeCounter/
 config.yaml
+*.template.json

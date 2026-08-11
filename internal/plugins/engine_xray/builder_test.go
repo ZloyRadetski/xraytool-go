@@ -144,3 +144,38 @@ func TestBuildClientXHTTPNeverGeneratesVisionFlow(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildClientVLESSOverHTTPTransportDropsSnapshotFlow(t *testing.T) {
+	for _, network := range []string{"xhttp", "splithttp"} {
+		t.Run(network, func(t *testing.T) {
+			data, err := json.Marshal(map[string]interface{}{
+				// This is the shape used by xhttp-in-1: Xray identifies the
+				// authentication protocol as VLESS and the transport separately.
+				"protocol": "vless",
+				"streamSettings": map[string]interface{}{
+					"network":  network,
+					"security": "reality",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var inbound RawInbound
+			if err := json.Unmarshal(data, &inbound); err != nil {
+				t.Fatal(err)
+			}
+			client, err := BuildClient(inbound, ClientParams{
+				Email: "hardcoded@example.test",
+				UUID:  "11111111-1111-1111-1111-111111111111",
+				Flow:  "xtls-rprx-vision",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.Has("flow") {
+				t.Fatalf("VLESS over %s must not contain flow: %+v", network, client)
+			}
+		})
+	}
+}
