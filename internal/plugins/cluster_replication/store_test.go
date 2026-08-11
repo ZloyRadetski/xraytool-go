@@ -68,6 +68,21 @@ type reconcileEngine struct {
 	added int
 }
 
+type staticProjectionEngine struct {
+	vpn.NoopEngine
+	snapshot []domain.StaticInboundClients
+	applied  []domain.StaticInboundClients
+}
+
+func (e *staticProjectionEngine) StaticClientSnapshot(_ context.Context, _ []domain.VPNUserConfig) ([]domain.StaticInboundClients, error) {
+	return append([]domain.StaticInboundClients(nil), e.snapshot...), nil
+}
+
+func (e *staticProjectionEngine) ApplyStaticClientSnapshot(_ context.Context, clients []domain.StaticInboundClients) error {
+	e.applied = append([]domain.StaticInboundClients(nil), clients...)
+	return nil
+}
+
 func (e *reconcileEngine) AddUser(_ context.Context, user domain.VPNUserConfig) error {
 	e.added++
 	e.users = append(e.users, user)
@@ -77,6 +92,19 @@ func (e *reconcileEngine) AddUser(_ context.Context, user domain.VPNUserConfig) 
 func (e *reconcileEngine) ReconcileUsers(_ context.Context, users []domain.VPNUserConfig) (*domain.EngineSyncResult, error) {
 	e.users = append([]domain.VPNUserConfig(nil), users...)
 	return &domain.EngineSyncResult{}, nil
+}
+
+func TestProjectStaticClientsAppliesMasterProjectionExplicitly(t *testing.T) {
+	engine := &staticProjectionEngine{
+		snapshot: []domain.StaticInboundClients{{
+			InboundTag: "master-vless", Protocol: "vless", Clients: []byte(`[{"email":"ops-access"}]`),
+		}},
+	}
+	service := &Service{engine: engine}
+	clients := []domain.VPNUserConfig{{Email: "db-user@example.test", UUID: "uuid"}}
+
+	require.NoError(t, service.projectStaticClients(context.Background(), clients))
+	require.Equal(t, engine.snapshot, engine.applied)
 }
 
 func TestReconcileSlaveUsesPersistedDesiredProjection(t *testing.T) {

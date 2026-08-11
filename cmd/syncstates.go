@@ -33,6 +33,10 @@ func syncStatesCmd(deps *AppDeps) *cobra.Command {
 				fmt.Printf("INFO|Would reconcile %d users and append a streamed snapshot marker.\n", len(users))
 				return
 			}
+			if err := deps.ReplicationService.ProjectStaticClients(cmd.Context()); err != nil {
+				fmt.Printf("ERROR|projecting static clients on master: %v\n", err)
+				return
+			}
 			if _, err := deps.Engine.SyncUsers(cmd.Context(), users, true); err != nil {
 				fmt.Printf("ERROR|reconciling master: %v\n", err)
 				return

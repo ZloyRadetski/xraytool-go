@@ -245,6 +245,33 @@ func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string) 
 	return published, nil
 }
 
+// ProjectStaticClients projects hardcoded template users onto the master's own
+// local inbound set. It is deliberately an explicit repair operation: calling
+// it from the periodic artifact publisher would repeatedly rebuild live
+// inbounds. syncstates invokes it immediately before the master is reconciled.
+func (s *Service) ProjectStaticClients(ctx context.Context) error {
+	users, err := s.BuildSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return s.projectStaticClients(ctx, users)
+}
+
+func (s *Service) projectStaticClients(ctx context.Context, users []domain.VPNUserConfig) error {
+	synchronizer, ok := staticClientSynchronizer(s.engine)
+	if !ok {
+		return nil
+	}
+	clients, err := synchronizer.StaticClientSnapshot(ctx, users)
+	if err != nil {
+		return fmt.Errorf("build static client projection: %w", err)
+	}
+	if err := synchronizer.ApplyStaticClientSnapshot(ctx, clients); err != nil {
+		return fmt.Errorf("apply static client projection: %w", err)
+	}
+	return nil
+}
+
 func staticClientSynchronizer(engine domain.Engine) (domain.StaticClientSynchronizer, bool) {
 	if probe, ok := engine.(interface{ SupportsStaticClientSync() bool }); ok && !probe.SupportsStaticClientSync() {
 		return nil, false
