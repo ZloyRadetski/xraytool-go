@@ -133,15 +133,48 @@ func TestState_AddEvent_SameIPNotDoubled(t *testing.T) {
 	assert.Equal(t, 1, count, "same IP must not inflate the count")
 }
 
+func TestState_HashIPCanonicalizesAndMatchesAcrossNodes(t *testing.T) {
+	const sharedSecret = "cluster-wide-test-secret"
+	slave := newState(sharedSecret)
+	master := newState(sharedSecret)
+	now := time.Now().UTC()
+
+	// IPv4 and its IPv4-mapped IPv6 form describe the same remote client.
+	slaveHash := slave.HashIP(" 203.0.113.7 ")
+	require.NotEmpty(t, slaveHash)
+	require.Equal(t, slaveHash, slave.HashIP("::ffff:203.0.113.7"))
+	require.Equal(t, slaveHash, master.HashIP("203.0.113.7"))
+
+	// This reproduces the master-local plus slave-reported case. The same
+	// client must occupy one identity, not one per server.
+	master.AddEvent("user@example.test", "203.0.113.7", 3*time.Minute, now)
+	count := master.AddHashedEvent("user@example.test", slaveHash, 3*time.Minute, now)
+	require.Equal(t, 1, count)
+
+	otherSecret := newState("different-cluster-secret")
+	require.NotEqual(t, slaveHash, otherSecret.HashIP("203.0.113.7"))
+	require.Empty(t, slave.HashIP("not-an-ip"))
+}
+
+func TestState_HashKeyIDIsStableAndDoesNotExposeSecret(t *testing.T) {
+	first := newState("shared-secret")
+	second := newState("shared-secret")
+	different := newState("different-secret")
+
+	require.Equal(t, first.HashKeyID(), second.HashKeyID())
+	require.NotEqual(t, first.HashKeyID(), different.HashKeyID())
+	require.Len(t, first.HashKeyID(), 16)
+}
+
 func TestState_AddEvent_StaleIPsPruned(t *testing.T) {
 	s := newState("dummy-test-key")
 	shortTTL := 50 * time.Millisecond
 
 	past := time.Now().Add(-1 * time.Second) // already expired
-	s.AddEvent("u@x.com", "old.ip", shortTTL, past)
+	s.AddEvent("u@x.com", "10.0.0.1", shortTTL, past)
 
 	now := time.Now()
-	count := s.AddEvent("u@x.com", "new.ip", shortTTL, now)
+	count := s.AddEvent("u@x.com", "10.0.0.2", shortTTL, now)
 
 	// old.ip must have been pruned during the AddEvent call.
 	assert.Equal(t, 1, count, "stale IPs should be evicted inline")

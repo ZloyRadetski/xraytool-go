@@ -19,7 +19,11 @@ func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
 				return fmt.Errorf("failed to load config")
 			}
 
-			if !deps.Cfg.AntiFraud.Enabled {
+			enabled := deps.Cfg.AntiFraud.Enabled
+			if entry, ok := deps.Cfg.Plugins["antifraud"]; ok {
+				enabled = entry.Enabled
+			}
+			if !enabled {
 				fmt.Println("Anti-Fraud is DISABLED in config.")
 				return nil
 			}
@@ -52,6 +56,7 @@ func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
 				Enabled      bool                `json:"enabled"`
 				State        map[string][]string `json:"state"`
 				ActiveSlaves int                 `json:"active_slaves"`
+				HashKeyID    string              `json:"hash_key_id"`
 			}
 
 			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -64,6 +69,9 @@ func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			fmt.Printf("Active Slaves reporting stats: %d\n\n", result.ActiveSlaves)
+			if result.HashKeyID != "" {
+				fmt.Printf("IP hash key ID: %s\n\n", result.HashKeyID)
+			}
 			if len(result.State) == 0 {
 				fmt.Println("No active users tracked by AntiFraud in the current time window.")
 				return nil

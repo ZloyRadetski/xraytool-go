@@ -133,3 +133,69 @@ func TestStoreAggregatesReportedSlaveStatistics(t *testing.T) {
 	require.Equal(t, domain.SlaveReport{Enabled: true, TotalServers: 2, OKServers: 2}, report)
 	require.Equal(t, []domain.SlaveUserTotal{{Email: "traffic@example.test", Slave: 150}}, totals)
 }
+
+func TestStorePersistsFraudEventsUntilExplicitAcknowledgement(t *testing.T) {
+	store := newTestStore(t)
+	occurredAt := time.Now().UTC().Add(-time.Second)
+	queued, err := store.EnqueueFraudEvents(context.Background(), []pluginapi.FraudEvent{
+		{Email: "user@example.test", IP: "hash-one", OccurredAt: occurredAt},
+		{Email: "user@example.test", IP: "hash-two", OccurredAt: occurredAt},
+	})
+	require.NoError(t, err)
+	require.Len(t, queued, 2)
+	require.NotEmpty(t, queued[0].ID)
+	require.NotEqual(t, queued[0].ID, queued[1].ID)
+
+	pending, err := store.PendingFraudEvents(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, queued, pending)
+
+	require.NoError(t, store.AcknowledgeFraudEvents(context.Background(), []string{queued[0].ID, queued[0].ID, ""}))
+	pending, err = store.PendingFraudEvents(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, []FraudEvent{queued[1]}, pending)
+}
+
+func TestStoreFraudReceiptsAreNodeScopedAndIdempotent(t *testing.T) {
+	store := newTestStore(t)
+	events := []FraudEvent{{
+		ID:         "event-1",
+		Email:      "user@example.test",
+		IP:         "stable-ip-hash",
+		OccurredAt: time.Now().UTC(),
+	}}
+
+	pending, err := store.UnreceivedFraudEvents(context.Background(), "slave-a", events)
+	require.NoError(t, err)
+	require.Equal(t, events, pending)
+	require.NoError(t, store.MarkFraudReceived(context.Background(), "slave-a", pending))
+	require.NoError(t, store.MarkFraudReceived(context.Background(), "slave-a", pending))
+
+	pending, err = store.UnreceivedFraudEvents(context.Background(), "slave-a", events)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	pending, err = store.UnreceivedFraudEvents(context.Background(), "slave-b", events)
+	require.NoError(t, err)
+	require.Equal(t, events, pending)
+}
+
+func TestPluginFraudEventsPersistWhileSlaveIsDisconnected(t *testing.T) {
+	store := newTestStore(t)
+	plugin := &Plugin{
+		config:  Config{Mode: "slave"},
+		service: &Service{store: store},
+	}
+
+	require.NoError(t, plugin.ReportFraudEvents(context.Background(), []pluginapi.FraudEvent{{
+		Email:      "user@example.test",
+		IP:         "stable-ip-hash",
+		OccurredAt: time.Now().UTC(),
+		HashKeyID:  "key-id",
+	}}))
+
+	pending, err := store.PendingFraudEvents(context.Background(), 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, "stable-ip-hash", pending[0].IP)
+	require.Equal(t, "key-id", pending[0].HashKeyID)
+}

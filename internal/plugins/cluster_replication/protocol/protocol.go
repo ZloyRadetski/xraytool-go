@@ -23,6 +23,7 @@ const (
 	KindStatus
 	KindError
 	KindFraudEvents
+	KindFraudAck
 	KindStats
 )
 

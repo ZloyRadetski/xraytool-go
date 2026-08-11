@@ -162,8 +162,9 @@ type EventPropagator interface {
 }
 
 type FraudEvent struct {
-	Email string
-	IP    string
+	Email      string
+	IP         string
+	OccurredAt time.Time
 }
 
 // FraudEventReporter is the driven port used by slave nodes to report

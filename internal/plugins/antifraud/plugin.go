@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
@@ -85,6 +86,9 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg pluginapi.ServiceResolver) error {
 	p.log = slog.Default().With("plugin", "antifraud")
 	p.cfg = parseConfig(rawCfg)
+	if !p.cfg.HashSecretConfigured {
+		p.log.Warn("antifraud: salt_secret is not configured; set one strong identical value on the master and every reporting slave", "hash_key_id", newState(p.cfg.APIKey).HashKeyID())
+	}
 
 	registry := p.runtime.Registry
 	if registry == nil && reg != nil {
@@ -102,7 +106,7 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 	if reporter == nil && p.cfg.ReportToMaster && reg != nil {
 		if value, resolveErr := reg.Resolve(pluginapi.ServiceClusterReplicationProvider); resolveErr == nil {
 			if relay, ok := value.(pluginapi.ReplicationFraudRelay); ok {
-				reporter = replicationFraudReporter{relay: relay}
+				reporter = replicationFraudReporter{relay: relay, hashKeyID: newState(p.cfg.APIKey).HashKeyID()}
 			}
 		}
 	}
@@ -131,13 +135,14 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 }
 
 type replicationFraudReporter struct {
-	relay pluginapi.ReplicationFraudRelay
+	relay     pluginapi.ReplicationFraudRelay
+	hashKeyID string
 }
 
 func (r replicationFraudReporter) Report(events []domain.FraudEvent) error {
 	payload := make([]pluginapi.FraudEvent, len(events))
 	for index, event := range events {
-		payload[index] = pluginapi.FraudEvent{Email: event.Email, IP: event.IP}
+		payload[index] = pluginapi.FraudEvent{Email: event.Email, IP: event.IP, OccurredAt: event.OccurredAt, HashKeyID: r.hashKeyID}
 	}
 	return r.relay.ReportFraudEvents(context.Background(), payload)
 }
@@ -238,21 +243,25 @@ func (p *Plugin) Snapshot(_ context.Context) (map[string]any, error) {
 	return map[string]any{
 		"state":         snap.State,
 		"active_slaves": snap.ActiveSlaves,
+		"hash_key_id":   snap.HashKeyID,
 	}, nil
 }
 
 // IngestEvents processes a batch of suspicious-IP events from slave nodes.
 // Bridges pluginapi.FraudEvent → domain.FraudEvent.
-func (p *Plugin) IngestEvents(_ context.Context, sourceID string, events []pluginapi.FraudEvent) error {
+func (p *Plugin) IngestEvents(ctx context.Context, sourceID string, events []pluginapi.FraudEvent) error {
 	if p.module == nil {
 		return nil
 	}
+	expectedHashKeyID := p.module.GetSnapshot().HashKeyID
 	domainEvts := make([]domain.FraudEvent, len(events))
 	for i, e := range events {
-		domainEvts[i] = domain.FraudEvent{Email: e.Email, IP: e.IP}
+		if e.HashKeyID != "" && e.HashKeyID != expectedHashKeyID {
+			return fmt.Errorf("antifraud IP hash key mismatch from %s: got %s, want %s", sourceID, e.HashKeyID, expectedHashKeyID)
+		}
+		domainEvts[i] = domain.FraudEvent{Email: e.Email, IP: e.IP, OccurredAt: e.OccurredAt}
 	}
-	p.module.IngestEvents(sourceID, domainEvts)
-	return nil
+	return p.module.IngestEvents(ctx, sourceID, domainEvts)
 }
 
 // ── Convenience accessors (used by kernel in Phase 1) ────────────────────────
@@ -277,6 +286,7 @@ func parseConfig(raw pluginapi.RawConfig) *Config {
 		LogRotationSizeMB:     50,
 		LogRotationMaxAge:     "5m",
 		APIKey:                "xraytool_default_antifraud_salt_secret",
+		HashSecretConfigured:  false,
 	}
 	if raw == nil {
 		return cfg
@@ -308,8 +318,9 @@ func parseConfig(raw pluginapi.RawConfig) *Config {
 	if v, ok := raw["report_to_master"].(bool); ok {
 		cfg.ReportToMaster = v
 	}
-	if v, ok := raw["salt_secret"].(string); ok && v != "" {
-		cfg.APIKey = v
+	if v, ok := raw["salt_secret"].(string); ok && strings.TrimSpace(v) != "" {
+		cfg.APIKey = strings.TrimSpace(v)
+		cfg.HashSecretConfigured = true
 	}
 	if v, ok := raw["is_master"].(bool); ok {
 		cfg.IsMaster = v

@@ -21,6 +21,7 @@ import (
 	"gorm.io/gorm"
 	"xraytool/internal/database"
 	"xraytool/internal/domain"
+	"xraytool/internal/pluginapi"
 	vpn "xraytool/internal/plugins/engine_xray"
 )
 
@@ -274,6 +275,23 @@ func TestHandleEvent_SameIPRepeated_NoBan(t *testing.T) {
 
 // TestModule_IngestEvents_ValidEvents проверяет что валидные события попадают
 // в eventCh и обрабатываются анализатором.
+func startModuleAnalyzer(t *testing.T, m *Module, cfg *Config, maxIPs int) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.readyMu.Do(func() { close(m.ready) })
+	analyzer := newAnalyzer(cfg, m.state, m.banStore, m.eventCh, 3*time.Minute, maxIPs, m.registry, m.banner, m.propagator, m.reporter, slog.Default())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		analyzer.run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return ctx
+}
+
 func TestModule_IngestEvents_ValidEvents(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
@@ -284,16 +302,18 @@ func TestModule_IngestEvents_ValidEvents(t *testing.T) {
 		IPLimitTTL:  "3m",
 	}
 	m := NewModule(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	ctx := startModuleAnalyzer(t, m, cfg, 3)
 
 	events := []domain.FraudEvent{
-		{Email: "slave@x.com", IP: "10.0.0.1"},
-		{Email: "slave@x.com", IP: "10.0.0.2"},
+		{Email: "slave@x.com", IP: m.state.HashIP("10.0.0.1"), OccurredAt: time.Now().UTC()},
+		{Email: "slave@x.com", IP: m.state.HashIP("10.0.0.2"), OccurredAt: time.Now().UTC()},
 	}
 
-	m.IngestEvents("1.1.1.1", events)
+	require.NoError(t, m.IngestEvents(ctx, "slave-a", events))
 
 	// События должны были попасть в канал
-	require.Equal(t, 2, len(m.eventCh), "IngestEvents must not block and channel must enqueue events")
+	require.Equal(t, 2, m.state.ActiveIPCount("slave@x.com"))
+	require.Equal(t, 1, m.GetSnapshot().ActiveSlaves)
 }
 
 // TestModule_IngestEvents_SkipsInvalid проверяет что события с пустыми
@@ -302,16 +322,37 @@ func TestModule_IngestEvents_SkipsInvalid(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	m := NewModule(&Config{}, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	cfg := &Config{IPLimitTTL: "3m"}
+	m := NewModule(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	ctx := startModuleAnalyzer(t, m, cfg, 3)
 	initialLen := len(m.eventCh)
 
-	m.IngestEvents("1.1.1.1", []domain.FraudEvent{
+	m.IngestEvents(ctx, "1.1.1.1", []domain.FraudEvent{
 		{Email: "", IP: "1.1.1.1"}, // пустой email
 		{Email: "u@x.com", IP: ""}, // пустой IP
 		{Email: "", IP: ""},        // оба пустых
 	})
 
 	assert.Equal(t, initialLen, len(m.eventCh), "invalid events must not be enqueued")
+}
+
+func TestPluginIngestEventsRejectsDifferentClusterHashKey(t *testing.T) {
+	db := setupTestDB(t)
+	defer closeSQLite(t, db)
+
+	cfg := &Config{IPLimitTTL: "3m", APIKey: "master-cluster-secret"}
+	module := NewModule(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	ctx := startModuleAnalyzer(t, module, cfg, 3)
+	plugin := &Plugin{module: module}
+
+	err := plugin.IngestEvents(ctx, "slave-a", []pluginapi.FraudEvent{{
+		Email:      "user@example.test",
+		IP:         newState("slave-cluster-secret").HashIP("203.0.113.7"),
+		OccurredAt: time.Now().UTC(),
+		HashKeyID:  newState("slave-cluster-secret").HashKeyID(),
+	}})
+	require.ErrorContains(t, err, "IP hash key mismatch")
+	require.Zero(t, module.state.ActiveIPCount("user@example.test"))
 }
 
 // TestModule_IngestEvents_FullChannel_DoesNotBlock проверяет что при
@@ -321,6 +362,7 @@ func TestModule_IngestEvents_FullChannel_DoesNotBlock(t *testing.T) {
 	defer closeSQLite(t, db)
 
 	m := NewModule(&Config{}, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	m.readyMu.Do(func() { close(m.ready) })
 
 	// Заполняем канал до предела
 	for i := 0; i < cap(m.eventCh); i++ {
@@ -329,14 +371,14 @@ func TestModule_IngestEvents_FullChannel_DoesNotBlock(t *testing.T) {
 	assert.Equal(t, cap(m.eventCh), len(m.eventCh), "pre-condition: channel must be full")
 
 	// IngestEvents должен вернуться мгновенно, не блокируясь
-	done := make(chan struct{})
+	errs := make(chan error, 1)
 	go func() {
-		m.IngestEvents("1.1.1.1", []domain.FraudEvent{{Email: "new@x.com", IP: "5.5.5.5"}})
-		close(done)
+		errs <- m.IngestEvents(context.Background(), "1.1.1.1", []domain.FraudEvent{{Email: "new@x.com", IP: "5.5.5.5"}})
 	}()
 
 	select {
-	case <-done:
+	case err := <-errs:
+		require.Error(t, err)
 		// ok — вернулся без блокировки
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("IngestEvents blocked on full channel")
@@ -349,19 +391,28 @@ func TestModule_IngestEvents_ConcurrentCalls(t *testing.T) {
 	db := setupTestDB(t)
 	defer closeSQLite(t, db)
 
-	m := NewModule(&Config{}, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	cfg := &Config{IPLimitTTL: "3m"}
+	m := NewModule(cfg, database.NewRegistry(db), &vpn.NoopEngine{}, &vpn.NoopEngine{}, nil, nil, slog.Default())
+	ctx := startModuleAnalyzer(t, m, cfg, 3)
+	errs := make(chan error, 20)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			m.IngestEvents("1.1.1.1", []domain.FraudEvent{
-				{Email: fmt.Sprintf("u%d@x.com", n), IP: generateIP(n)},
-			})
+			errs <- m.IngestEvents(ctx, "slave-a", []domain.FraudEvent{{
+				Email:      fmt.Sprintf("u%d@x.com", n),
+				IP:         m.state.HashIP(generateIP(n)),
+				OccurredAt: time.Now().UTC(),
+			}})
 		}(i)
 	}
-	wg.Wait() // не должно быть дедлоков, паник или гонок
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -421,6 +472,7 @@ func TestIntegration_SlaveEvents_TriggerBan(t *testing.T) {
 	// Стартуем только анализатор (без tailer и rotator)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	m.readyMu.Do(func() { close(m.ready) })
 
 	an := newAnalyzer(cfg, m.state, m.banStore, m.eventCh, 3*time.Minute, 2, database.NewRegistry(db), &vpn.NoopEngine{}, nil, nil, slog.Default())
 	var wg sync.WaitGroup
@@ -433,10 +485,10 @@ func TestIntegration_SlaveEvents_TriggerBan(t *testing.T) {
 	defer cancel()
 
 	// Инжектируем события как если бы они пришли со slave
-	m.IngestEvents("1.1.1.1", []domain.FraudEvent{
-		{Email: email, IP: "10.1.1.1"},
-		{Email: email, IP: "10.1.1.2"},
-	})
+	require.NoError(t, m.IngestEvents(ctx, "slave-a", []domain.FraudEvent{
+		{Email: email, IP: m.state.HashIP("10.1.1.1"), OccurredAt: time.Now().UTC()},
+		{Email: email, IP: m.state.HashIP("10.1.1.2"), OccurredAt: time.Now().UTC()},
+	}))
 	// Пока не бан — порог не превышен
 
 	require.Eventually(t, func() bool {
@@ -446,9 +498,9 @@ func TestIntegration_SlaveEvents_TriggerBan(t *testing.T) {
 	assert.False(t, m.IsBanned(email), "2 IPs at threshold 2 must not ban")
 
 	// Третий IP — должен вызвать бан
-	m.IngestEvents("1.1.1.1", []domain.FraudEvent{
-		{Email: email, IP: "10.1.1.3"},
-	})
+	require.NoError(t, m.IngestEvents(ctx, "slave-a", []domain.FraudEvent{{
+		Email: email, IP: m.state.HashIP("10.1.1.3"), OccurredAt: time.Now().UTC(),
+	}}))
 
 	// Даём анализатору время среагировать
 	require.Eventually(t, func() bool {

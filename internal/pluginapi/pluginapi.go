@@ -398,8 +398,12 @@ type CoreProvider interface {
 // FraudEvent is a single suspicious IP observation reported by a slave node or
 // read from the engine's access log.
 type FraudEvent struct {
-	Email string
-	IP    string
+	Email      string    `json:"email"`
+	IP         string    `json:"ip"`
+	OccurredAt time.Time `json:"occurred_at,omitempty"`
+	// HashKeyID identifies the non-secret cluster HMAC key that produced IP.
+	// The master uses it to reject accidental cross-node salt mismatches.
+	HashKeyID string `json:"hash_key_id,omitempty"`
 }
 
 // BanUpdateSink is the reverse channel through which an AntifraudProvider

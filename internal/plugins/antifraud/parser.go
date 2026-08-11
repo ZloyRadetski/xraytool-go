@@ -13,9 +13,11 @@ import (
 // event represents a parsed connection event from the Xray access log.
 // Both fields are guaranteed non-empty by the parser before sending.
 type event struct {
-	email    string
-	ip       string
-	isHashed bool
+	email      string
+	ip         string
+	isHashed   bool
+	occurredAt time.Time
+	done       chan error
 }
 
 // --- Parser constants ---
@@ -231,8 +233,9 @@ func (t *tailer) run(ctx context.Context) {
 			}
 			// We must copy the sub-slices because the Scanner reuses its buffer.
 			e := event{
-				email: string(rawEmail),
-				ip:    string(rawIP),
+				email:      string(rawEmail),
+				ip:         string(rawIP),
+				occurredAt: time.Now().UTC(),
 			}
 			select {
 			case t.out <- e:

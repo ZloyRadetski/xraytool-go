@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"xraytool/internal/domain"
+	"xraytool/internal/pluginapi"
 )
 
 const (
@@ -92,11 +95,44 @@ type replicaStatsRow struct {
 
 func (replicaStatsRow) TableName() string { return "cluster_replication_stats" }
 
+type fraudOutboxRow struct {
+	EventID    string    `gorm:"column:event_id;primaryKey"`
+	Email      string    `gorm:"column:email"`
+	IPHash     string    `gorm:"column:ip_hash"`
+	HashKeyID  string    `gorm:"column:hash_key_id"`
+	OccurredAt time.Time `gorm:"column:occurred_at"`
+	CreatedAt  time.Time `gorm:"column:created_at"`
+}
+
+func (fraudOutboxRow) TableName() string { return "cluster_replication_fraud_outbox" }
+
+type fraudInboxRow struct {
+	NodeID     string    `gorm:"column:node_id;primaryKey"`
+	EventID    string    `gorm:"column:event_id;primaryKey"`
+	Email      string    `gorm:"column:email"`
+	IPHash     string    `gorm:"column:ip_hash"`
+	HashKeyID  string    `gorm:"column:hash_key_id"`
+	OccurredAt time.Time `gorm:"column:occurred_at"`
+	ReceivedAt time.Time `gorm:"column:received_at"`
+}
+
+func (fraudInboxRow) TableName() string { return "cluster_replication_fraud_inbox" }
+
 type Event struct {
 	Revision int64
 	Kind     string
 	Payload  []byte
 	Checksum string
+}
+
+// FraudEvent is an opaque, already-hashed observation persisted by the
+// replication plugin. IP is never a raw address at this boundary.
+type FraudEvent struct {
+	ID         string    `json:"id"`
+	Email      string    `json:"email"`
+	IP         string    `json:"ip"`
+	OccurredAt time.Time `json:"occurred_at"`
+	HashKeyID  string    `json:"hash_key_id,omitempty"`
 }
 
 type Store struct{ db *gorm.DB }
@@ -219,6 +255,156 @@ func (s *Store) AcknowledgeReplica(ctx context.Context, nodeID string, revision 
 	}
 	row.LastSeenAt = time.Now().UTC()
 	return s.db.WithContext(ctx).Save(&row).Error
+}
+
+// EnqueueFraudEvents persists slave observations before they are sent on the
+// gRPC stream. A successful return means a temporary transport failure cannot
+// lose the event.
+func (s *Store) EnqueueFraudEvents(ctx context.Context, events []pluginapi.FraudEvent) ([]FraudEvent, error) {
+	queued := make([]FraudEvent, 0, len(events))
+	if len(events) == 0 {
+		return queued, nil
+	}
+	now := time.Now().UTC()
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for index, event := range events {
+			if event.Email == "" || event.IP == "" {
+				return fmt.Errorf("invalid anti-fraud event")
+			}
+			occurredAt := event.OccurredAt.UTC()
+			if occurredAt.IsZero() {
+				occurredAt = now
+			}
+			queuedEvent := FraudEvent{
+				ID:         uuid.New().String(),
+				Email:      event.Email,
+				IP:         event.IP,
+				OccurredAt: occurredAt,
+				HashKeyID:  event.HashKeyID,
+			}
+			// The plugin serializes enqueue calls. Give rows in one batch distinct
+			// timestamps so the portable created_at ordering remains deterministic
+			// on SQLite and PostgreSQL without a database-specific sequence column.
+			createdAt := now.Add(time.Duration(index) * time.Microsecond)
+			if err := tx.Create(&fraudOutboxRow{
+				EventID:    queuedEvent.ID,
+				Email:      queuedEvent.Email,
+				IPHash:     queuedEvent.IP,
+				HashKeyID:  queuedEvent.HashKeyID,
+				OccurredAt: queuedEvent.OccurredAt,
+				CreatedAt:  createdAt,
+			}).Error; err != nil {
+				return fmt.Errorf("enqueue replication anti-fraud event: %w", err)
+			}
+			queued = append(queued, queuedEvent)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return queued, nil
+}
+
+// PendingFraudEvents returns the oldest unacknowledged local observations.
+func (s *Store) PendingFraudEvents(ctx context.Context, limit int) ([]FraudEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var rows []fraudOutboxRow
+	if err := s.db.WithContext(ctx).Order("created_at ASC, event_id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("read replication anti-fraud outbox: %w", err)
+	}
+	result := make([]FraudEvent, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, FraudEvent{
+			ID:         row.EventID,
+			Email:      row.Email,
+			IP:         row.IPHash,
+			OccurredAt: row.OccurredAt.UTC(),
+			HashKeyID:  row.HashKeyID,
+		})
+	}
+	return result, nil
+}
+
+// AcknowledgeFraudEvents removes only the rows explicitly accepted by the
+// master. Unknown IDs are harmless, which makes ACK replay idempotent.
+func (s *Store) AcknowledgeFraudEvents(ctx context.Context, eventIDs []string) error {
+	ids := nonEmptyStrings(eventIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := s.db.WithContext(ctx).Where("event_id IN ?", ids).Delete(&fraudOutboxRow{}).Error; err != nil {
+		return fmt.Errorf("acknowledge replication anti-fraud events: %w", err)
+	}
+	return nil
+}
+
+// UnreceivedFraudEvents filters a retried batch against master-side durable
+// receipts. The returned events are safe to submit to the anti-fraud provider.
+func (s *Store) UnreceivedFraudEvents(ctx context.Context, nodeID string, events []FraudEvent) ([]FraudEvent, error) {
+	if nodeID == "" {
+		return nil, fmt.Errorf("replication anti-fraud source node is required")
+	}
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.ID == "" || event.Email == "" || event.IP == "" {
+			return nil, fmt.Errorf("invalid replicated anti-fraud event")
+		}
+		ids = append(ids, event.ID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []fraudInboxRow
+	if err := s.db.WithContext(ctx).Where("node_id = ? AND event_id IN ?", nodeID, ids).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("read replication anti-fraud receipts: %w", err)
+	}
+	received := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		received[row.EventID] = struct{}{}
+	}
+	result := make([]FraudEvent, 0, len(events))
+	for _, event := range events {
+		if _, exists := received[event.ID]; !exists {
+			result = append(result, event)
+		}
+	}
+	return result, nil
+}
+
+// MarkFraudReceived writes idempotency receipts only after the anti-fraud
+// provider has accepted the events. A failed provider call therefore leaves
+// the slave queue intact for retry.
+func (s *Store) MarkFraudReceived(ctx context.Context, nodeID string, events []FraudEvent) error {
+	if nodeID == "" {
+		return fmt.Errorf("replication anti-fraud source node is required")
+	}
+	now := time.Now().UTC()
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, event := range events {
+			if event.ID == "" || event.Email == "" || event.IP == "" {
+				return fmt.Errorf("invalid replicated anti-fraud event")
+			}
+			occurredAt := event.OccurredAt.UTC()
+			if occurredAt.IsZero() {
+				occurredAt = now
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&fraudInboxRow{
+				NodeID:     nodeID,
+				EventID:    event.ID,
+				Email:      event.Email,
+				IPHash:     event.IP,
+				HashKeyID:  event.HashKeyID,
+				OccurredAt: occurredAt,
+				ReceivedAt: now,
+			}).Error; err != nil {
+				return fmt.Errorf("record replication anti-fraud receipt: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // PruneAcknowledged removes journal rows only when every currently permitted
@@ -419,4 +605,20 @@ func contains(value, needle string) bool {
 		}
 	}
 	return false
+}
+
+func nonEmptyStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

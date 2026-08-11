@@ -7,6 +7,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,64 +38,67 @@ type userIPState struct {
 //   - Empty email/ip: guarded by callers (parser.go guarantees non-empty values).
 //   - Large IP churn: Clean runs every 15s, preventing unbounded map growth.
 type State struct {
-	mu       sync.Mutex
-	apiKey   string
-	saltDate string
-	salt     []byte
-	users    map[string]*userIPState
+	mu         sync.Mutex
+	hashSecret []byte
+	users      map[string]*userIPState
 }
 
-// newState allocates an empty State and initializes the salt.
-func newState(apiKey string) *State {
-	s := &State{
-		apiKey: apiKey,
-		users:  make(map[string]*userIPState, 64),
+// newState allocates an empty State. hashSecret must be shared by every node
+// in a cluster. It is deliberately stable for the full IP-limit window: a
+// daily salt made one address become two different identities at UTC midnight.
+func newState(hashSecret string) *State {
+	return &State{
+		hashSecret: []byte(hashSecret),
+		users:      make(map[string]*userIPState, 64),
 	}
-	s.updateSaltLocked(time.Now().UTC())
-	return s
 }
 
-// updateSaltLocked recalculates the salt if the UTC date has changed.
-func (s *State) updateSaltLocked(now time.Time) {
-	dateStr := now.Format("2006-01-02")
-	if s.saltDate == dateStr && s.salt != nil {
-		return
-	}
-	// Deterministic salt: HMAC-SHA256(Date, APIKey)
-	mac := hmac.New(sha256.New, []byte(s.apiKey))
-	mac.Write([]byte(dateStr))
-	s.salt = mac.Sum(nil)
-	s.saltDate = dateStr
-}
-
-// HashIP computes a salted SHA-256 hash of the IP address.
+// HashIP canonicalizes an address and returns its cluster-stable HMAC. The
+// source address never leaves a slave, while IPv4-mapped IPv6 and alternate
+// IPv6 spellings resolve to one identity on every node.
+//
+// An empty result means ip was not a valid IP literal and must be ignored.
 func (s *State) HashIP(ip string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.updateSaltLocked(time.Now().UTC())
-	return s.hashIPLocked(ip)
+	canonical, ok := canonicalIP(ip)
+	if !ok {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.hashSecret)
+	_, _ = mac.Write([]byte(canonical))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// hashIPLocked computes the hash while the lock is already held.
-func (s *State) hashIPLocked(ip string) string {
-	h := sha256.New()
-	h.Write([]byte(ip))
-	h.Write(s.salt)
-	return hex.EncodeToString(h.Sum(nil))
+// HashKeyID returns a non-secret identifier that operators can compare across
+// master and slaves. It intentionally hashes a fixed label rather than an IP.
+func (s *State) HashKeyID() string {
+	mac := hmac.New(sha256.New, s.hashSecret)
+	_, _ = mac.Write([]byte("xraytool-antifraud-key-id-v2"))
+	return hex.EncodeToString(mac.Sum(nil))[:16]
+}
+
+func canonicalIP(raw string) (string, bool) {
+	address, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil || !address.IsValid() {
+		return "", false
+	}
+	return address.Unmap().String(), true
 }
 
 // AddEvent records a connection event for the given email+IP pair (raw IP).
 // Callers: Analyzer.handleEvent (on Master)
 func (s *State) AddEvent(email, ip string, ttl time.Duration, now time.Time) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.updateSaltLocked(now.UTC())
-	ipHash := s.hashIPLocked(ip)
-	return s.addHashedEventLocked(email, ipHash, ttl, now)
+	ipHash := s.HashIP(ip)
+	if ipHash == "" {
+		return s.ActiveIPCount(email)
+	}
+	return s.AddHashedEvent(email, ipHash, ttl, now)
 }
 
 // AddHashedEvent records an event where the IP is already hashed (from Slave).
 func (s *State) AddHashedEvent(email, ipHash string, ttl time.Duration, now time.Time) int {
+	if ipHash == "" {
+		return s.ActiveIPCount(email)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.addHashedEventLocked(email, ipHash, ttl, now)
@@ -107,7 +112,10 @@ func (s *State) addHashedEventLocked(email, ipHash string, ttl time.Duration, no
 		s.users[email] = u
 	}
 
-	u.ips[ipHash] = ipEntry{lastSeen: now}
+	// Out-of-order replay must not make a newer observation look older.
+	if previous, exists := u.ips[ipHash]; !exists || previous.lastSeen.Before(now) {
+		u.ips[ipHash] = ipEntry{lastSeen: now}
+	}
 
 	// Inline TTL pruning on every write to keep the hot path O(active IPs),
 	// not O(all ever-seen IPs). This avoids the Clean goroutine having to

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	antifraudPlugin "xraytool/internal/plugins/antifraud"
 	"xraytool/internal/pluginapi"
+	antifraudPlugin "xraytool/internal/plugins/antifraud"
 )
 
 func TestAntifraud_Metadata(t *testing.T) {
@@ -69,6 +69,24 @@ func TestAntifraud_Init_ParsesConfig(t *testing.T) {
 	}
 	if cfg.SuspiciousIPThreshold != 5 {
 		t.Errorf("max_ips = %d, want 5", cfg.SuspiciousIPThreshold)
+	}
+}
+
+func TestAntifraud_Init_TracksExplicitSharedHashSecret(t *testing.T) {
+	t.Parallel()
+	p := antifraudPlugin.New()
+	err := p.Init(context.Background(), pluginapi.RawConfig{
+		"salt_secret": "  shared-cluster-secret  ",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+	cfg := p.Config()
+	if !cfg.HashSecretConfigured {
+		t.Error("salt_secret should be marked as explicitly configured")
+	}
+	if cfg.APIKey != "shared-cluster-secret" {
+		t.Errorf("salt_secret = %q, want trimmed configured value", cfg.APIKey)
 	}
 }
 

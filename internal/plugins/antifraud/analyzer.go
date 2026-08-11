@@ -99,23 +99,50 @@ func (a *analyzer) run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			a.handleEvent(e)
+			err := a.handleEvent(e)
+			if err != nil {
+				a.log.Warn("antifraud: event processing failed", "email", e.email, "err", err)
+			}
+			if e.done != nil {
+				select {
+				case e.done <- err:
+				default:
+				}
+			}
 		}
 	}
 }
 
-func (a *analyzer) handleEvent(e event) {
+func (a *analyzer) handleEvent(e event) error {
 	// Skip users who are already banned — no need to keep counting their IPs.
 	if a.banStore.isBanned(e.email) {
-		return
+		return nil
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
+	occurredAt := e.occurredAt.UTC()
+	if occurredAt.IsZero() {
+		occurredAt = now
+	}
+	if occurredAt.After(now) {
+		occurredAt = now
+	}
+	if occurredAt.Before(now.Add(-a.ipTTL)) {
+		a.log.Debug("antifraud: ignoring stale IP observation", "email", e.email)
+		return nil
+	}
+
 	var count int
+	ipHash := e.ip
 	if e.isHashed {
-		count = a.state.AddHashedEvent(e.email, e.ip, a.ipTTL, now)
+		count = a.state.AddHashedEvent(e.email, ipHash, a.ipTTL, occurredAt)
 	} else {
-		count = a.state.AddEvent(e.email, e.ip, a.ipTTL, now)
+		ipHash = a.state.HashIP(e.ip)
+		if ipHash == "" {
+			a.log.Debug("antifraud: ignoring invalid source IP", "email", e.email)
+			return nil
+		}
+		count = a.state.AddHashedEvent(e.email, ipHash, a.ipTTL, occurredAt)
 	}
 
 	// Dynamic threshold: base limit × number of devices the user is allowed.
@@ -124,17 +151,13 @@ func (a *analyzer) handleEvent(e event) {
 
 	// Forward to master for global aggregation (slave mode only, fire-and-forget).
 	if a.reporter != nil {
-		// Slave hashes the IP *before* sending to master to prevent raw IP from traversing the network.
-		// If e.isHashed is already true, we just send it. If false, we hash it.
-		ipToSend := e.ip
-		if !e.isHashed {
-			ipToSend = a.state.HashIP(e.ip)
+		if err := a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: ipHash, OccurredAt: occurredAt}}); err != nil {
+			return fmt.Errorf("queue anti-fraud event for master: %w", err)
 		}
-		a.reporter.Report([]domain.FraudEvent{{Email: e.email, IP: ipToSend}}) //nolint:errcheck
 		// If this slave is configured to report to master, the master makes the final
 		// decision. We skip local enforcement because the slave doesn't have the full DB
 		// (so it doesn't know the user's real max_devices).
-		return
+		return nil
 	}
 
 	if count > threshold {
@@ -149,11 +172,12 @@ func (a *analyzer) handleEvent(e event) {
 				)
 				a.dryRunLogTime[e.email] = now
 			}
-			return
+			return nil
 		}
 
 		a.enforce(e.email, reason)
 	}
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

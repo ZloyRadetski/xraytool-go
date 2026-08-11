@@ -11,6 +11,7 @@ package antifraud_plugin
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -98,7 +99,10 @@ type Config struct {
 	ReportToMaster        bool
 
 	IsMaster bool
-	APIKey   string
+	// APIKey is retained as the internal name for compatibility. It is the
+	// cluster-wide HMAC key for IP identities, not an HTTP API key.
+	APIKey               string
+	HashSecretConfigured bool
 }
 
 // Module is the public API for the anti-fraud component.
@@ -115,6 +119,8 @@ type Module struct {
 
 	// Channels
 	eventCh chan event
+	ready   chan struct{}
+	readyMu sync.Once
 
 	// slave tracking
 	slavesMu     sync.Mutex
@@ -135,6 +141,7 @@ func NewModule(cfg *Config, registry domain.Registry, banner domain.SoftBanner, 
 		state:        newState(cfg.APIKey),
 		activeSlaves: make(map[string]time.Time),
 		eventCh:      make(chan event, 1000),
+		ready:        make(chan struct{}),
 	}
 }
 
@@ -155,6 +162,7 @@ func (m *Module) SetBanSink(sink BanUpdateSink) {
 type SnapshotData struct {
 	State        map[string][]string `json:"state"`
 	ActiveSlaves int                 `json:"active_slaves"`
+	HashKeyID    string              `json:"hash_key_id"`
 }
 
 // GetSnapshot returns the current state of active IP counts and active slave nodes.
@@ -175,30 +183,58 @@ func (m *Module) GetSnapshot() SnapshotData {
 	return SnapshotData{
 		State:        m.state.Snapshot(),
 		ActiveSlaves: activeCount,
+		HashKeyID:    m.state.HashKeyID(),
 	}
 }
 
-// IngestEvents is the integration point for the slave → master IP aggregation feature.
-// It is called from the internal HTTP handler (handlers_internal.go) when the
-// master receives an "antifraud-events" action from a slave.
-func (m *Module) IngestEvents(slaveID string, events []domain.FraudEvent) {
+// IngestEvents is the master-side integration point for slave IP aggregation.
+// cluster_replication calls it only after receiving an authenticated gRPC
+// frame; a successful return means the analyzer has processed the batch.
+func (m *Module) IngestEvents(ctx context.Context, slaveID string, events []domain.FraudEvent) error {
+	select {
+	case <-m.ready:
+	default:
+		return fmt.Errorf("antifraud processor is not ready")
+	}
+
+	for _, incoming := range events {
+		if incoming.Email == "" || incoming.IP == "" {
+			continue
+		}
+		occurredAt := incoming.OccurredAt.UTC()
+		if occurredAt.IsZero() {
+			occurredAt = time.Now().UTC()
+		}
+		completion := make(chan error, 1)
+		select {
+		case m.eventCh <- event{
+			email:      incoming.Email,
+			ip:         incoming.IP,
+			isHashed:   true,
+			occurredAt: occurredAt,
+			done:       completion,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return fmt.Errorf("antifraud event queue is full")
+		}
+		select {
+		case err := <-completion:
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	if slaveID != "" {
 		m.slavesMu.Lock()
 		m.activeSlaves[slaveID] = time.Now()
 		m.slavesMu.Unlock()
 	}
-
-	for _, e := range events {
-		if e.Email == "" || e.IP == "" {
-			continue
-		}
-		// The IP is already hashed by the Slave. Pass it to a special channel or just use IsHashed=true.
-		// Wait, event struct only has email and ip. Let's add isHashed to event.
-		select {
-		case m.eventCh <- event{email: e.Email, ip: e.IP, isHashed: true}:
-		default:
-		}
-	}
+	return nil
 }
 
 // ForceUnban immediately lifts the ban for an email.
@@ -237,6 +273,7 @@ func (m *Module) Run(ctx context.Context) {
 		slog.Int("max_ips", m.cfg.SuspiciousIPThreshold),
 		slog.String("ip_limit_ttl", m.cfg.IPLimitTTL),
 		slog.String("ban_duration", m.cfg.BanDuration),
+		slog.String("ip_hash_key_id", m.state.HashKeyID()),
 	)
 
 	// Startup recovery: re-apply active bans from the database so that a
@@ -286,6 +323,11 @@ func (m *Module) Run(ctx context.Context) {
 		m.log,
 	)
 	uc := newUnbanCleaner(m.cfg, m.banStore, m.registry, m.banner, m.propagator, m.log)
+
+	// The analyzer queue is allocated before Run. Mark it ready immediately
+	// before launch so replication can retry rather than silently losing an
+	// event during startup.
+	m.readyMu.Do(func() { close(m.ready) })
 
 	// Launch workers.
 	go rot.run(ctx)

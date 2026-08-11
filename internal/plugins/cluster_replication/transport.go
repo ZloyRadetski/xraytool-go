@@ -148,6 +148,10 @@ type statsPoint struct {
 	Total int64  `json:"total"`
 }
 
+type fraudAckPayload struct {
+	EventIDs []string `json:"event_ids"`
+}
+
 type replicationServer struct {
 	protocol.UnimplementedReplicationServer
 	service   *Service
@@ -178,10 +182,11 @@ func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) e
 		return fmt.Errorf("record replication node connection: %w", err)
 	}
 
-	// Receiving runs independently so a slow ACK never blocks event delivery.
-	// The inbox is idempotent; acknowledgements are diagnostic and will become
-	// retention watermarks when compaction is added.
+	// Receiving runs independently so a slow anti-fraud processor never blocks
+	// desired-state delivery. Only this outer goroutine writes to stream: gRPC
+	// permits one sender and one receiver concurrently, but not two senders.
 	receiveDone := make(chan error, 1)
+	fraudAcks := make(chan fraudAckPayload, 128)
 	go func() {
 		for {
 			frame, receiveErr := receiveFrame(stream)
@@ -190,9 +195,20 @@ func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) e
 				return
 			}
 			if frame.Kind == protocol.KindFraudEvents {
-				if fraudErr := s.ingestFraudEvents(stream.Context(), hello.NodeID, frame.Payload); fraudErr != nil {
-					receiveDone <- fraudErr
-					return
+				ack, fraudErr := s.ingestFraudEvents(stream.Context(), hello.NodeID, frame.Payload)
+				if fraudErr != nil {
+					// The slave keeps its event in the durable outbox until it gets an
+					// explicit ACK. Do not tear down normal replication for a temporary
+					// anti-fraud dependency or database failure.
+					s.log.Warn("replication anti-fraud delivery deferred", "node", hello.NodeID, "err", fraudErr)
+					continue
+				}
+				if len(ack.EventIDs) > 0 {
+					select {
+					case fraudAcks <- ack:
+					default:
+						s.log.Warn("replication anti-fraud ACK queue is full", "node", hello.NodeID, "count", len(ack.EventIDs))
+					}
 				}
 				continue
 			}
@@ -254,29 +270,80 @@ func (s *replicationServer) Connect(stream protocol.Replication_ConnectServer) e
 				return nil
 			}
 			return receiveErr
+		case ack := <-fraudAcks:
+			payload, marshalErr := json.Marshal(ack)
+			if marshalErr != nil {
+				return fmt.Errorf("encode replication anti-fraud acknowledgement: %w", marshalErr)
+			}
+			if err := sendFrame(stream, protocol.Frame{Kind: protocol.KindFraudAck, Payload: payload}); err != nil {
+				return err
+			}
 		case <-ticker.C:
 		}
 	}
 }
 
-// ingestFraudEvents handles an auxiliary anti-fraud frame without allowing a
-// temporarily unavailable fraud processor to tear down user replication.
-func (s *replicationServer) ingestFraudEvents(ctx context.Context, sourceID string, payload []byte) error {
-	var events []pluginapi.FraudEvent
+// ingestFraudEvents accepts a slave batch and returns an ACK only after every
+// identified event is durably handed to the anti-fraud provider. Empty IDs are
+// treated as the legacy best-effort format so an already deployed old slave
+// can still report observations during the rollout.
+func (s *replicationServer) ingestFraudEvents(ctx context.Context, sourceID string, payload []byte) (fraudAckPayload, error) {
+	var events []FraudEvent
 	if err := json.Unmarshal(payload, &events); err != nil {
-		return fmt.Errorf("decode replication anti-fraud events: %w", err)
+		return fraudAckPayload{}, fmt.Errorf("decode replication anti-fraud events: %w", err)
 	}
 	if len(events) == 0 {
-		return fmt.Errorf("replication anti-fraud events are empty")
+		return fraudAckPayload{}, fmt.Errorf("replication anti-fraud events are empty")
 	}
+	legacy := events[0].ID == ""
+	for _, event := range events {
+		if event.Email == "" || event.IP == "" || (legacy && event.ID != "") || (!legacy && event.ID == "") {
+			return fraudAckPayload{}, fmt.Errorf("invalid replication anti-fraud event")
+		}
+	}
+
+	if legacy {
+		legacyEvents := make([]pluginapi.FraudEvent, len(events))
+		for index, event := range events {
+			legacyEvents[index] = pluginapi.FraudEvent{Email: event.Email, IP: event.IP, OccurredAt: event.OccurredAt, HashKeyID: event.HashKeyID}
+		}
+		if s.fraudSink == nil {
+			s.log.Warn("replication legacy anti-fraud event ignored: sink is unavailable", "node", sourceID)
+			return fraudAckPayload{}, nil
+		}
+		if err := s.fraudSink(ctx, sourceID, legacyEvents); err != nil {
+			s.log.Warn("replication legacy anti-fraud event rejected", "node", sourceID, "err", err)
+		}
+		return fraudAckPayload{}, nil
+	}
+
 	if s.fraudSink == nil {
-		s.log.Warn("replication anti-fraud event ignored: sink is unavailable", "node", sourceID)
-		return nil
+		return fraudAckPayload{}, fmt.Errorf("anti-fraud sink is unavailable")
 	}
-	if err := s.fraudSink(ctx, sourceID, events); err != nil {
-		s.log.Warn("replication anti-fraud event rejected", "node", sourceID, "err", err)
+	if s.service == nil || s.service.store == nil {
+		return fraudAckPayload{}, fmt.Errorf("replication anti-fraud store is unavailable")
 	}
-	return nil
+	pending, err := s.service.store.UnreceivedFraudEvents(ctx, sourceID, events)
+	if err != nil {
+		return fraudAckPayload{}, err
+	}
+	if len(pending) > 0 {
+		toIngest := make([]pluginapi.FraudEvent, len(pending))
+		for index, event := range pending {
+			toIngest[index] = pluginapi.FraudEvent{Email: event.Email, IP: event.IP, OccurredAt: event.OccurredAt, HashKeyID: event.HashKeyID}
+		}
+		if err := s.fraudSink(ctx, sourceID, toIngest); err != nil {
+			return fraudAckPayload{}, fmt.Errorf("deliver replication anti-fraud events: %w", err)
+		}
+		if err := s.service.store.MarkFraudReceived(ctx, sourceID, pending); err != nil {
+			return fraudAckPayload{}, err
+		}
+	}
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, event.ID)
+	}
+	return fraudAckPayload{EventIDs: ids}, nil
 }
 
 func (s *replicationServer) sendEventsAfter(ctx context.Context, stream protocol.Replication_ConnectServer, lastSent *int64) error {
@@ -407,7 +474,14 @@ func (s *slaveSession) send(frame protocol.Frame) error {
 	return sendFrame(s.stream, frame)
 }
 
-func runSlaveSession(ctx context.Context, service *Service, config Config, log *slog.Logger, onSession func(*slaveSession)) error {
+func runSlaveSession(
+	ctx context.Context,
+	service *Service,
+	config Config,
+	log *slog.Logger,
+	onSession func(*slaveSession),
+	onFraudAck func(context.Context, []string) error,
+) error {
 	tlsConfig, err := clientTLSConfig(config)
 	if err != nil {
 		return err
@@ -431,10 +505,17 @@ func runSlaveSession(ctx context.Context, service *Service, config Config, log *
 		onSession(session)
 		defer onSession(nil)
 	}
-	return receiveSlaveFrames(ctx, service, config, session, log)
+	return receiveSlaveFrames(ctx, service, config, session, log, onFraudAck)
 }
 
-func receiveSlaveFrames(ctx context.Context, service *Service, config Config, session *slaveSession, log *slog.Logger) error {
+func receiveSlaveFrames(
+	ctx context.Context,
+	service *Service,
+	config Config,
+	session *slaveSession,
+	log *slog.Logger,
+	onFraudAck func(context.Context, []string) error,
+) error {
 	var activeSnapshot string
 	for {
 		message, err := session.stream.Recv()
@@ -446,6 +527,19 @@ func receiveSlaveFrames(ctx context.Context, service *Service, config Config, se
 			return err
 		}
 		switch frame.Kind {
+		case protocol.KindFraudAck:
+			var payload fraudAckPayload
+			if err := json.Unmarshal(frame.Payload, &payload); err != nil {
+				return fmt.Errorf("decode replication anti-fraud acknowledgement: %w", err)
+			}
+			if len(nonEmptyStrings(payload.EventIDs)) == 0 {
+				return fmt.Errorf("replication anti-fraud acknowledgement is empty")
+			}
+			if onFraudAck != nil {
+				if err := onFraudAck(ctx, payload.EventIDs); err != nil {
+					return fmt.Errorf("apply replication anti-fraud acknowledgement: %w", err)
+				}
+			}
 		case protocol.KindEvent:
 			var wire wireEvent
 			if err := json.Unmarshal(frame.Payload, &wire); err != nil {

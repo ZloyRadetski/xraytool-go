@@ -157,8 +157,9 @@ type AntiFraudConf struct {
 	// so that master has a global view across all nodes for fraud detection.
 	// The master node must have anti_fraud.enabled: true.
 	ReportToMaster bool `yaml:"report_to_master"`
-	// SaltSecret is an optional shared secret between Master and Slaves to ensure
-	// deterministic IP hashing when Master and Slaves use different auth API keys.
+	// SaltSecret is a strong, deployment-specific secret shared by the master
+	// and every reporting slave. It makes IP HMAC identities comparable across
+	// nodes without sending raw IPs. Do not leave it empty in a cluster.
 	SaltSecret string `yaml:"salt_secret"`
 }
 
@@ -1053,8 +1054,10 @@ anti_fraud:
   # (slave only) If true, forward observed IP events to master every 5s for global fraud detection.
   # Master must have anti_fraud.enabled: true.
   report_to_master: false
-  # Salt secret used to hash IPs before reporting to master (ensures privacy)
-  salt_secret: "some_shared_salt_here"
+  # Strong secret shared verbatim by the master and every reporting slave.
+  # Generate once with: openssl rand -base64 32
+  # Required for cluster-wide IP identity matching; do not commit the value.
+  salt_secret: ""
 
 mailer:
   # Enable transactional email delivery (OTP codes via Resend.com).

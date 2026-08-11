@@ -49,6 +49,11 @@ type Plugin struct {
 	fraudSink       func(context.Context, string, []pluginapi.FraudEvent) error
 	trafficSnapshot pluginapi.TrafficSnapshotProvider
 	session         *slaveSession
+
+	// fraudMu serializes queue persistence, sends and ACK processing. It keeps
+	// batches ordered while the gRPC stream itself remains usable for normal
+	// replication and statistics frames.
+	fraudMu sync.Mutex
 }
 
 func New() *Plugin { return &Plugin{} }
@@ -228,8 +233,11 @@ func (p *Plugin) runSlaveLoop(ctx context.Context, service *Service, config Conf
 			if err := p.reportSlaveStats(ctx); err != nil && ctx.Err() == nil {
 				log.Debug("replication statistics report skipped", "err", err)
 			}
+			if err := p.flushFraudOutbox(ctx); err != nil && ctx.Err() == nil {
+				log.Debug("replication anti-fraud retry skipped", "err", err)
+			}
 		case <-connect.C:
-			if err := runSlaveSession(ctx, service, config, log, p.setSlaveSession); err != nil && ctx.Err() == nil {
+			if err := runSlaveSession(ctx, service, config, log, p.setSlaveSession, p.acknowledgeFraudEvents); err != nil && ctx.Err() == nil {
 				log.Warn("replication stream disconnected", "err", err)
 			}
 			connect.Reset(config.reconnectEvery())
@@ -243,6 +251,7 @@ func (p *Plugin) setSlaveSession(session *slaveSession) {
 	p.mu.Unlock()
 	if session != nil {
 		go func() { _ = p.reportSlaveStats(context.Background()) }()
+		go func() { _ = p.flushFraudOutbox(context.Background()) }()
 	}
 }
 
@@ -282,27 +291,88 @@ func (p *Plugin) ReportStatistics(ctx context.Context, points []statsPoint) erro
 	return session.send(protocol.Frame{Kind: protocol.KindStats, Payload: payload})
 }
 
-// ReportFraudEvents sends slave observations through the already authenticated
-// replication stream. It never opens a second transport or falls back to HTTP.
+// ReportFraudEvents commits slave observations to a local durable outbox before
+// attempting the authenticated replication stream. A disconnected master is
+// therefore a retry condition, not a reason to discard an IP observation.
 func (p *Plugin) ReportFraudEvents(ctx context.Context, events []pluginapi.FraudEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
+	p.fraudMu.Lock()
+	defer p.fraudMu.Unlock()
+
 	p.mu.RLock()
 	mode := p.config.Mode
+	service := p.service
+	p.mu.RUnlock()
+	if mode != "slave" {
+		return fmt.Errorf("anti-fraud events may be reported only by a slave")
+	}
+	if service == nil || service.store == nil {
+		return fmt.Errorf("replication anti-fraud outbox is unavailable")
+	}
+	if _, err := service.store.EnqueueFraudEvents(ctx, events); err != nil {
+		return err
+	}
+	return p.flushFraudOutboxLocked(ctx)
+}
+
+// flushFraudOutbox retries the oldest unacknowledged batch when a slave stream
+// is connected. It is intentionally harmless while disconnected: persistence
+// already succeeded and the next connection or periodic tick will retry.
+func (p *Plugin) flushFraudOutbox(ctx context.Context) error {
+	p.fraudMu.Lock()
+	defer p.fraudMu.Unlock()
+	return p.flushFraudOutboxLocked(ctx)
+}
+
+func (p *Plugin) flushFraudOutboxLocked(ctx context.Context) error {
+	p.mu.RLock()
+	mode := p.config.Mode
+	service := p.service
 	session := p.session
 	p.mu.RUnlock()
 	if mode != "slave" {
 		return fmt.Errorf("anti-fraud events may be reported only by a slave")
 	}
+	if service == nil || service.store == nil {
+		return fmt.Errorf("replication anti-fraud outbox is unavailable")
+	}
 	if session == nil {
-		return fmt.Errorf("replication stream is not connected")
+		return nil
+	}
+	events, err := service.store.PendingFraudEvents(ctx, 100)
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		return nil
 	}
 	payload, err := json.Marshal(events)
 	if err != nil {
 		return err
 	}
 	return session.send(protocol.Frame{Kind: protocol.KindFraudEvents, Payload: payload})
+}
+
+func (p *Plugin) acknowledgeFraudEvents(ctx context.Context, eventIDs []string) error {
+	p.fraudMu.Lock()
+	defer p.fraudMu.Unlock()
+
+	p.mu.RLock()
+	mode := p.config.Mode
+	service := p.service
+	p.mu.RUnlock()
+	if mode != "slave" {
+		return fmt.Errorf("anti-fraud events may be acknowledged only by a slave")
+	}
+	if service == nil || service.store == nil {
+		return fmt.Errorf("replication anti-fraud outbox is unavailable")
+	}
+	if err := service.store.AcknowledgeFraudEvents(ctx, eventIDs); err != nil {
+		return err
+	}
+	return p.flushFraudOutboxLocked(ctx)
 }
 
 func (p *Plugin) SetFraudEventSink(sink func(context.Context, string, []pluginapi.FraudEvent) error) {
