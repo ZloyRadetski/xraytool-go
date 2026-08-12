@@ -184,6 +184,31 @@ func TestCompileV2BalancerAddsFullConfigCompatibility(t *testing.T) {
 	}
 }
 
+func TestCompileV2BalancerAddsDNSBypassAlongsideRegularDirectRule(t *testing.T) {
+	input := `{
+  "version": 2,
+  "servers": {
+    "one": {"name": "One", "config": {"dns": {"servers": ["1.1.1.1"]}, "outbounds": [` + vlessOutbound + `, {"protocol": "freedom", "tag": "direct"}], "routing": {"rules": [{"type": "field", "domain": ["geosite:private"], "outboundTag": "direct"}, {"type": "field", "outboundTag": "proxy"}]}}},
+    "two": {"name": "Two", "outbound": ` + vlessOutbound + `}
+  },
+  "subscription": [{"type": "auto_balancer", "id": "full", "name": "Full", "members": [{"ref": "one"}, {"ref": "two"}]}]
+}`
+
+	result, err := Compile(input)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	var profiles []map[string]any
+	if err := stdjson.Unmarshal([]byte(result.JSON), &profiles); err != nil {
+		t.Fatalf("compiled JSON: %v", err)
+	}
+	rules := profiles[0]["routing"].(map[string]any)["rules"].([]any)
+	first := rules[0].(map[string]any)
+	if first["outboundTag"] != "direct" || !sameStrings(first["ip"].([]any), []string{"1.1.1.1"}) {
+		t.Fatalf("first routing rule must bypass DNS directly: %#v", first)
+	}
+}
+
 func sameStrings(values []any, want []string) bool {
 	if len(values) != len(want) {
 		return false

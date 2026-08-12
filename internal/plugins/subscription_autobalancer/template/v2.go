@@ -406,12 +406,20 @@ func hasDirectDNSRule(routing map[string]any, dnsIPs []string) bool {
 	for _, ip := range dnsIPs {
 		wanted[ip] = struct{}{}
 	}
-	for _, rawRule := range routing["rules"].([]any) {
+	rawRules, _ := routing["rules"].([]any)
+	for _, rawRule := range rawRules {
 		rule, ok := rawRule.(map[string]any)
 		if !ok || rule["outboundTag"] != "direct" {
 			continue
 		}
-		for _, rawIP := range rule["ip"].([]any) {
+		rawIPs, ok := rule["ip"].([]any)
+		if !ok {
+			// A regular direct rule (for example, geosite:private) is not a
+			// DNS bypass rule. Keep looking instead of assuming every direct
+			// rule has an ip list.
+			continue
+		}
+		for _, rawIP := range rawIPs {
 			ip, _ := rawIP.(string)
 			delete(wanted, ip)
 		}
