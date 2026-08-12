@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	stdjson "encoding/json"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 )
@@ -333,6 +334,7 @@ func compileBalancer(path string, item subscriptionItem, servers map[string]serv
 	if err != nil {
 		return nil, nil, err
 	}
+	ensureFullConfigCompatibility(profile, routing)
 	// Auto-balancers must be complete Xray client configurations.  In
 	// particular, clients such as INCY recognize the profile as a full
 	// configuration only when both inbounds and outbounds are present.  Reuse
@@ -351,6 +353,73 @@ func compileBalancer(path string, item subscriptionItem, servers map[string]serv
 	profile["outbounds"] = outbounds
 	profile["routing"] = routing
 	return profile, resolvedMembers, nil
+}
+
+// ensureFullConfigCompatibility adds the small pieces of a complete Xray
+// profile that INCY otherwise patches at import time. Keeping them in the
+// subscription makes the balancer work in clients that pass full configs to
+// Xray unchanged, including Happ.
+func ensureFullConfigCompatibility(profile map[string]any, routing map[string]any) {
+	if _, exists := profile["stats"]; !exists {
+		profile["stats"] = map[string]any{}
+	}
+
+	dnsIPs := dnsServerIPs(profile)
+	if len(dnsIPs) == 0 || hasDirectDNSRule(routing, dnsIPs) {
+		return
+	}
+	rules, _ := routing["rules"].([]any)
+	directDNSRule := map[string]any{
+		"type":        "field",
+		"ip":          dnsIPs,
+		"outboundTag": "direct",
+	}
+	routing["rules"] = append([]any{directDNSRule}, rules...)
+}
+
+func dnsServerIPs(profile map[string]any) []string {
+	dns, _ := profile["dns"].(map[string]any)
+	servers, _ := dns["servers"].([]any)
+	seen := make(map[string]struct{}, len(servers))
+	result := make([]string, 0, len(servers))
+	for _, server := range servers {
+		address := ""
+		switch value := server.(type) {
+		case string:
+			address = value
+		case map[string]any:
+			address, _ = value["address"].(string)
+		}
+		if ip := net.ParseIP(strings.TrimSpace(address)); ip != nil {
+			canonical := ip.String()
+			if _, exists := seen[canonical]; !exists {
+				seen[canonical] = struct{}{}
+				result = append(result, canonical)
+			}
+		}
+	}
+	return result
+}
+
+func hasDirectDNSRule(routing map[string]any, dnsIPs []string) bool {
+	wanted := make(map[string]struct{}, len(dnsIPs))
+	for _, ip := range dnsIPs {
+		wanted[ip] = struct{}{}
+	}
+	for _, rawRule := range routing["rules"].([]any) {
+		rule, ok := rawRule.(map[string]any)
+		if !ok || rule["outboundTag"] != "direct" {
+			continue
+		}
+		for _, rawIP := range rule["ip"].([]any) {
+			ip, _ := rawIP.(string)
+			delete(wanted, ip)
+		}
+		if len(wanted) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // baseProfileForBalancer produces a full Xray configuration for an

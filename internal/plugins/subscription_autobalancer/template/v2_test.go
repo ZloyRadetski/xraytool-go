@@ -156,6 +156,46 @@ func TestCompileV2BalancerKeepsBaseProfileInbounds(t *testing.T) {
 	}
 }
 
+func TestCompileV2BalancerAddsFullConfigCompatibility(t *testing.T) {
+	input := `{
+  "version": 2,
+  "servers": {
+    "one": {"name": "One", "config": {"inbounds": [{"tag": "mixed-in", "protocol": "mixed", "port": 10808}], "dns": {"servers": ["1.1.1.1", {"address": "8.8.8.8"}, "https://dns.google/dns-query"]}, "outbounds": [` + vlessOutbound + `, {"protocol": "freedom", "tag": "direct"}], "routing": {"rules": [{"type": "field", "outboundTag": "proxy"}]}}},
+    "two": {"name": "Two", "outbound": ` + vlessOutbound + `}
+  },
+  "subscription": [{"type": "auto_balancer", "id": "full", "name": "Full", "members": [{"ref": "one"}, {"ref": "two"}]}]
+}`
+	result, err := Compile(input)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	var profiles []map[string]any
+	if err := stdjson.Unmarshal([]byte(result.JSON), &profiles); err != nil {
+		t.Fatalf("compiled JSON: %v", err)
+	}
+	profile := profiles[0]
+	if _, ok := profile["stats"].(map[string]any); !ok {
+		t.Fatalf("full config must include stats: %#v", profile["stats"])
+	}
+	rules := profile["routing"].(map[string]any)["rules"].([]any)
+	first := rules[0].(map[string]any)
+	if first["outboundTag"] != "direct" || !sameStrings(first["ip"].([]any), []string{"1.1.1.1", "8.8.8.8"}) {
+		t.Fatalf("first routing rule must bypass DNS directly: %#v", first)
+	}
+}
+
+func sameStrings(values []any, want []string) bool {
+	if len(values) != len(want) {
+		return false
+	}
+	for index, value := range values {
+		if value != want[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCompileV2RejectsLeastPingSettings(t *testing.T) {
 	input := `{
   "version": 2,

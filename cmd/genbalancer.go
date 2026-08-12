@@ -31,6 +31,7 @@ type balancerConfig struct {
 	Outbounds        []any            `json:"outbounds"`
 	Remarks          string           `json:"remarks"`
 	Routing          balancerRouting  `json:"routing"`
+	Stats            map[string]any   `json:"stats"`
 }
 
 type burstObservatory struct {
@@ -39,10 +40,11 @@ type burstObservatory struct {
 }
 
 type pingConfig struct {
-	Destination string `json:"destination"`
-	Interval    string `json:"interval"`
-	Sampling    int    `json:"sampling"`
-	Timeout     string `json:"timeout"`
+	Connectivity string `json:"connectivity"`
+	Destination  string `json:"destination"`
+	Interval     string `json:"interval"`
+	Sampling     int    `json:"sampling"`
+	Timeout      string `json:"timeout"`
 }
 
 type balancerDNS struct {
@@ -666,6 +668,13 @@ func buildStreamSettings(q url.Values) map[string]any {
 // ---------------------------------------------------------------------------
 
 func buildBalancerConfig2(atTags []string, atOutbounds []any, remarks string) *balancerConfig {
+	dnsServers := []string{
+		"77.88.8.8",
+		"77.88.8.1",
+		"1.1.1.1",
+		"1.0.0.1",
+		"localhost",
+	}
 	fixedOutbounds := []any{
 		map[string]any{"protocol": "freedom", "tag": "proxy"},
 		map[string]any{"protocol": "freedom", "tag": "direct"},
@@ -674,6 +683,14 @@ func buildBalancerConfig2(atTags []string, atOutbounds []any, remarks string) *b
 	outbounds := append(fixedOutbounds, atOutbounds...)
 
 	rules := []any{
+		// The observatory needs DNS before the balancer has chosen an outbound.
+		// Keep literal DNS resolvers outside the balancer to avoid that cycle in
+		// clients that do not patch full Xray configs themselves.
+		map[string]any{
+			"ip":          []string{"77.88.8.8", "77.88.8.1", "1.1.1.1", "1.0.0.1"},
+			"outboundTag": "direct",
+			"type":        "field",
+		},
 		map[string]any{
 			"outboundTag": "direct",
 			"protocol":    []string{"bittorrent"},
@@ -705,22 +722,17 @@ func buildBalancerConfig2(atTags []string, atOutbounds []any, remarks string) *b
 	return &balancerConfig{
 		BurstObservatory: burstObservatory{
 			PingConfig: pingConfig{
-				Destination: "http://www.gstatic.com/generate_204",
-				Interval:    "1m",
-				Sampling:    1,
-				Timeout:     "3s",
+				Connectivity: "http://www.gstatic.com/generate_204",
+				Destination:  "http://www.gstatic.com/generate_204",
+				Interval:     "1m",
+				Sampling:     1,
+				Timeout:      "3s",
 			},
 			SubjectSelector: atTags,
 		},
 		DNS: balancerDNS{
 			QueryStrategy: "UseIP",
-			Servers: []string{
-				"77.88.8.8",
-				"77.88.8.1",
-				"1.1.1.1",
-				"1.0.0.1",
-				"localhost",
-			},
+			Servers:       dnsServers,
 		},
 		Inbounds: []any{
 			map[string]any{
@@ -760,6 +772,7 @@ func buildBalancerConfig2(atTags []string, atOutbounds []any, remarks string) *b
 		},
 		Outbounds: outbounds,
 		Remarks:   remarks,
+		Stats:     map[string]any{},
 		Routing: balancerRouting{
 			Balancers: []routingBalancer{
 				{
