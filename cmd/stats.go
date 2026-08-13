@@ -42,7 +42,7 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			trafficPlugin := trafficfile.New(deps.Cfg)
-			merged, slaveReport, err := trafficPlugin.GenerateClusterStats(inferredMode, statePath, deps.Engine, deps.ClusterProvider)
+			merged, slaveReport, err := trafficPlugin.GenerateClusterStats(cmd.Context(), inferredMode, statePath, deps.Engine, deps.ClusterProvider)
 			if err != nil {
 				if apiMode {
 					printJSON(map[string]interface{}{"ok": false, "error": "STATS_UPDATE_FAILED", "message": err.Error()})

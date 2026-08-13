@@ -1,6 +1,7 @@
 package traffic_file
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,12 @@ import (
 	json "github.com/goccy/go-json"
 
 	"xraytool/internal/safeio"
+)
+
+const (
+	stateLockAttempts   = 50
+	stateLockRetry      = 100 * time.Millisecond
+	stateLockStaleAfter = 2 * time.Minute
 )
 
 // State is the file-backed, cumulative traffic state owned by traffic_file.
@@ -117,6 +124,58 @@ func Save(path string, state *State) error {
 		return fmt.Errorf("writing stats file: %w", err)
 	}
 	return nil
+}
+
+// withStateLock serializes one complete read-modify-write operation across
+// goroutines and processes. State files are written atomically, but atomic
+// replacement alone cannot protect a concurrent Load -> Update -> Save cycle.
+func withStateLock(ctx context.Context, statePath string, fn func() error) error {
+	if statePath == "" {
+		return fmt.Errorf("stats state path is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lockPath := statePath + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return fmt.Errorf("creating stats lock directory: %w", err)
+	}
+
+	for attempt := 0; attempt < stateLockAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(lockPath)
+				return fmt.Errorf("close stats lock file: %w", closeErr)
+			}
+			defer func() { _ = os.Remove(lockPath) }()
+			return fn()
+		}
+		if !os.IsExist(err) {
+			return fmt.Errorf("create stats lock file: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > stateLockStaleAfter {
+			_ = os.Remove(lockPath)
+			continue
+		}
+
+		timer := time.NewTimer(stateLockRetry)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("timeout waiting for stats lock file")
 }
 
 func defaultState() *State { return &State{Version: 2, Users: make(map[string]*UserState)} }

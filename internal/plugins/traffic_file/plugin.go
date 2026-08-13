@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	json "github.com/goccy/go-json"
+	"sync"
 	"time"
 
 	"xraytool/internal/appconfig"
@@ -21,8 +22,9 @@ const (
 )
 
 type Plugin struct {
-	cfg    *appconfig.Config
-	engine domain.Engine
+	cfg           *appconfig.Config
+	engine        domain.Engine
+	trafficSyncMu sync.Mutex
 }
 
 func New(cfg *appconfig.Config) *Plugin { return &Plugin{cfg: cfg} }
@@ -97,7 +99,7 @@ func (p *Plugin) Usage(_ context.Context, email string) (pluginapi.TrafficUsage,
 // GenerateClusterStats owns the legacy file-backed statistics workflow. The
 // CLI delegates here instead of constructing backend internals itself, so
 // another traffic plugin can replace the behaviour without changing command semantics.
-func (p *Plugin) GenerateClusterStats(inferredMode bool, statePath string, engine domain.Engine, cluster domain.ClusterStatsProvider) ([]MergedUser, domain.SlaveReport, error) {
+func (p *Plugin) GenerateClusterStats(ctx context.Context, inferredMode bool, statePath string, engine domain.Engine, cluster domain.ClusterStatsProvider) ([]MergedUser, domain.SlaveReport, error) {
 	if p == nil || p.cfg == nil {
 		return nil, domain.SlaveReport{}, fmt.Errorf("traffic_file: app config is required")
 	}
@@ -107,13 +109,13 @@ func (p *Plugin) GenerateClusterStats(inferredMode bool, statePath string, engin
 		InferredStatsPath:        p.cfg.Paths.InferredStats,
 		DetailedRetentionSeconds: p.cfg.DetailedRetentionSeconds(),
 	}, engine, cluster)
-	return service.GenerateClusterStats(inferredMode, statePath)
+	return service.GenerateClusterStats(ctx, inferredMode, statePath)
 }
 
 // LocalTrafficSnapshot is the only cluster-facing view of this backend. It
 // performs the same locked cumulative update as the CLI, so every consumer
 // observes counter-reset-safe totals.
-func (p *Plugin) LocalTrafficSnapshot(_ context.Context) ([]pluginapi.TrafficSnapshot, error) {
+func (p *Plugin) LocalTrafficSnapshot(ctx context.Context) ([]pluginapi.TrafficSnapshot, error) {
 	if p == nil || p.cfg == nil {
 		return nil, fmt.Errorf("traffic_file: app config is required")
 	}
@@ -123,7 +125,7 @@ func (p *Plugin) LocalTrafficSnapshot(_ context.Context) ([]pluginapi.TrafficSna
 	users, err := NewService(Config{
 		StatsStatePath:           p.cfg.Paths.StatsState,
 		DetailedRetentionSeconds: p.cfg.DetailedRetentionSeconds(),
-	}, p.engine, nil).GenerateLocalStats()
+	}, p.engine, nil).GenerateLocalStats(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +140,7 @@ func (p *Plugin) LocalTrafficSnapshot(_ context.Context) ([]pluginapi.TrafficSna
 // subscription delivery. Replica totals contain a combined counter, so they
 // are retained in the download field for compatibility with the historical
 // cli-stats representation.
-func (p *Plugin) SyncClusterTraffic(_ context.Context, slaveTotals []pluginapi.TrafficSnapshot) error {
+func (p *Plugin) SyncClusterTraffic(ctx context.Context, slaveTotals []pluginapi.TrafficSnapshot) error {
 	if p == nil || p.cfg == nil {
 		return fmt.Errorf("traffic_file: app config is required")
 	}
@@ -149,42 +151,50 @@ func (p *Plugin) SyncClusterTraffic(_ context.Context, slaveTotals []pluginapi.T
 		return fmt.Errorf("traffic_file: domain_engine is unavailable")
 	}
 
-	service := NewService(Config{
-		StatsStatePath:           p.cfg.Paths.StatsState,
-		DetailedRetentionSeconds: p.cfg.DetailedRetentionSeconds(),
-	}, p.engine, nil)
-	if err := service.UpdateLocalStorage(); err != nil {
-		return fmt.Errorf("update local traffic state: %w", err)
-	}
-	state, err := Load(p.cfg.Paths.StatsState, p.cfg.DetailedRetentionSeconds())
-	if err != nil {
-		return fmt.Errorf("load local traffic state: %w", err)
-	}
+	// The cluster transport can receive a report from several slaves at once,
+	// while the master timer performs the same aggregation independently. Keep
+	// the whole local-update + inferred-write transaction serialized so an older
+	// snapshot cannot win the final atomic file replacement.
+	p.trafficSyncMu.Lock()
+	defer p.trafficSyncMu.Unlock()
+	return withStateLock(ctx, p.cfg.Paths.InferredStats+".aggregate", func() error {
+		service := NewService(Config{
+			StatsStatePath:           p.cfg.Paths.StatsState,
+			DetailedRetentionSeconds: p.cfg.DetailedRetentionSeconds(),
+		}, p.engine, nil)
+		if err := service.UpdateLocalStorage(ctx); err != nil {
+			return fmt.Errorf("update local traffic state: %w", err)
+		}
+		state, err := Load(p.cfg.Paths.StatsState, p.cfg.DetailedRetentionSeconds())
+		if err != nil {
+			return fmt.Errorf("load local traffic state: %w", err)
+		}
 
-	inferred := defaultState()
-	for email, user := range state.Users {
-		if user == nil {
-			continue
+		inferred := defaultState()
+		for email, user := range state.Users {
+			if user == nil {
+				continue
+			}
+			inferred.Users[email] = &UserState{
+				CumulativeUp:   user.CumulativeUp,
+				CumulativeDown: user.CumulativeDown,
+			}
 		}
-		inferred.Users[email] = &UserState{
-			CumulativeUp:   user.CumulativeUp,
-			CumulativeDown: user.CumulativeDown,
+		for _, total := range slaveTotals {
+			if total.Email == "" {
+				continue
+			}
+			user := inferred.Users[total.Email]
+			if user == nil {
+				user = &UserState{}
+				inferred.Users[total.Email] = user
+			}
+			user.CumulativeUp += total.Usage.UploadBytes
+			user.CumulativeDown += total.Usage.DownloadBytes
 		}
-	}
-	for _, total := range slaveTotals {
-		if total.Email == "" {
-			continue
-		}
-		user := inferred.Users[total.Email]
-		if user == nil {
-			user = &UserState{}
-			inferred.Users[total.Email] = user
-		}
-		user.CumulativeUp += total.Usage.UploadBytes
-		user.CumulativeDown += total.Usage.DownloadBytes
-	}
-	inferred.LastSampleTS = time.Now().Unix()
-	return Save(p.cfg.Paths.InferredStats, inferred)
+		inferred.LastSampleTS = time.Now().Unix()
+		return Save(p.cfg.Paths.InferredStats, inferred)
+	})
 }
 
 // CheckQuota keeps historical behaviour: traffic was reported but never used

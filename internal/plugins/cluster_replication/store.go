@@ -475,8 +475,8 @@ func (s *Store) CollectReplicaStats(ctx context.Context, allowedNodes []string, 
 	now := time.Now().UTC()
 	for _, nodeID := range allowedNodes {
 		var replica replicaRow
-		err := s.db.WithContext(ctx).Where("node_id = ?", nodeID).First(&replica).Error
-		if err != nil || (maxAge > 0 && now.Sub(replica.LastSeenAt) > maxAge) {
+		replicaErr := s.db.WithContext(ctx).Where("node_id = ?", nodeID).First(&replica).Error
+		if replicaErr != nil && replicaErr != gorm.ErrRecordNotFound {
 			report.FailedServers++
 			continue
 		}
@@ -485,7 +485,17 @@ func (s *Store) CollectReplicaStats(ctx context.Context, allowedNodes []string, 
 			report.FailedServers++
 			continue
 		}
-		report.OKServers++
+
+		// Freshness is operational health, not an accounting deletion signal.
+		// A slave reports cumulative counters, so discarding its last successful
+		// snapshot just because a connection is temporarily down makes a user's
+		// subscription traffic appear to move backwards. Retain those last-known
+		// totals while flagging the node as failed/stale in the report.
+		if replicaErr == nil && (maxAge <= 0 || now.Sub(replica.LastSeenAt) <= maxAge) {
+			report.OKServers++
+		} else {
+			report.FailedServers++
+		}
 		for _, row := range rows {
 			combined[row.Email] += row.Total
 		}

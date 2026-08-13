@@ -54,6 +54,13 @@ type Plugin struct {
 	// batches ordered while the gRPC stream itself remains usable for normal
 	// replication and statistics frames.
 	fraudMu sync.Mutex
+
+	// Statistics frames can arrive from several slaves concurrently, and the
+	// periodic master/slave schedulers run independently of transport I/O.
+	// Serialize each direction's sampling/write operation so one slow run cannot
+	// overwrite a newer cumulative snapshot.
+	trafficSyncMu   sync.Mutex
+	trafficReportMu sync.Mutex
 }
 
 func New() *Plugin { return &Plugin{} }
@@ -223,6 +230,9 @@ func (p *Plugin) runMasterLoop(ctx context.Context, service *Service, config Con
 }
 
 func (p *Plugin) syncMasterTraffic(ctx context.Context, service *Service, config Config) error {
+	p.trafficSyncMu.Lock()
+	defer p.trafficSyncMu.Unlock()
+
 	p.mu.RLock()
 	provider := p.trafficSnapshot
 	p.mu.RUnlock()
@@ -242,12 +252,45 @@ func (p *Plugin) syncMasterTraffic(ctx context.Context, service *Service, config
 }
 
 func (p *Plugin) runSlaveLoop(ctx context.Context, service *Service, config Config, log *slog.Logger) {
+	p.runSlaveLoopWithRunner(ctx, service, config, log, runSlaveSession)
+}
+
+type slaveSessionRunner func(
+	context.Context,
+	*Service,
+	Config,
+	*slog.Logger,
+	func(*slaveSession),
+	func(context.Context, []string) error,
+) error
+
+// runSlaveLoopWithRunner keeps scheduling independent from the long-lived gRPC
+// receive loop. A healthy session commonly stays open for hours; running it in
+// the select branch used to prevent traffic reports, drift repair and retry work
+// until the connection dropped.
+func (p *Plugin) runSlaveLoopWithRunner(ctx context.Context, service *Service, config Config, log *slog.Logger, runner slaveSessionRunner) {
 	drift := time.NewTicker(config.driftEvery())
 	defer drift.Stop()
 	statsTicker := time.NewTicker(config.statsEvery())
 	defer statsTicker.Stop()
-	connect := time.NewTimer(0)
-	defer connect.Stop()
+	reconnect := time.NewTimer(0)
+	defer reconnect.Stop()
+	sessionDone := make(chan error, 1)
+	sessionActive := false
+
+	startSession := func() {
+		if sessionActive {
+			return
+		}
+		sessionActive = true
+		go func() {
+			err := runner(ctx, service, config, log, p.setSlaveSession, p.acknowledgeFraudEvents)
+			select {
+			case sessionDone <- err:
+			case <-ctx.Done():
+			}
+		}()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -263,11 +306,14 @@ func (p *Plugin) runSlaveLoop(ctx context.Context, service *Service, config Conf
 			if err := p.flushFraudOutbox(ctx); err != nil && ctx.Err() == nil {
 				log.Debug("replication anti-fraud retry skipped", "err", err)
 			}
-		case <-connect.C:
-			if err := runSlaveSession(ctx, service, config, log, p.setSlaveSession, p.acknowledgeFraudEvents); err != nil && ctx.Err() == nil {
+		case <-reconnect.C:
+			startSession()
+		case err := <-sessionDone:
+			sessionActive = false
+			if err != nil && ctx.Err() == nil {
 				log.Warn("replication stream disconnected", "err", err)
 			}
-			connect.Reset(config.reconnectEvery())
+			reconnect.Reset(config.reconnectEvery())
 		}
 	}
 }
@@ -283,6 +329,9 @@ func (p *Plugin) setSlaveSession(session *slaveSession) {
 }
 
 func (p *Plugin) reportSlaveStats(ctx context.Context) error {
+	p.trafficReportMu.Lock()
+	defer p.trafficReportMu.Unlock()
+
 	p.mu.RLock()
 	provider := p.trafficSnapshot
 	p.mu.RUnlock()

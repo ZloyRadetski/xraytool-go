@@ -2,6 +2,7 @@ package clusterreplication
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,6 +206,21 @@ func TestStoreAggregatesReportedSlaveStatistics(t *testing.T) {
 	require.Equal(t, []domain.SlaveUserTotal{{Email: "traffic@example.test", Slave: 150}}, totals)
 }
 
+func TestStoreRetainsLastReplicaTotalsWhenSlaveIsStale(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.ReplaceReplicaStats(context.Background(), "slave-a", []statsPoint{
+		{Email: "traffic@example.test", Total: 150},
+	}))
+	require.NoError(t, store.db.Model(&replicaRow{}).
+		Where("node_id = ?", "slave-a").
+		Update("last_seen_at", time.Now().UTC().Add(-2*time.Minute)).Error)
+
+	totals, report := store.CollectReplicaStats(context.Background(), []string{"slave-a"}, time.Minute)
+	require.Equal(t, domain.SlaveReport{Enabled: true, TotalServers: 1, FailedServers: 1}, report)
+	require.Equal(t, []domain.SlaveUserTotal{{Email: "traffic@example.test", Slave: 150}}, totals,
+		"temporary connectivity loss must not erase the slave's last cumulative total")
+}
+
 type trafficStateWriterStub struct {
 	received []pluginapi.TrafficSnapshot
 }
@@ -236,6 +252,65 @@ func TestPluginSyncMasterTrafficWritesReplicaTotals(t *testing.T) {
 		Email: "traffic@example.test",
 		Usage: pluginapi.TrafficUsage{DownloadBytes: 150},
 	}}, writer.received)
+}
+
+type serializedTrafficStateWriter struct {
+	mu     sync.Mutex
+	active int
+	max    int
+}
+
+func (*serializedTrafficStateWriter) LocalTrafficSnapshot(context.Context) ([]pluginapi.TrafficSnapshot, error) {
+	return nil, nil
+}
+
+func (s *serializedTrafficStateWriter) SyncClusterTraffic(context.Context, []pluginapi.TrafficSnapshot) error {
+	s.mu.Lock()
+	s.active++
+	if s.active > s.max {
+		s.max = s.active
+	}
+	s.mu.Unlock()
+
+	time.Sleep(25 * time.Millisecond)
+
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *serializedTrafficStateWriter) maxConcurrentWrites() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.max
+}
+
+func TestPluginSerializesConcurrentMasterTrafficWrites(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.ReplaceReplicaStats(context.Background(), "slave-a", []statsPoint{
+		{Email: "traffic@example.test", Total: 150},
+	}))
+	writer := &serializedTrafficStateWriter{}
+	plugin := New()
+	plugin.trafficSnapshot = writer
+	config := Config{AllowedNodes: []string{"slave-a"}, StatsInterval: "30s"}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- plugin.syncMasterTraffic(context.Background(), &Service{store: store}, config)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, writer.maxConcurrentWrites())
 }
 
 func TestStorePersistsFraudEventsUntilExplicitAcknowledgement(t *testing.T) {

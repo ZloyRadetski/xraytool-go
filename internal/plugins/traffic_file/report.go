@@ -44,22 +44,20 @@ func sumField(users []MergedUser, get func(MergedUser) int64) int64 {
 // GenerateLocalStats preserves the historical programmatic report API for
 // callers inside this plugin family. Cross-plugin callers use LocalTrafficSnapshot.
 func GenerateLocalStats(cfg *appconfig.Config, engine domain.Engine) NodeStatsReport {
-	statePath := cfg.Paths.StatsState
-	rawStats, err := engine.QueryStats(context.Background())
-	if err != nil {
-		rawStats = nil
+	if cfg == nil {
+		return NodeStatsReport{Ok: false, Error: "STATS_CONFIG_FAILED", Message: "traffic config is unavailable"}
 	}
-	samples := make([]LiveSample, 0, len(rawStats))
-	for _, stat := range rawStats {
-		samples = append(samples, LiveSample{Email: stat.Email, Up: stat.Up, Down: stat.Down})
+	statePath := cfg.Paths.StatsState
+	service := NewService(Config{
+		StatsStatePath:           statePath,
+		DetailedRetentionSeconds: cfg.DetailedRetentionSeconds(),
+	}, engine, nil)
+	if err := service.UpdateLocalStorage(context.Background()); err != nil {
+		return NodeStatsReport{Ok: false, Error: "STATS_UPDATE_FAILED", Message: err.Error()}
 	}
 	state, err := Load(statePath, cfg.DetailedRetentionSeconds())
 	if err != nil {
 		return NodeStatsReport{Ok: false, Error: "STATS_LOAD_FAILED", Message: err.Error()}
-	}
-	Update(state, samples, cfg.DetailedRetentionSeconds())
-	if err := Save(statePath, state); err != nil {
-		return NodeStatsReport{Ok: false, Error: "STATS_SAVE_FAILED", Message: err.Error()}
 	}
 	local := Cumulative(state)
 	users := make([]MergedUser, 0, len(local))

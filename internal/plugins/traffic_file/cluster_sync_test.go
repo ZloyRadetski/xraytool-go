@@ -2,6 +2,7 @@ package traffic_file
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -31,5 +32,42 @@ func TestPluginSyncClusterTrafficWritesSubscriptionState(t *testing.T) {
 	got := inferred.Users["user@example.com"]
 	if got == nil || got.CumulativeUp != 100 || got.CumulativeDown != 700 {
 		t.Fatalf("inferred state = %+v, want 100/700", got)
+	}
+}
+
+func TestPluginSyncClusterTrafficKeepsLastInferredStateWhenSamplingFails(t *testing.T) {
+	dir := t.TempDir()
+	p := New(&appconfig.Config{})
+	p.cfg.Mode = "master"
+	p.cfg.Paths.StatsState = filepath.Join(dir, "local.json")
+	p.cfg.Paths.InferredStats = filepath.Join(dir, "inferred.json")
+	if err := Save(p.cfg.Paths.StatsState, &State{Version: 2, Users: map[string]*UserState{
+		"user@example.com": {
+			CumulativeUp: 100, CumulativeDown: 200,
+			LastRawUp: 100, LastRawDown: 200,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(p.cfg.Paths.InferredStats, &State{Version: 2, Users: map[string]*UserState{
+		"user@example.com": {CumulativeUp: 100, CumulativeDown: 700},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	p.engine = &testTrafficEngine{statsErr: errors.New("xray unavailable")}
+
+	err := p.SyncClusterTraffic(context.Background(), []pluginapi.TrafficSnapshot{{
+		Email: "user@example.com", Usage: pluginapi.TrafficUsage{DownloadBytes: 900},
+	}})
+	if err == nil {
+		t.Fatal("SyncClusterTraffic() succeeded after a failed live stats read")
+	}
+	inferred, err := Load(p.cfg.Paths.InferredStats, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := inferred.Users["user@example.com"]
+	if got == nil || got.CumulativeUp != 100 || got.CumulativeDown != 700 {
+		t.Fatalf("inferred state was overwritten after failed sample: %+v", got)
 	}
 }

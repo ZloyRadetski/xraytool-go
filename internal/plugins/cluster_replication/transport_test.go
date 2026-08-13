@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,59 @@ func TestReplicationServerAcceptsLegacyFraudPayloadWithoutAck(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, ack.EventIDs)
 	require.True(t, called)
+}
+
+type schedulerTrafficSnapshot struct{ calls chan struct{} }
+
+func (s *schedulerTrafficSnapshot) LocalTrafficSnapshot(context.Context) ([]pluginapi.TrafficSnapshot, error) {
+	select {
+	case s.calls <- struct{}{}:
+	default:
+	}
+	return nil, nil
+}
+
+func TestSlaveSchedulerReportsTrafficWhileSessionStaysOpen(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	plugin := New()
+	plugin.config = Config{Mode: "slave"}
+	provider := &schedulerTrafficSnapshot{calls: make(chan struct{}, 1)}
+	plugin.trafficSnapshot = provider
+	started := make(chan struct{})
+	done := make(chan struct{})
+	runner := func(ctx context.Context, _ *Service, _ Config, _ *slog.Logger, _ func(*slaveSession), _ func(context.Context, []string) error) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	config := Config{
+		Mode:              "slave",
+		StatsInterval:     "10ms",
+		DriftInterval:     "1h",
+		ReconnectInterval: "1h",
+	}
+	go func() {
+		plugin.runSlaveLoopWithRunner(ctx, nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), runner)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("slave session was not started")
+	}
+	select {
+	case <-provider.calls:
+	case <-time.After(time.Second):
+		t.Fatal("traffic report was not scheduled while the slave session remained open")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("slave scheduler did not stop after cancellation")
+	}
 }

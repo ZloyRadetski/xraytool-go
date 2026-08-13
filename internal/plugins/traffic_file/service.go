@@ -3,7 +3,6 @@ package traffic_file
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
@@ -29,8 +28,8 @@ func NewService(cfg Config, engine domain.Engine, clusterProvider domain.Cluster
 	return &Service{cfg: cfg, engine: engine, clusterProvider: clusterProvider}
 }
 
-func (s *Service) GenerateLocalStats() ([]MergedUser, error) {
-	if err := s.UpdateLocalStorage(); err != nil {
+func (s *Service) GenerateLocalStats(ctx context.Context) ([]MergedUser, error) {
+	if err := s.UpdateLocalStorage(ctx); err != nil {
 		return nil, err
 	}
 	state, err := Load(s.cfg.StatsStatePath, s.cfg.DetailedRetentionSeconds)
@@ -46,62 +45,78 @@ func (s *Service) GenerateLocalStats() ([]MergedUser, error) {
 	return merged, nil
 }
 
-func (s *Service) UpdateLocalStorage() error {
+// UpdateLocalStorage samples the live cumulative Xray counters and advances
+// the file-backed state atomically. The state lock deliberately covers the
+// Xray read as well as Load/Update/Save: otherwise two callers can read values
+// out of order and mistake an older sample for a counter reset.
+//
+// A failed live read never changes LastRaw* or cumulative totals. Treating a
+// transport failure as an all-zero sample would reset the baseline and count
+// the entire next successful Xray counter a second time.
+func (s *Service) UpdateLocalStorage(ctx context.Context) error {
 	if s.engine == nil {
 		return fmt.Errorf("traffic engine is unavailable")
 	}
-	rawStats, err := s.engine.QueryStats(context.Background())
-	if err != nil {
-		rawStats = nil
+	if s.cfg.StatsStatePath == "" {
+		return fmt.Errorf("traffic stats state path is empty")
 	}
-	samples := make([]LiveSample, len(rawStats))
-	for i, stat := range rawStats {
-		samples[i] = LiveSample{Email: stat.Email, Up: stat.Up, Down: stat.Down}
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if users, err := s.engine.ListUsers(context.Background()); err == nil {
-		existing := make(map[string]bool, len(samples))
-		for _, sample := range samples {
-			existing[sample.Email] = true
+	return withStateLock(ctx, s.cfg.StatsStatePath, func() error {
+		rawStats, err := s.engine.QueryStats(ctx)
+		if err != nil {
+			return fmt.Errorf("query traffic statistics: %w", err)
 		}
-		for _, user := range users {
-			if !existing[user.Email] {
-				samples = append(samples, LiveSample{Email: user.Email})
+		samples := make([]LiveSample, 0, len(rawStats))
+		for _, stat := range rawStats {
+			if stat.Email == "" {
+				continue
+			}
+			samples = append(samples, LiveSample{Email: stat.Email, Up: stat.Up, Down: stat.Down})
+		}
+		if users, listErr := s.engine.ListUsers(ctx); listErr == nil {
+			existing := make(map[string]bool, len(samples))
+			for _, sample := range samples {
+				existing[sample.Email] = true
+			}
+			for _, user := range users {
+				if user.Email != "" && !existing[user.Email] {
+					samples = append(samples, LiveSample{Email: user.Email})
+				}
 			}
 		}
-	}
-	lockPath := s.cfg.StatsStatePath + ".lock"
-	acquired := false
-	for i := 0; i < 50; i++ {
-		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL, 0o666)
-		if err == nil {
-			file.Close()
-			acquired = true
-			defer os.Remove(lockPath)
-			break
+		state, err := Load(s.cfg.StatsStatePath, s.cfg.DetailedRetentionSeconds)
+		if err != nil {
+			return err
 		}
-		if os.IsExist(err) {
-			if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
-				_ = os.Remove(lockPath)
-			}
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		return fmt.Errorf("failed to create lock file: %w", err)
-	}
-	if !acquired {
-		return fmt.Errorf("timeout waiting for stats lock file")
-	}
-	state, err := Load(s.cfg.StatsStatePath, s.cfg.DetailedRetentionSeconds)
-	if err != nil {
-		return err
-	}
-	Update(state, samples, s.cfg.DetailedRetentionSeconds)
-	return Save(s.cfg.StatsStatePath, state)
+		Update(state, samples, s.cfg.DetailedRetentionSeconds)
+		return Save(s.cfg.StatsStatePath, state)
+	})
 }
 
-func (s *Service) GenerateClusterStats(inferredMode bool, statePath string) ([]MergedUser, domain.SlaveReport, error) {
+func (s *Service) GenerateClusterStats(ctx context.Context, inferredMode bool, statePath string) ([]MergedUser, domain.SlaveReport, error) {
+	// Master-side report generation and replication both rewrite the inferred
+	// state. Use one aggregate lock so a slower report cannot overwrite a newer
+	// replication result with an older local snapshot.
+	if !inferredMode && s.cfg.IsMaster && s.cfg.InferredStatsPath != "" {
+		var (
+			users  []MergedUser
+			report domain.SlaveReport
+			err    error
+		)
+		err = withStateLock(ctx, s.cfg.InferredStatsPath+".aggregate", func() error {
+			users, report, err = s.generateClusterStats(ctx, inferredMode, statePath)
+			return err
+		})
+		return users, report, err
+	}
+	return s.generateClusterStats(ctx, inferredMode, statePath)
+}
+
+func (s *Service) generateClusterStats(ctx context.Context, inferredMode bool, statePath string) ([]MergedUser, domain.SlaveReport, error) {
 	if !inferredMode {
-		if err := s.UpdateLocalStorage(); err != nil {
+		if err := s.UpdateLocalStorage(ctx); err != nil {
 			return nil, domain.SlaveReport{}, fmt.Errorf("stats update failed: %w", err)
 		}
 	}
@@ -122,7 +137,9 @@ func (s *Service) GenerateClusterStats(inferredMode bool, statePath string) ([]M
 			inferred.Users[user.Email] = &UserState{CumulativeUp: user.Total.Up, CumulativeDown: user.Total.Down + user.Slave}
 		}
 		inferred.LastSampleTS = time.Now().Unix()
-		_ = Save(s.cfg.InferredStatsPath, inferred)
+		if err := Save(s.cfg.InferredStatsPath, inferred); err != nil {
+			return nil, report, fmt.Errorf("writing inferred stats state: %w", err)
+		}
 	}
 	return merged, report, nil
 }

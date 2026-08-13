@@ -39,7 +39,7 @@ func TestPlugin_GenerateClusterStatsOwnsFileBackedWorkflow(t *testing.T) {
 	}}))
 	p := New(&appconfig.Config{})
 	p.cfg.Paths.InferredStats = inferred
-	users, report, err := p.GenerateClusterStats(true, inferred, nil, nil)
+	users, report, err := p.GenerateClusterStats(context.Background(), true, inferred, nil, nil)
 	requireNoError(t, err)
 	if report.Enabled || len(users) != 1 || users[0].Email != "user@example.com" || users[0].Total.Combined != 30 {
 		t.Fatalf("GenerateClusterStats() = (%+v, %+v), want cumulative file-backed user", users, report)
