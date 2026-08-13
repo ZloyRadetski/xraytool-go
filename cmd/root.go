@@ -42,6 +42,7 @@ func NewRootCmd() *cobra.Command {
 			deps.RunCleanup()
 		},
 		Run: func(cmd *cobra.Command, args []string) {
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), asciiLogo)
 			cmd.Help() //nolint:errcheck
 		},
 	}
@@ -114,4 +115,25 @@ func requireRoot() error {
 
 const banner = `
 Xraytool CLI
+`
+
+// asciiLogo is a terminal-friendly rendering of md-docs/xraytool_logo.svg.
+// It is intentionally printed only for the bare root command; subcommands and
+// explicit help output remain compact and script-friendly.
+const asciiLogo = `
+                   ##                                  ##
+                    ###                              ### 
+                      ###                          ###   
+  #########            ####                      ###     
+  #########              ####                  ###       
+                           ####              ###         
+                             ####          ###           
+#############                   ####    ####             
+                                  ########               
+                                   #####                 
+  #########                      ####  ####              
+  #########                   ####       #####           
+                           #####            #####        
+                        #####                  ####      
+                      ####                       ####    
 `
