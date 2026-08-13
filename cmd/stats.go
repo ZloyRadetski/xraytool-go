@@ -33,6 +33,10 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			if emailFilter != "" && !regexp.MustCompile(`^[a-zA-Z0-9@._-]+$`).MatchString(emailFilter) {
+				if apiMode {
+					printJSON(map[string]interface{}{"ok": false, "error": "INVALID_EMAIL"})
+					return fmt.Errorf("invalid email filter")
+				}
 				return p.Error("invalid characters in email filter (allowed: a-z A-Z 0-9 @ . _ -; cannot start with -)")
 			}
 
@@ -46,6 +50,7 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 			if err != nil {
 				if apiMode {
 					printJSON(map[string]interface{}{"ok": false, "error": "STATS_UPDATE_FAILED", "message": err.Error()})
+					return fmt.Errorf("generate cluster stats: %w", err)
 				} else {
 					p.Warn("Stats update failed: %v", err)
 				}
@@ -91,6 +96,7 @@ func statsCmd(deps *AppDeps) *cobra.Command {
 				}
 				if apiMode {
 					printJSON(map[string]interface{}{"ok": false, "error": "USER_NOT_FOUND", "email": emailFilter})
+					return fmt.Errorf("user not found: %s", emailFilter)
 				}
 				if !found {
 					return p.Errorf("user not found: %s", emailFilter)

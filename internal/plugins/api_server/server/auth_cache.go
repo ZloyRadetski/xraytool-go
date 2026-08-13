@@ -243,16 +243,3 @@ func verifyOTP(identifier, code string) (bool, string, error) {
 
 	return false, "", nil
 }
-
-func init() {
-	// Background sweeper: removes expired OTPs every 10 minutes to prevent
-	// unbounded memory growth without external dependencies.
-	// The LRU cap (10 000 entries) is the primary defence; this sweeper is a
-	// secondary cleanup to reclaim memory from naturally-expired legitimate codes.
-	go func() {
-		for {
-			time.Sleep(10 * time.Minute)
-			otpCache.sweepExpired()
-		}
-	}()
-}

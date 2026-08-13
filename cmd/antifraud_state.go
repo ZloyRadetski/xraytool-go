@@ -82,10 +82,6 @@ func antiFraudStateCmd(deps *AppDeps) *cobra.Command {
 				fmt.Printf("  %s: %d IPs (Hashes: %v)\n", email, len(hashes), hashes)
 			}
 			fmt.Println("---------------------------------------------------------")
-			for email, hashes := range result.State {
-				fmt.Printf("%-35s : %d IP(s)\n", email, len(hashes))
-			}
-			fmt.Println("---------------------------------------------------------")
 			fmt.Printf("Total tracked users: %d\n", len(result.State))
 			return nil
 		},

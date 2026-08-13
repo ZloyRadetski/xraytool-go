@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"xraytool/internal/domain"
 	"xraytool/internal/pluginapi"
@@ -53,10 +54,11 @@ type engineRef struct {
 // and pluginapi types only at the plugin boundary. This keeps existing kernel
 // consumers independent of the plugin transport contract.
 type MultiEngine struct {
-	engines []engineRef
-	router  EngineRouter
-	log     *slog.Logger
-	initErr error
+	engines  []engineRef
+	routerMu sync.RWMutex
+	router   EngineRouter
+	log      *slog.Logger
+	initErr  error
 }
 
 var _ domain.Engine = (*MultiEngine)(nil)
@@ -115,6 +117,8 @@ func (m *MultiEngine) WithRouter(r EngineRouter) *MultiEngine {
 	if m == nil {
 		return nil
 	}
+	m.routerMu.Lock()
+	defer m.routerMu.Unlock()
 	if r == nil {
 		m.router = &broadcastRouter{engines: refsToProviders(m.engines)}
 	} else {
@@ -207,7 +211,9 @@ func (m *MultiEngine) routedEngines(user pluginapi.VPNUserConfig) ([]engineRef, 
 		return nil, err
 	}
 
+	m.routerMu.RLock()
 	router := m.router
+	m.routerMu.RUnlock()
 	if router == nil {
 		return append([]engineRef(nil), m.engines...), nil
 	}

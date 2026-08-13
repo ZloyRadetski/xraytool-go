@@ -33,8 +33,8 @@ type broadcastMsg struct {
 func newHub(log pluginapi.Logger) *Hub {
 	return &Hub{
 		broadcast:  make(chan broadcastMsg, 256),
-		register:   make(chan *wsClient),
-		unregister: make(chan *wsClient),
+		register:   make(chan *wsClient, 64),
+		unregister: make(chan *wsClient, 64),
 		clients:    make(map[*wsClient]bool),
 		log:        log,
 	}
@@ -59,12 +59,15 @@ func (h *Hub) run(stopCh <-chan struct{}) {
 			h.mu.Unlock()
 
 		case msg := <-h.broadcast:
-			h.mu.RLock()
+			// A full client send buffer requires removing that client. Hold the
+			// write lock for the whole iteration so map mutation is never made
+			// under RLock (or concurrently with another map operation).
+			h.mu.Lock()
 			for client := range h.clients {
 				// Broadcast logic:
 				// - If msg.targetRole == "admin", send only to admins
 				// - If msg.targetUserID != "", send only to that specific client (and maybe admins)
-				
+
 				shouldSend := false
 				if msg.targetRole == "admin" && client.role == "admin" {
 					shouldSend = true
@@ -84,8 +87,8 @@ func (h *Hub) run(stopCh <-chan struct{}) {
 					}
 				}
 			}
-			h.mu.RUnlock()
-			
+			h.mu.Unlock()
+
 		case <-stopCh:
 			h.mu.Lock()
 			for client := range h.clients {
@@ -100,16 +103,29 @@ func (h *Hub) run(stopCh <-chan struct{}) {
 
 // BroadcastToAdmins sends a message to all connected admins.
 func (h *Hub) BroadcastToAdmins(data []byte) {
-	h.broadcast <- broadcastMsg{
+	h.enqueueBroadcast(broadcastMsg{
 		targetRole: "admin",
 		data:       data,
-	}
+	})
 }
 
 // BroadcastToClient sends a message to a specific client.
 func (h *Hub) BroadcastToClient(userID string, data []byte) {
-	h.broadcast <- broadcastMsg{
+	h.enqueueBroadcast(broadcastMsg{
 		targetUserID: userID,
 		data:         data,
+	})
+}
+
+// enqueueBroadcast deliberately drops a message when the bounded hub queue is
+// full. A slow or disconnected WebSocket consumer must not be able to block
+// an HTTP request goroutine indefinitely.
+func (h *Hub) enqueueBroadcast(msg broadcastMsg) {
+	select {
+	case h.broadcast <- msg:
+	default:
+		if h.log != nil {
+			h.log.Warn("WebSocket broadcast queue is full; dropping message")
+		}
 	}
 }

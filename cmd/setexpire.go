@@ -79,7 +79,9 @@ func updateLimitCmd(deps *AppDeps) *cobra.Command {
 		Aliases: []string{"updatelimit", "set-limit"},
 		Short:   "Update a user's device connection limit",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot() //nolint:errcheck
+			if err := requireRoot(); err != nil {
+				return err
+			}
 			if email == "" {
 				email = emailAlias
 			}
@@ -91,6 +93,12 @@ func updateLimitCmd(deps *AppDeps) *cobra.Command {
 				return err
 			}
 
+			if limitStr == "" {
+				fmt.Print("Enter new device limit: ")
+				if _, err := fmt.Scanln(&limitStr); err != nil {
+					return p.Errorf("read limit: %v", err)
+				}
+			}
 			limitPtr, err := limitPtrFromStr(limitStr)
 			if err != nil || limitPtr == nil {
 				return p.Errorf("invalid limit: %v", err)

@@ -16,15 +16,16 @@ package eventsink_webhook
 
 import (
 	"context"
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
-	"bytes"
 
 	json "github.com/goccy/go-json"
 
@@ -145,7 +146,7 @@ func (p *Plugin) Handle(ctx context.Context, ev pluginapi.Event) error {
 		p.wg.Add(1)
 		go func(url string) {
 			defer p.wg.Done()
-			p.sendWithRetry(context.Background(), url, eventID, payload)
+			p.sendWithRetry(ctx, url, eventID, payload)
 		}(webhookURL)
 	}
 
@@ -157,7 +158,7 @@ func (p *Plugin) sendWithRetry(ctx context.Context, url, eventID string, payload
 	maxAttempts := len(backoffs) + 1
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			p.log.Error("error creating request", "event_id", eventID, "url", url, "error", err)
 			return
@@ -171,6 +172,7 @@ func (p *Plugin) sendWithRetry(ctx context.Context, url, eventID string, payload
 
 		resp, err := p.client.Do(req)
 		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				p.log.Info("event successfully sent", "event_id", eventID, "url", url, "attempt", attempt)

@@ -1,6 +1,8 @@
 package database_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"xraytool/internal/database"
+	"xraytool/internal/domain"
 )
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -32,6 +35,76 @@ func newTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return db
+}
+
+func TestAutoRenewSubscription_OnlyUpdatesLatestSubscription(t *testing.T) {
+	db := newTestDB(t)
+	registry := database.NewRegistry(db)
+	now := time.Now().UTC().Add(-48 * time.Hour)
+	oldEnd := now.Add(-24 * time.Hour)
+	latestEnd := now.Add(24 * time.Hour)
+	if err := db.Create(&database.User{ID: "renew-user", Username: "renew-user"}).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := db.Create(&database.Subscription{
+		ID: "old-sub", UserID: "renew-user", Email: "old@example.test", UUID: "old-uuid", Status: "expired",
+		StartsAt: &now, EndsAt: &oldEnd, MaxDevices: 1, CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create old subscription: %v", err)
+	}
+	if err := db.Create(&database.Subscription{
+		ID: "latest-sub", UserID: "renew-user", Email: "latest@example.test", UUID: "latest-uuid", Status: "inactive",
+		StartsAt: &now, EndsAt: &latestEnd, MaxDevices: 2, CreatedAt: now.Add(time.Hour), Metadata: database.Metadata{"old": "value"},
+	}).Error; err != nil {
+		t.Fatalf("create latest subscription: %v", err)
+	}
+	requestedEnd := latestEnd.Add(30 * 24 * time.Hour)
+	if err := registry.Subscriptions().AutoRenewSubscription(context.Background(), "renew-user", nil, 0, &requestedEnd, 5); err != nil {
+		t.Fatalf("auto renew: %v", err)
+	}
+
+	var oldSub, latestSub database.Subscription
+	requireNoDBError(t, db.First(&oldSub, "id = ?", "old-sub").Error)
+	requireNoDBError(t, db.First(&latestSub, "id = ?", "latest-sub").Error)
+	if oldSub.Status != "expired" || oldSub.MaxDevices != 1 || oldSub.EndsAt == nil || !oldSub.EndsAt.Equal(oldEnd) {
+		t.Fatalf("historical subscription was modified: %+v", oldSub)
+	}
+	if latestSub.Status != "active" || latestSub.MaxDevices != 5 || latestSub.EndsAt == nil || !latestSub.EndsAt.Equal(requestedEnd) {
+		t.Fatalf("latest subscription was not renewed: %+v", latestSub)
+	}
+	if latestSub.StartsAt == nil || !latestSub.StartsAt.Equal(now) {
+		t.Fatalf("renewal must retain starts_at, got %v want %v", latestSub.StartsAt, now)
+	}
+}
+
+func TestPaymentRepo_FindPendingByProviderUsesMethod(t *testing.T) {
+	db := newTestDB(t)
+	registry := database.NewRegistry(db)
+	if err := db.Create(&database.Payment{UserID: "user", Amount: 1, Status: "pending", PaymentType: "subscription", Method: "platega"}).Error; err != nil {
+		t.Fatalf("create payment: %v", err)
+	}
+	payments, err := registry.Payments().FindPendingByProvider(context.Background(), "platega")
+	if err != nil {
+		t.Fatalf("FindPendingByProvider: %v", err)
+	}
+	if len(payments) != 1 || payments[0].Method != "platega" {
+		t.Fatalf("unexpected pending payments: %#v", payments)
+	}
+}
+
+func TestFindUserByPlatformID_MapsNotFoundToDomainError(t *testing.T) {
+	db := newTestDB(t)
+	_, err := database.FindUserByPlatformID(db, "web", "missing@example.test")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("error = %v, want domain.ErrNotFound", err)
+	}
+}
+
+func requireNoDBError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestUser_CreateAndRead(t *testing.T) {

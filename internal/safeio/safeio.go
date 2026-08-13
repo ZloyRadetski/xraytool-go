@@ -30,21 +30,27 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 		return fmt.Errorf("create tmp: %w", err)
 	}
 	tmp := f.Name()
+	// Keep panic-path cleanup recoverable too. Successful atomic rename clears
+	// the target, while any early return or panic removes the temporary file.
+	committed := false
+	defer func() {
+		if !committed {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
 		return fmt.Errorf("write tmp: %w", err)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
 		return fmt.Errorf("sync tmp: %w", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close tmp: %w", err)
+	}
 
 	// Make sure permissions match exactly (os.WriteFile applies umask, so we must chmod)
 	if err := os.Chmod(tmp, perm); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("chmod tmp: %w", err)
 	}
 
@@ -64,5 +70,6 @@ func WriteToFile(path string, data []byte, defaultPerm os.FileMode) error {
 		return fmt.Errorf("atomic rename %q → %q: %w", tmp, path, err)
 	}
 
+	committed = true
 	return nil
 }

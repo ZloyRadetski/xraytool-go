@@ -767,6 +767,8 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var newEndsAtPtr *time.Time
+	var appliedPromo *domain.PromoCode
+	var appliedPromoCode string
 
 	if body.PlanID != nil {
 		plans, err := r.registry.Plans().FindActive(context.Background())
@@ -819,19 +821,46 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		if body.PromoCode != "" {
 			code := strings.ToUpper(strings.TrimSpace(body.PromoCode))
 			promo, err := r.registry.Promos().FindByCode(context.Background(), code)
-			if err == nil {
-				if promo.IsActive && (promo.ExpiresAt == nil || time.Now().Before(*promo.ExpiresAt)) {
-					// We only check if it applies to platform
-					if promo.TargetPlatform == "all" || promo.TargetPlatform == platform {
-						promoPrice = baseAmount - (baseAmount * promo.DiscountPercent / 100)
-					}
-				}
+			if err != nil || promo == nil {
+				writeError(w, http.StatusBadRequest, "promo code not found")
+				return
 			}
+			if !promo.IsActive || (promo.ExpiresAt != nil && !time.Now().Before(*promo.ExpiresAt)) {
+				writeError(w, http.StatusBadRequest, "promo code is not active")
+				return
+			}
+			if promo.TargetPlatform != "all" && promo.TargetPlatform != platform {
+				writeError(w, http.StatusBadRequest, "promo code is not valid for this platform")
+				return
+			}
+			if promo.MaxUses > 0 && promo.UsesCount >= promo.MaxUses {
+				writeError(w, http.StatusBadRequest, "promo code usage limit reached")
+				return
+			}
+			used, err := r.registry.Payments().CountByUserAndPromo(context.Background(), user.ID, promo.ID)
+			if err != nil {
+				r.log.Error("auto-renew promo usage lookup", "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to validate promo code")
+				return
+			}
+			if used > 0 {
+				writeError(w, http.StatusBadRequest, "promo code already used by this user")
+				return
+			}
+			promoPrice = baseAmount - (baseAmount * promo.DiscountPercent / 100)
+			appliedPromo = promo
+			appliedPromoCode = code
 		}
 
 		finalAmount := globalPrice
 		if promoPrice < globalPrice {
 			finalAmount = promoPrice
+		} else {
+			// A code that does not improve on the plan-wide discount must not be
+			// consumed. This keeps the user from losing a single-use promo while
+			// receiving the same price they would have received without it.
+			appliedPromo = nil
+			appliedPromoCode = ""
 		}
 
 		body.PlanTotalPrice = finalAmount
@@ -852,10 +881,45 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 		newEndsAtPtr = &t
 	}
 
-	txErr := r.userSvc.AutoRenewSubscription(context.Background(), user.ID, body.PlanID, body.PlanTotalPrice, newEndsAtPtr, body.MaxDevices)
+	txErr := r.registry.WithTx(context.Background(), func(tx domain.Registry) error {
+		if appliedPromo != nil {
+			// Card payments persist PromoCodeID, but balance auto-renewals do not
+			// create a payment row. Record the redemption on the subscription in
+			// the same transaction so an unlimited promo cannot be reused by the
+			// same user through this endpoint.
+			sub, err := tx.Subscriptions().FindLatestByUserID(context.Background(), user.ID)
+			if err != nil {
+				return fmt.Errorf("load subscription for promo use: %w", err)
+			}
+			if subscriptionUsedPromo(sub.Metadata, appliedPromoCode) {
+				return errAutoRenewPromoAlreadyUsed
+			}
+
+			ok, err := tx.Promos().IncrementUses(context.Background(), appliedPromo.ID, appliedPromo.MaxUses)
+			if err != nil {
+				return fmt.Errorf("increment promo uses: %w", err)
+			}
+			if !ok {
+				return fmt.Errorf("promo limit reached")
+			}
+			sub.Metadata = appendSubscriptionPromoUse(sub.Metadata, appliedPromoCode)
+			if err := tx.Subscriptions().Update(context.Background(), sub); err != nil {
+				return fmt.Errorf("record promo use: %w", err)
+			}
+		}
+		return tx.Subscriptions().AutoRenewSubscription(context.Background(), user.ID, body.PlanID, body.PlanTotalPrice, newEndsAtPtr, body.MaxDevices)
+	})
 	if txErr != nil {
 		if txErr.Error() == "insufficient balance" {
 			writeError(w, http.StatusPaymentRequired, "insufficient balance")
+			return
+		}
+		if strings.Contains(txErr.Error(), "promo limit reached") {
+			writeError(w, http.StatusConflict, "promo code usage limit reached")
+			return
+		}
+		if errors.Is(txErr, errAutoRenewPromoAlreadyUsed) {
+			writeError(w, http.StatusConflict, "promo code already used by this user")
 			return
 		}
 		r.log.Error("auto-renew transaction", "err", txErr)
@@ -875,6 +939,57 @@ func (r *Router) handleAutoRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+var errAutoRenewPromoAlreadyUsed = errors.New("auto-renew promo already used")
+
+const subscriptionPromoUsesKey = "auto_renew_promo_uses"
+
+func subscriptionUsedPromo(metadata domain.Metadata, code string) bool {
+	code = strings.TrimSpace(strings.ToUpper(code))
+	if code == "" || metadata == nil {
+		return false
+	}
+	uses, ok := metadata[subscriptionPromoUsesKey]
+	if !ok {
+		return false
+	}
+	switch entries := uses.(type) {
+	case []string:
+		for _, entry := range entries {
+			if strings.EqualFold(strings.TrimSpace(entry), code) {
+				return true
+			}
+		}
+	case []any:
+		for _, raw := range entries {
+			entry, ok := raw.(string)
+			if ok && strings.EqualFold(strings.TrimSpace(entry), code) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appendSubscriptionPromoUse(metadata domain.Metadata, code string) domain.Metadata {
+	result := make(domain.Metadata, len(metadata)+1)
+	for key, value := range metadata {
+		result[key] = value
+	}
+	uses := make([]string, 0, 1)
+	switch entries := result[subscriptionPromoUsesKey].(type) {
+	case []string:
+		uses = append(uses, entries...)
+	case []any:
+		for _, raw := range entries {
+			if entry, ok := raw.(string); ok {
+				uses = append(uses, entry)
+			}
+		}
+	}
+	result[subscriptionPromoUsesKey] = append(uses, strings.ToUpper(strings.TrimSpace(code)))
+	return result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1143,8 +1258,8 @@ func (r *Router) handleGetDevices(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
-	if err != nil {
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err != nil || subPtr == nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
@@ -1171,8 +1286,8 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	subPtr, _ := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
-	if err != nil {
+	subPtr, err := r.userSvc.GetSubscriptionByUserID(context.Background(), user.ID)
+	if err != nil || subPtr == nil {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return
 	}
@@ -1209,7 +1324,9 @@ func (r *Router) handleDeleteDevice(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) unbanUserInXrayAsync(sub domain.Subscription) {
-	r.bgTasks.Add(1)
+	if !r.beginBackgroundTask() {
+		return
+	}
 	go func() {
 		defer r.bgTasks.Done()
 		r.unbanUserInXray(sub)

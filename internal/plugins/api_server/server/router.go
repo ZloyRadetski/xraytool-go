@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
@@ -76,8 +77,10 @@ type Router struct {
 	// nil when the module is disabled or when running in slave mode.
 	ingestEvents func(context.Context, string, []pluginapi.FraudEvent) error
 
-	bgTasks  sync.WaitGroup
-	webRegMu sync.Mutex //nolint:unused
+	bgTasks      sync.WaitGroup
+	shutdownMu   sync.Mutex
+	shuttingDown bool
+	webRegMu     sync.Mutex //nolint:unused
 }
 
 // Options is retained for source compatibility while router integrations are
@@ -90,8 +93,23 @@ type Options struct {
 
 // Shutdown waits for all background tasks (like webhooks and xray unbans) to complete.
 func (r *Router) Shutdown() {
-	r.dispatcher.Shutdown()
+	r.shutdownMu.Lock()
+	r.shuttingDown = true
+	r.shutdownMu.Unlock()
+	if r.dispatcher != nil {
+		r.dispatcher.Shutdown()
+	}
 	r.bgTasks.Wait()
+}
+
+func (r *Router) beginBackgroundTask() bool {
+	r.shutdownMu.Lock()
+	defer r.shutdownMu.Unlock()
+	if r.shuttingDown {
+		return false
+	}
+	r.bgTasks.Add(1)
+	return true
 }
 
 // New constructs a Router, registers all routes and middleware, and returns the
@@ -104,6 +122,9 @@ func New(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, en
 // It is used by the plugin-host composition root; New remains source-compatible
 // for the legacy command path.
 func NewWithOptions(cfg *appconfig.Config, apiKey string, cm *subscription.CacheManager, engine domain.Engine, userSvc *usersvc.Service, dispatcher *events.Dispatcher, log *slog.Logger, registry domain.Registry, options Options) *Router {
+	if log == nil {
+		log = slog.Default()
+	}
 	r := &Router{
 		mux:        http.NewServeMux(),
 		apiKey:     apiKey,
@@ -118,6 +139,28 @@ func NewWithOptions(cfg *appconfig.Config, apiKey string, cm *subscription.Cache
 
 	r.registerRoutes()
 	return r
+}
+
+// StartMaintenance runs the OTP cleanup loop for the lifetime of the API
+// plugin. It is intentionally owned by the host lifecycle rather than init(),
+// so tests and graceful shutdown never leave a permanent goroutine behind.
+func (r *Router) StartMaintenance(ctx context.Context) {
+	if ctx == nil || !r.beginBackgroundTask() {
+		return
+	}
+	go func() {
+		defer r.bgTasks.Done()
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				otpCache.sweepExpired()
+			}
+		}
+	}()
 }
 
 // AntifraudHooks provides a compatibility bridge for the legacy server
@@ -388,16 +431,18 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// getClientIP parses X-Real-IP safely.
+// getClientIP accepts X-Real-IP only from a local/private reverse proxy. This
+// covers loopback, Docker bridge, and Kubernetes/ingress networks while a
+// public client cannot spoof its address by sending the header directly.
 func getClientIP(r *http.Request) string {
 	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remoteIP = r.RemoteAddr
 	}
 
-	if remoteIP == "127.0.0.1" || remoteIP == "::1" || remoteIP == "localhost" {
-		ip := r.Header.Get("X-Real-IP")
-		if ip != "" && net.ParseIP(ip) != nil {
+	proxyIP := net.ParseIP(strings.TrimSpace(remoteIP))
+	if remoteIP == "localhost" || (proxyIP != nil && (proxyIP.IsLoopback() || proxyIP.IsPrivate())) {
+		if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" && net.ParseIP(ip) != nil {
 			return ip
 		}
 	}

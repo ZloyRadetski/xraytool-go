@@ -372,13 +372,14 @@ func ProcessSQL(ctx context.Context, reg domain.Registry, cm *CacheManager, disp
 		res.Headers["Content-Type"] = "text/plain; charset=utf-8"
 		res.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
 		res.Headers["Pragma"] = "no-cache"
+	} else {
+		// The JSON attachment headers apply only to the default JSON response.
+		// Do not overwrite the text/plain subscription delivery headers above.
+		res.Headers["Content-Disposition"] = `attachment; filename="config.json"`
+		res.Headers["Content-Type"] = "application/json; charset=utf-8"
+		res.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+		res.Headers["Pragma"] = "no-cache"
 	}
-
-	// Default JSON output
-	res.Headers["Content-Disposition"] = `attachment; filename="config.json"`
-	res.Headers["Content-Type"] = "application/json; charset=utf-8"
-	res.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-	res.Headers["Pragma"] = "no-cache"
 
 	// Parse subscription template (configs.txt) from cache
 	subTmplData, routeGlobalData, routeRUData := cm.GetTemplates()

@@ -98,8 +98,8 @@ func (p *Plugin) handleWrite(w http.ResponseWriter, req *http.Request, allowConf
 		writeError(w, http.StatusBadRequest, "form parse error")
 		return
 	}
-	path := req.FormValue("path")
-	if !p.allowed(path) {
+	path, ok := p.resolveAllowedPath(req.FormValue("path"))
+	if !ok {
 		writeError(w, http.StatusForbidden, "path not allowed")
 		return
 	}
@@ -137,8 +137,8 @@ func (p *Plugin) handleWrite(w http.ResponseWriter, req *http.Request, allowConf
 }
 
 func (p *Plugin) handleDownload(w http.ResponseWriter, req *http.Request) {
-	path := req.URL.Query().Get("path")
-	if !p.allowed(path) {
+	path, ok := p.resolveAllowedPath(req.URL.Query().Get("path"))
+	if !ok {
 		writeError(w, http.StatusForbidden, "path not allowed")
 		return
 	}
@@ -158,25 +158,56 @@ func (p *Plugin) handleDownload(w http.ResponseWriter, req *http.Request) {
 	http.ServeFile(w, req, path)
 }
 
-func (p *Plugin) allowed(path string) bool {
+func (p *Plugin) resolveAllowedPath(path string) (string, bool) {
 	cleanPath := filepath.Clean(path)
 	if path == "" || !filepath.IsAbs(cleanPath) {
-		return false
+		return "", false
 	}
 	for _, root := range p.cfg.Server.AllowedDirs {
 		realRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
-			realRoot, err = filepath.Abs(root)
-			if err != nil {
-				continue
-			}
+			continue
 		}
-		rel, err := filepath.Rel(realRoot, cleanPath)
+		realPath, err := resolvePathThroughExistingParent(cleanPath)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(realRoot, realPath)
 		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
-			return true
+			return realPath, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// resolvePathThroughExistingParent resolves every existing component of a
+// prospective write target. This permits creating new nested directories while
+// still rejecting a symlink anywhere in the existing prefix that escapes the
+// configured storage root.
+func resolvePathThroughExistingParent(path string) (string, error) {
+	probe := path
+	missing := make([]string, 0, 2)
+	for {
+		realPath, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			return filepath.Join(append([]string{realPath}, missing...)...), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", err
+		}
+		missing = append([]string{filepath.Base(probe)}, missing...)
+		probe = parent
+	}
+}
+
+// allowed is retained for callers/tests that only need a policy decision.
+func (p *Plugin) allowed(path string) bool {
+	_, ok := p.resolveAllowedPath(path)
+	return ok
 }
 
 func forbiddenUploadExtension(path string) bool {

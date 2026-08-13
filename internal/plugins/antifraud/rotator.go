@@ -70,12 +70,12 @@ func (r *rotator) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.tryRotate()
+			r.tryRotate(ctx)
 		}
 	}
 }
 
-func (r *rotator) tryRotate() {
+func (r *rotator) tryRotate(ctx context.Context) {
 	info, err := os.Stat(r.logPath)
 	if err != nil {
 		// File not present yet — normal at startup.
@@ -127,7 +127,7 @@ func (r *rotator) tryRotate() {
 			r.log.Error("antifraud rotator: truncate failed", "err", err)
 			return
 		}
-		if err := r.loggerCtrl.RestartLogger(context.Background()); err != nil {
+		if err := r.loggerCtrl.RestartLogger(ctx); err != nil {
 			r.log.Error("antifraud rotator: RestartLogger failed", "err", err)
 		}
 	} else {
@@ -138,7 +138,7 @@ func (r *rotator) tryRotate() {
 		}
 
 		// Step 2: Tell Engine to close the old fd and open a fresh log file.
-		if err := r.loggerCtrl.RestartLogger(context.Background()); err != nil {
+		if err := r.loggerCtrl.RestartLogger(ctx); err != nil {
 			// Critical: Xray couldn't reopen the log. Reverse the rename so we don't lose data.
 			_ = os.Rename(oldPath, r.logPath)
 			r.log.Error("antifraud rotator: RestartLogger failed, rotation reversed", "err", err)
@@ -164,7 +164,11 @@ func (r *rotator) tryRotate() {
 	// If the tailer is currently processing .old and we delete it mid-scan,
 	// the already-opened file descriptor in the tailer remains valid (Linux VFS
 	// keeps the inode alive until all fds are closed). No data loss occurs.
-	time.Sleep(2 * r.tickInterval)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * r.tickInterval):
+	}
 
 	if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
 		r.log.Warn("antifraud rotator: failed to remove old log", "err", err, "path", oldPath)

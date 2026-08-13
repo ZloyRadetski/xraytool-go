@@ -980,7 +980,7 @@ webhooks:
   # - "http://127.0.0.1:8081/api/v1/notify"
 
 database:
-  # Database driver: "sqlite" (production) or "sqlite" (lightweight/fallback)
+  # Database driver: "postgres" (production) or "sqlite" (lightweight/fallback)
   driver: "sqlite"
   # Full Postgres DSN (used when driver=postgres)
   # dsn: "postgres://user:pass@localhost:5432/xraytool?sslmode=disable"

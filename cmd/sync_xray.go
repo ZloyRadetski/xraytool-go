@@ -14,7 +14,9 @@ func syncXrayCmd(deps *AppDeps) *cobra.Command {
 based on the subscription UUIDs stored in the SQLite database. Does not delete any clients.
 Only modifies existing clients in the engine that match by email.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			requireRoot() //nolint:errcheck
+			if err := requireRoot(); err != nil {
+				return err
+			}
 
 			if deps.ReplicationService == nil {
 				return fmt.Errorf("cluster_replication is not configured on this master")
@@ -23,7 +25,9 @@ Only modifies existing clients in the engine that match by email.`,
 			if err != nil {
 				return fmt.Errorf("failed to build desired users: %w", err)
 			}
-			result, err := deps.Engine.SyncUsers(cmd.Context(), users, true)
+			// This command promises an in-place UUID sync. Do not remove engine
+			// users simply because a transient DB snapshot omitted them.
+			result, err := deps.Engine.SyncUsers(cmd.Context(), users, false)
 			if err != nil {
 				return fmt.Errorf("failed to sync engine: %w", err)
 			}

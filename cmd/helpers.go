@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"time"
 
 	"xraytool/internal/domain"
@@ -80,12 +81,9 @@ func (p *Printer) Println(s string) {
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-//nolint:unused
 var validEmailRe = regexp.MustCompile(`^[a-zA-Z0-9@._][a-zA-Z0-9@._-]*$`)
 
-// validEmail returns true if the email contains only allowed characters. //nolint:unused
-//
-//nolint:unused
+// validEmail returns true if the email contains only allowed characters.
 func validEmail(email string) bool {
 	return validEmailRe.MatchString(email)
 }
@@ -94,9 +92,6 @@ func validEmail(email string) bool {
 // Date helpers
 // ---------------------------------------------------------------------------
 // defaultExpireDate returns a date 30 days from now in DD-MM-YYYY format.
-//
-//nolint:unused
-//nolint:unused
 func defaultExpireDate() string {
 	return time.Now().AddDate(0, 0, 30).Format("02-01-2006")
 }
@@ -105,8 +100,18 @@ func defaultExpireDate() string {
 // System helpers
 // ---------------------------------------------------------------------------
 
-// systemctlRestart restarts a systemd service. Non-fatal on failure.
+// systemctlRestart restarts a systemd service when systemd is available.
+// Containers, non-systemd Linux distributions, and Windows are deliberately
+// left alone: the engine APIs already hot-reload normal configuration changes.
 var systemctlRestart = func(service string) {
+	if runtime.GOOS != "linux" {
+		fmt.Printf("INFO|Skipping systemd restart for %s: unsupported platform\n", service)
+		return
+	}
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		fmt.Printf("INFO|Skipping systemd restart for %s: systemctl is unavailable\n", service)
+		return
+	}
 	fmt.Printf("INFO|Restarting systemd service: %s\n", service)
 	err := exec.Command("systemctl", "restart", service).Run()
 	if err != nil {
@@ -143,7 +148,7 @@ func resolveEmail(email, emailAlias string, allowMenu bool, promptText string, e
 	if email == "" {
 		return "", p.Error("email is required")
 	}
-	if !regexp.MustCompile(`^[a-zA-Z0-9@._-]+$`).MatchString(email) {
+	if !validEmail(email) {
 		return "", p.Error("invalid email format")
 	}
 	return email, nil

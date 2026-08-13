@@ -6,6 +6,7 @@ package identity_memory
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"fmt"
 	"math/big"
 	"sync"
@@ -97,7 +98,7 @@ func (p *Plugin) VerifyOTP(_ context.Context, subject, code string) (bool, strin
 		return false, "", nil
 	}
 	item.lastAccessed = now
-	if item.code == code {
+	if subtle.ConstantTimeCompare([]byte(item.code), []byte(code)) == 1 {
 		payload := item.payload
 		delete(p.entries, subject)
 		return true, payload, nil

@@ -3,6 +3,7 @@ package pluginrpc
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -78,6 +79,9 @@ type externalPluginServer interface {
 type externalServer struct {
 	impl   Implementation
 	broker *plugin.GRPCBroker
+
+	proxyMu sync.Mutex
+	proxy   *serviceProxyClient
 }
 
 func (s *externalServer) Describe(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
@@ -101,6 +105,7 @@ func (s *externalServer) Init(ctx context.Context, request *structpb.Struct) (*e
 	}
 
 	init := InitRequest{Config: config}
+	var serviceProxy *serviceProxyClient
 	if proxyID != 0 {
 		if s.broker == nil {
 			return nil, status.Error(codes.FailedPrecondition, "pluginrpc: service proxy broker is unavailable")
@@ -109,11 +114,14 @@ func (s *externalServer) Init(ctx context.Context, request *structpb.Struct) (*e
 		if err != nil {
 			return nil, rpcError(fmt.Errorf("dial host service proxy: %w", err))
 		}
-		init.Services = &serviceProxyClient{conn: conn}
+		serviceProxy = &serviceProxyClient{conn: conn}
+		init.Services = serviceProxy
 	}
 	if err := s.impl.Init(ctx, init); err != nil {
+		_ = serviceProxy.Close()
 		return nil, rpcError(err)
 	}
+	s.replaceServiceProxy(serviceProxy)
 	return &emptypb.Empty{}, nil
 }
 
@@ -125,6 +133,7 @@ func (s *externalServer) Start(ctx context.Context, _ *emptypb.Empty) (*emptypb.
 }
 
 func (s *externalServer) Stop(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	defer s.closeServiceProxy()
 	if err := s.impl.Stop(ctx); err != nil {
 		return nil, rpcError(err)
 	}
@@ -180,6 +189,16 @@ type serviceProxyClient struct {
 	conn *grpc.ClientConn
 }
 
+// Close releases the brokered gRPC connection created during Init. The server
+// owns this connection because it is created on behalf of an Implementation;
+// without explicit cleanup every failed init/restart leaks HTTP/2 goroutines.
+func (c *serviceProxyClient) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
+}
+
 func (c *serviceProxyClient) Call(ctx context.Context, req CallRequest) (CallResponse, error) {
 	if err := ValidateCallRequest(req); err != nil {
 		return CallResponse{}, err
@@ -197,6 +216,20 @@ func (c *serviceProxyClient) Call(ctx context.Context, req CallRequest) (CallRes
 		return CallResponse{}, err
 	}
 	return result, nil
+}
+
+func (s *externalServer) replaceServiceProxy(next *serviceProxyClient) {
+	s.proxyMu.Lock()
+	previous := s.proxy
+	s.proxy = next
+	s.proxyMu.Unlock()
+	if previous != nil && previous != next {
+		_ = previous.Close()
+	}
+}
+
+func (s *externalServer) closeServiceProxy() {
+	s.replaceServiceProxy(nil)
 }
 
 func rpcError(err error) error {

@@ -83,13 +83,44 @@ func ConfigSchemaPath(manifestPath string, manifest Manifest) (string, error) {
 	if strings.Contains(ref, "://") || strings.HasPrefix(strings.ToLower(ref), "file:") {
 		return "", fmt.Errorf("manifest.config_schema must be a local file path, got %q", manifest.ConfigSchema)
 	}
-	if filepath.IsAbs(ref) {
-		return filepath.Clean(ref), nil
-	}
 	if strings.TrimSpace(manifestPath) == "" {
 		return "", fmt.Errorf("cannot resolve relative manifest.config_schema %q without a manifest path", manifest.ConfigSchema)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(manifestPath), ref)), nil
+	if filepath.IsAbs(ref) {
+		return "", fmt.Errorf("manifest.config_schema must stay inside the plugin bundle, got absolute path %q", manifest.ConfigSchema)
+	}
+
+	manifestDir, err := filepath.Abs(filepath.Dir(manifestPath))
+	if err != nil {
+		return "", fmt.Errorf("resolve manifest directory: %w", err)
+	}
+	candidate := filepath.Clean(filepath.Join(manifestDir, ref))
+	// Built-in manifests share the embedded schema directory with the host.
+	// This is a fixed, repository-owned location rather than a plugin supplied
+	// escape hatch; external bundles remain constrained to their own directory.
+	pluginRoot := filepath.Dir(manifestDir)
+	allowBuiltinSchemaDir := manifest.Type == "internal" && filepath.Base(pluginRoot) == "plugins" &&
+		pathWithin(filepath.Clean(filepath.Join(filepath.Dir(pluginRoot), "pluginmanifest", "schemas")), candidate)
+	if !pathWithin(manifestDir, candidate) && !allowBuiltinSchemaDir {
+		return "", fmt.Errorf("manifest.config_schema %q escapes plugin bundle", manifest.ConfigSchema)
+	}
+
+	// A lexical Clean check alone is insufficient: a symlink inside the bundle
+	// could point at an arbitrary host file. Resolve both paths before exposing
+	// the schema to the parser.
+	realManifestDir, err := filepath.EvalSymlinks(manifestDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve plugin bundle directory: %w", err)
+	}
+	realCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve manifest.config_schema %q: %w", manifest.ConfigSchema, err)
+	}
+	realBuiltinSchemaDir := filepath.Clean(filepath.Join(filepath.Dir(filepath.Dir(realManifestDir)), "pluginmanifest", "schemas"))
+	if !pathWithin(realManifestDir, realCandidate) && !(allowBuiltinSchemaDir && pathWithin(realBuiltinSchemaDir, realCandidate)) {
+		return "", fmt.Errorf("manifest.config_schema %q escapes plugin bundle through a symlink", manifest.ConfigSchema)
+	}
+	return realCandidate, nil
 }
 
 // ValidateConfig validates config against the JSON Schema declared by the
@@ -135,8 +166,64 @@ func ValidateManifestSchema(manifestPath string, manifest Manifest) error {
 	if err != nil {
 		return fmt.Errorf("read config schema %q: %w", schemaPath, err)
 	}
-	_, err = parseSchema(data, schemaPath)
-	return err
+	schema, err := parseSchema(data, schemaPath)
+	if err != nil {
+		return err
+	}
+	return validateSchemaReferences(schema, schema, "$", 0)
+}
+
+func pathWithin(base, candidate string) bool {
+	rel, err := filepath.Rel(base, candidate)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// validateSchemaReferences checks every reference while validating a manifest,
+// rather than waiting until a config value happens to traverse that branch.
+// It deliberately resolves, but does not recursively expand, references so
+// legitimate recursive JSON Schemas remain supported.
+func validateSchemaReferences(value any, root map[string]any, path string, depth int) error {
+	if depth > maxSchemaDepth {
+		return fmt.Errorf("%s: schema nesting exceeds %d levels", path, maxSchemaDepth)
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		if rawRef, exists := typed["$ref"]; exists {
+			ref, ok := rawRef.(string)
+			if !ok {
+				return fmt.Errorf("%s: $ref must be a string", path)
+			}
+			target, err := resolveLocalReference(root, ref)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			switch target.(type) {
+			case map[string]any, bool:
+			default:
+				return fmt.Errorf("%s: JSON Schema reference %q does not resolve to a schema", path, ref)
+			}
+		}
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := validateSchemaReferences(typed[key], root, pathForKey(path, key), depth+1); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, child := range typed {
+			if err := validateSchemaReferences(child, root, fmt.Sprintf("%s[%d]", path, index), depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func readBoundedFile(path string, limit int64) ([]byte, error) {

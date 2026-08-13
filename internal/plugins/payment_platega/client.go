@@ -60,7 +60,7 @@ func CreatePayment(merchantID, secret string, userID string, userName string, am
 	}
 
 	if merchantID == "dummy" {
-		return orderID, "https://mock.platega.com/pay/" + orderID, nil
+		return "https://mock.platega.com/pay/" + orderID, orderID, nil
 	}
 
 	req, err := http.NewRequest("POST", "https://app.platega.io/v2/transaction/process", bytes.NewReader(b))

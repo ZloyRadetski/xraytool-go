@@ -2,6 +2,7 @@ package antifraud_plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -390,9 +391,36 @@ func (uc *unbanCleaner) processExpired() {
 
 func (uc *unbanCleaner) tryUnban(ban domain.AntifraudBan) {
 	email := ban.Email
+	ctx := context.Background()
+
+	// A ban can outlive the user or subscription that originally created it.
+	// Never re-add a deleted, globally blocked, expired, or inactive account to
+	// an engine merely because the antifraud TTL elapsed.
+	sub, err := uc.registry.Subscriptions().FindByEmail(ctx, email)
+	if err != nil || sub == nil {
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			uc.log.Error("antifraud unban: subscription lookup failed", slog.String("email", email), slog.String("err", err.Error()))
+			return
+		}
+		uc.discardExpiredBan(email, "subscription no longer exists")
+		return
+	}
+	user, err := uc.registry.Users().FindByID(ctx, sub.UserID)
+	if err != nil || user == nil {
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			uc.log.Error("antifraud unban: user lookup failed", slog.String("email", email), slog.String("err", err.Error()))
+			return
+		}
+		uc.discardExpiredBan(email, "user no longer exists")
+		return
+	}
+	if user.IsBlocked || sub.Status != "active" || (sub.EndsAt != nil && !sub.EndsAt.After(time.Now().UTC())) {
+		uc.discardExpiredBan(email, "user or subscription is no longer eligible")
+		return
+	}
 
 	// Step 4: Re-add user to Engine runtime (hot-add).
-	if err := uc.banner.UnbanUser(context.Background(), email); err != nil {
+	if err := uc.banner.UnbanUser(ctx, email); err != nil {
 		uc.log.Error("antifraud unban: hot-add failed",
 			slog.String("email", email), slog.String("err", err.Error()))
 		return // Do not delete ban if Engine failed
@@ -402,7 +430,7 @@ func (uc *unbanCleaner) tryUnban(ban domain.AntifraudBan) {
 	}
 
 	// Step 5: Remove ban record (only after successful Xray unban)
-	if err := uc.registry.AntifraudBans().DeleteByEmail(context.Background(), email); err != nil {
+	if err := uc.registry.AntifraudBans().DeleteByEmail(ctx, email); err != nil {
 		uc.log.Error("antifraud unban: failed to delete ban record",
 			slog.String("email", email), slog.String("err", err.Error()))
 		return
@@ -415,6 +443,17 @@ func (uc *unbanCleaner) tryUnban(ban domain.AntifraudBan) {
 	if uc.cfg.IsMaster && uc.propagator != nil {
 		go uc.propagator.PropagateAll("newuser", map[string]string{"email": email})
 	}
+}
+
+// discardExpiredBan removes stale antifraud state without restoring the user
+// to the engine or propagating a newuser event to cluster peers.
+func (uc *unbanCleaner) discardExpiredBan(email, reason string) {
+	if err := uc.registry.AntifraudBans().DeleteByEmail(context.Background(), email); err != nil {
+		uc.log.Error("antifraud unban: failed to discard stale ban", slog.String("email", email), slog.String("err", err.Error()))
+		return
+	}
+	uc.banStore.clearBan(email)
+	uc.log.Info("antifraud unban: stale ban discarded", slog.String("email", email), slog.String("reason", reason))
 }
 
 // buildPayload is a convenience alias used in tests. // No more buildPayload calls

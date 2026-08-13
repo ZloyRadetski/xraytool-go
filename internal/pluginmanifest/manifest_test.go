@@ -141,6 +141,26 @@ config_schema: ./config.schema.json
 	require.ErrorContains(t, err, "external JSON Schema reference")
 }
 
+func TestConfigSchemaPath_RejectsExternalBundleEscape(t *testing.T) {
+	bundle := t.TempDir()
+	manifestPath := filepath.Join(bundle, "plugin.yaml")
+	manifest := Manifest{Type: "external", ConfigSchema: "../outside.schema.json"}
+	_, err := ConfigSchemaPath(manifestPath, manifest)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "escapes plugin bundle")
+}
+
+func TestValidateManifestSchema_RejectsBrokenLocalReference(t *testing.T) {
+	bundle := t.TempDir()
+	schemaPath := filepath.Join(bundle, "config.schema.json")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"$ref":"#/definitions/missing"}`), 0o600))
+	manifestPath := filepath.Join(bundle, "plugin.yaml")
+	manifest := Manifest{Type: "external", ConfigSchema: "config.schema.json"}
+	err := ValidateManifestSchema(manifestPath, manifest)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "does not exist")
+}
+
 func TestParse_RejectsUnsupportedAPIAndInvalidCore(t *testing.T) {
 	_, err := Parse([]byte(`
 name: core

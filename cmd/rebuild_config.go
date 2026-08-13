@@ -18,7 +18,9 @@ func rebuildConfigCmd(deps *AppDeps) *cobra.Command {
 Also injects the latest Reality keys and short IDs.
 If --sync is specified, it appends a streamed snapshot marker for connected slave nodes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			requireRoot() //nolint:errcheck
+			if err := requireRoot(); err != nil {
+				return err
+			}
 
 			ctx := cmd.Context()
 

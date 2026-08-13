@@ -3,6 +3,8 @@ package legacy
 import (
 	"fmt"
 	json "github.com/goccy/go-json"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,9 +152,15 @@ func migrateData(srcDB *gorm.DB, dstDB *gorm.DB) error {
 		// Use a raw count to avoid pulling the full row.
 		tgIDStr := fmt.Sprintf("%d", lu.TgID)
 		var count int64
-		dstDB.Model(&database.User{}).
-			Where("metadata LIKE ? OR metadata LIKE ?", `%"telegram_id":"`+tgIDStr+`"%`, `%"telegram_id":`+tgIDStr+`%`).
-			Count(&count)
+		query := dstDB.Model(&database.User{})
+		if dstDB.Dialector.Name() == "postgres" {
+			query = query.Where("metadata::text LIKE ? OR metadata::text LIKE ?", `%"telegram_id":"`+tgIDStr+`"%`, `%"telegram_id":`+tgIDStr+`%`)
+		} else {
+			query = query.Where("metadata LIKE ? OR metadata LIKE ?", `%"telegram_id":"`+tgIDStr+`"%`, `%"telegram_id":`+tgIDStr+`%`)
+		}
+		if err := query.Count(&count).Error; err != nil {
+			return fmt.Errorf("check existing user tg_id=%d: %w", lu.TgID, err)
+		}
 		if count > 0 {
 			fmt.Printf("[SKIP] tg_id=%d already migrated\n", lu.TgID)
 			skipped++
@@ -319,9 +327,7 @@ func migratePayments(srcDB *gorm.DB, dstDB *gorm.DB) error {
 	tgIDToUserID := make(map[int64]string)
 	for _, u := range allUsers {
 		if tgIDVal, ok := u.Metadata["telegram_id"]; ok {
-			if strVal, ok := tgIDVal.(string); ok {
-				var id int64
-				fmt.Sscanf(strVal, "%d", &id) //nolint:errcheck
+			if id, ok := legacyTelegramID(tgIDVal); ok {
 				tgIDToUserID[id] = u.ID
 			}
 		}
@@ -432,4 +438,46 @@ func migratePayments(srcDB *gorm.DB, dstDB *gorm.DB) error {
 
 	fmt.Printf("\n=== Payments Migration complete: %d migrated, %d skipped, %d failed ===\n", migrated, skipped, failed)
 	return nil
+}
+
+// legacyTelegramID accepts the JSON representations emitted by historical
+// databases. JSON object fields are commonly decoded as float64, while a
+// manually repaired database can contain an integer or a quoted ID.
+func legacyTelegramID(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case string:
+		id, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return id, err == nil
+	case float64:
+		if math.Trunc(typed) != typed || typed < math.MinInt64 || typed > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case float32:
+		value64 := float64(typed)
+		if math.Trunc(value64) != value64 || value64 < math.MinInt64 || value64 > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(value64), true
+	case int:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint:
+		if uint64(typed) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case uint32:
+		return int64(typed), true
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	default:
+		return 0, false
+	}
 }

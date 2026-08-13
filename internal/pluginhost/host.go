@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -507,6 +508,11 @@ type Host struct {
 	// actually returned after cancellation.
 	starts sync.WaitGroup
 
+	// healthCancels and healthMonitors track monitors started through
+	// StartHealthMonitor so Shutdown owns their lifecycle as well.
+	healthCancels  []context.CancelFunc
+	healthMonitors sync.WaitGroup
+
 	// banCache is a kernel-owned read model populated by AntifraudProvider
 	// push updates. Subscription requests must never issue RPCs to an external
 	// antifraud plugin on their hot path.
@@ -888,6 +894,15 @@ func (h *Host) Load(ctx context.Context) (err error) {
 	for _, lp := range loaded {
 		go func(lp loadedPlugin) {
 			defer h.starts.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					h.log.Error("[pluginhost] plugin Start() panicked; plugin goroutine stopped",
+						"plugin", lp.meta.Name,
+						"panic", fmt.Sprint(recovered),
+						"stack", string(debug.Stack()),
+					)
+				}
+			}()
 			h.log.Info("[pluginhost] starting plugin", "plugin", lp.meta.Name)
 			if err := lp.plugin.Start(runCtx); err != nil && !errors.Is(err, context.Canceled) {
 				h.log.Error("[pluginhost] plugin Start() returned an error",
@@ -952,15 +967,23 @@ func (h *Host) Shutdown(ctx context.Context) error {
 
 	loaded := append([]loadedPlugin(nil), h.loaded...)
 	runCancel := h.runCancel
+	healthCancels := append([]context.CancelFunc(nil), h.healthCancels...)
 	h.runCancel = nil
+	h.healthCancels = nil
 	h.state = hostStopping
 	h.mu.Unlock()
 
 	if runCancel != nil {
 		runCancel()
 	}
+	for _, cancel := range healthCancels {
+		cancel()
+	}
 
 	err := h.stopPlugins(ctx, loaded, "stopping")
+	if waitErr := waitGroupWithContext(ctx, &h.healthMonitors); waitErr != nil {
+		err = errors.Join(err, fmt.Errorf("wait for health monitors: %w", waitErr))
+	}
 	if waitErr := h.waitForStarts(ctx); waitErr != nil {
 		err = errors.Join(err, waitErr)
 	}

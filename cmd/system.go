@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -47,7 +48,9 @@ func updateGeoCmd(deps *AppDeps) *cobra.Command {
 		Use:   "update-geo",
 		Short: "Update geoip.dat and geosite.dat files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot() //nolint:errcheck
+			if err := requireRoot(); err != nil {
+				return err
+			}
 			fmt.Println("[INFO] Updating geo databases…")
 			geoFiles := []struct {
 				url  string
@@ -64,10 +67,7 @@ func updateGeoCmd(deps *AppDeps) *cobra.Command {
 			}
 			for _, f := range geoFiles {
 				fmt.Printf("  Downloading %s…\n", f.dest)
-				c := exec.Command("curl", "-fsSL", f.url, "-o", f.dest)
-				c.Stdout = os.Stdout
-				c.Stderr = os.Stderr
-				if err := c.Run(); err != nil {
+				if err := downloadGeoAtomically(cmd.Context(), f.url, f.dest); err != nil {
 					fmt.Fprintf(os.Stderr, "  [WARN] Failed to download %s: %v\n", f.url, err)
 				}
 			}
@@ -79,6 +79,44 @@ func updateGeoCmd(deps *AppDeps) *cobra.Command {
 	}
 }
 
+// downloadGeoAtomically downloads into the target directory and renames only
+// after curl has completed successfully. A transient network failure therefore
+// leaves the last known-good GeoIP/GeoSite file intact.
+func downloadGeoAtomically(ctx context.Context, url, dest string) error {
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create destination directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".*.download")
+	if err != nil {
+		return fmt.Errorf("create temporary destination: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temporary destination: %w", err)
+	}
+	defer os.Remove(tmpPath)
+
+	c := exec.CommandContext(ctx, "curl", "-fsSL", url, "-o", tmpPath)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		return fmt.Errorf("stat downloaded file: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("downloaded file is empty")
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return fmt.Errorf("replace destination atomically: %w", err)
+	}
+	return nil
+}
+
 func migrateCmd(deps *AppDeps) *cobra.Command {
 	var legacy bool
 
@@ -86,10 +124,12 @@ func migrateCmd(deps *AppDeps) *cobra.Command {
 		Use:   "migrate",
 		Short: "Clean legacy fields from config and sync all users with current templates",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			requireRoot() //nolint:errcheck
+			if err := requireRoot(); err != nil {
+				return err
+			}
 
 			engine := deps.Engine
-			users, err := engine.ListUsers(context.Background())
+			users, err := engine.ListUsers(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -100,9 +140,12 @@ func migrateCmd(deps *AppDeps) *cobra.Command {
 					continue
 				}
 				// By banning and adding back, the engine uses the latest templates
-				_ = engine.BanUser(context.Background(), u.Email)
-				_ = engine.AddUser(context.Background(), u)
-				fmt.Printf("  [SYNCED] %s\n", u.Email)
+				_ = engine.BanUser(cmd.Context(), u.Email)
+				if err := engine.AddUser(cmd.Context(), u); err != nil {
+					fmt.Printf("  [ERROR] %s: failed to re-add user: %v\n", u.Email, err)
+				} else {
+					fmt.Printf("  [SYNCED] %s\n", u.Email)
+				}
 			}
 
 			if legacy {

@@ -16,7 +16,9 @@ func (r *Router) sendOTPNotification(channel, recipient, code string) bool {
 		return false
 	}
 
-	r.bgTasks.Add(1)
+	if !r.beginBackgroundTask() {
+		return false
+	}
 	go func() {
 		defer r.bgTasks.Done()
 

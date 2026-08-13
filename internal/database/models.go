@@ -16,7 +16,7 @@ type User struct {
 	// ID is a UUID v4 string, set by the application before insert.
 	ID string `gorm:"type:text;primaryKey"`
 	// Username is the display name (Telegram username, web login, etc.).
-	Username string `gorm:"type:text;not null"`
+	Username string `gorm:"type:text;not null;index"`
 	// Balance is the internal credit balance in integer units (e.g. kopecks or days).
 	Balance int `gorm:"default:0;not null"`
 	// IsAdmin grants administrative privileges.
@@ -28,8 +28,8 @@ type User struct {
 	// Metadata stores platform-specific data as a JSON object.
 	Metadata Metadata `gorm:"serializer:json"`
 	// IsBlocked indicates if the user is globally banned.
-	IsBlocked bool `gorm:"default:false;not null"`
-	CreatedAt time.Time
+	IsBlocked bool      `gorm:"default:false;not null"`
+	CreatedAt time.Time `gorm:"index"`
 }
 
 // Subscription represents an active or historical VPN subscription tied to a User.
@@ -37,7 +37,7 @@ type Subscription struct {
 	// ID is a UUID v4 string.
 	ID string `gorm:"type:text;primaryKey"`
 	// UserID is the owning user's UUID (FK → User.ID).
-	UserID string `gorm:"type:text;not null;index"`
+	UserID string `gorm:"type:text;not null;index;index:idx_subscriptions_user_created"`
 	// Email is the xray client email identifier, e.g. "bot_client_123456".
 	// Must be unique across all subscriptions.
 	Email string `gorm:"type:text;not null;uniqueIndex"`
@@ -53,8 +53,8 @@ type Subscription struct {
 	// AutoRenew indicates whether to automatically extend the subscription.
 	AutoRenew bool `gorm:"default:false;not null"`
 	// Metadata stores extra data (plan name, coupon, etc.).
-	Metadata  Metadata `gorm:"serializer:json"`
-	CreatedAt time.Time
+	Metadata  Metadata  `gorm:"serializer:json"`
+	CreatedAt time.Time `gorm:"index:idx_subscriptions_user_created"`
 	UpdatedAt time.Time
 }
 
@@ -80,11 +80,11 @@ type Payment struct {
 	// Amount is the payment value in integer units (kopecks, etc.).
 	Amount int `gorm:"not null"`
 	// Status is the payment state: "pending_card", "completed", "canceled", etc.
-	Status string `gorm:"type:text;not null"`
+	Status string `gorm:"type:text;not null;index"`
 	// PaymentType describes what was purchased: "subscription", "device_slot", etc.
 	PaymentType string `gorm:"type:text;not null"`
 	// Method is the payment provider/method: "platega", "cash", "transfer", "sbp".
-	Method string `gorm:"type:text"`
+	Method string `gorm:"type:text;index"`
 	// ExternalID is the provider's transaction reference (unique, nullable for manual payments).
 	// Using *string (pointer) so that multiple manual payments without an ExternalID
 	// can coexist — NULL values are never considered equal in a unique index.

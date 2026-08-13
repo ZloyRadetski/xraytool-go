@@ -20,8 +20,10 @@ func applyBatchCmd(deps *AppDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply-batch",
 		Short: "Apply a batch of user operations at once",
-		Run: func(cmd *cobra.Command, args []string) {
-			requireRoot() //nolint:errcheck
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireRoot(); err != nil {
+				return err
+			}
 
 			var reader io.Reader
 
@@ -30,8 +32,7 @@ func applyBatchCmd(deps *AppDeps) *cobra.Command {
 			} else if fileStr != "" {
 				f, err := os.Open(fileStr)
 				if err != nil {
-					printJSON(map[string]interface{}{"ok": false, "error": fmt.Sprintf("failed to open file: %v", err)})
-					return
+					return fmt.Errorf("failed to open file: %w", err)
 				}
 				defer f.Close()
 				reader = f
@@ -40,8 +41,7 @@ func applyBatchCmd(deps *AppDeps) *cobra.Command {
 			} else if len(args) > 0 {
 				reader = strings.NewReader(args[0])
 			} else {
-				printJSON(map[string]interface{}{"ok": false, "error": "payload is required via --payload, --file, arg, or stdin ('-')"})
-				return
+				return fmt.Errorf("payload is required via --payload, --file, arg, or stdin ('-')")
 			}
 
 			var payloadDTO struct {
@@ -57,8 +57,7 @@ func applyBatchCmd(deps *AppDeps) *cobra.Command {
 			}
 
 			if err := json.NewDecoder(reader).Decode(&payloadDTO); err != nil {
-				printJSON(map[string]interface{}{"ok": false, "error": fmt.Sprintf("invalid json payload: %v", err)})
-				return
+				return fmt.Errorf("invalid json payload: %w", err)
 			}
 
 			var payload domain.BatchPayload
@@ -79,6 +78,7 @@ func applyBatchCmd(deps *AppDeps) *cobra.Command {
 
 			result := subscription.ApplyBatchOperations(deps.Engine, payload)
 			printJSON(result)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&payloadStr, "payload", "", "JSON payload containing batch operations")

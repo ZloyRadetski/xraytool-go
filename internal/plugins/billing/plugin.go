@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"xraytool/internal/appconfig"
 	"xraytool/internal/domain"
@@ -24,6 +25,7 @@ type Plugin struct {
 	dispatcher     *events.Dispatcher
 	log            pluginapi.Logger
 	registry       domain.Registry
+	engine         domain.Engine
 	providers      map[string]pluginapi.PaymentProvider
 	authMiddleware func(http.Handler) http.Handler
 }
@@ -47,6 +49,7 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		},
 		Requires: []pluginapi.ServiceRef{
 			{Name: pluginapi.ServiceDomainRegistry},
+			{Name: pluginapi.ServiceDomainEngine},
 			{Name: pluginapi.ServiceEventDispatcher},
 			{Name: pluginapi.ServiceUserManagement},
 			{Name: pluginapi.ServiceProtectedMiddleware},
@@ -67,6 +70,14 @@ func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg plugi
 	registry, ok := domainReg.(domain.Registry)
 	if !ok || registry == nil {
 		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceDomainRegistry, domainReg)
+	}
+	engineService, err := reg.Resolve(pluginapi.ServiceDomainEngine)
+	if err != nil {
+		return err
+	}
+	engine, ok := engineService.(domain.Engine)
+	if !ok || engine == nil {
+		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceDomainEngine, engineService)
 	}
 
 	dispatcher, err := reg.Resolve(pluginapi.ServiceEventDispatcher)
@@ -96,6 +107,7 @@ func (p *Plugin) Init(ctx context.Context, rawCfg pluginapi.RawConfig, reg plugi
 		return fmt.Errorf("billing: %s has unexpected type %T", pluginapi.ServiceProtectedMiddleware, authMw)
 	}
 	p.registry = registry
+	p.engine = engine
 	p.dispatcher = resolvedDispatcher
 	p.userSvc = resolvedUserService
 	p.authMiddleware = protected
@@ -156,7 +168,43 @@ func (p *Plugin) paymentProvider(method string) (pluginapi.PaymentProvider, bool
 }
 
 func (p *Plugin) unbanUserInXrayAsync(sub domain.Subscription) {
-	// Simple stub for now. Ideally use core logic.
+	if p.engine == nil || sub.Status != "active" || sub.Email == "" || sub.UUID == "" {
+		return
+	}
+
+	// A completed payment is not permission to override a global admin ban.
+	// Check the current user state before restoring the runtime entry.
+	user, err := p.registry.Users().FindByID(context.Background(), sub.UserID)
+	if err != nil || user == nil || user.IsBlocked {
+		if err != nil && p.log != nil {
+			p.log.Warn("billing: skip runtime restore; user lookup failed", "user_id", sub.UserID, "err", err)
+		}
+		return
+	}
+
+	subfile := ""
+	if sub.Metadata != nil {
+		subfile, _ = sub.Metadata["subfile"].(string)
+	}
+	expire := ""
+	if sub.EndsAt != nil {
+		expire = sub.EndsAt.UTC().Format("02.01.2006")
+	}
+	userConfig := domain.VPNUserConfig{
+		Email:      sub.Email,
+		UUID:       sub.UUID,
+		Subfile:    subfile,
+		Expire:     expire,
+		MaxDevices: sub.MaxDevices,
+	}
+	engine := p.engine
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := engine.AddUser(ctx, userConfig); err != nil && p.log != nil {
+			p.log.Error("billing: failed to restore paid user in engine", "email", sub.Email, "err", err)
+		}
+	}()
 }
 
 // Helpers
@@ -184,15 +232,16 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// getClientIP accepts X-Real-IP only from a local/private reverse proxy.
 func getClientIP(r *http.Request) string {
 	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remoteIP = r.RemoteAddr
 	}
 
-	if remoteIP == "127.0.0.1" || remoteIP == "::1" || remoteIP == "localhost" {
-		ip := r.Header.Get("X-Real-IP")
-		if ip != "" && net.ParseIP(ip) != nil {
+	proxyIP := net.ParseIP(strings.TrimSpace(remoteIP))
+	if remoteIP == "localhost" || (proxyIP != nil && (proxyIP.IsLoopback() || proxyIP.IsPrivate())) {
+		if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" && net.ParseIP(ip) != nil {
 			return ip
 		}
 	}

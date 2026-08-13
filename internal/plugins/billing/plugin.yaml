@@ -9,6 +9,7 @@ publishes:
   - payment_service
 requires:
   - domain_registry
+  - domain_engine
   - event_dispatcher
   - user_service
   - protected_middleware

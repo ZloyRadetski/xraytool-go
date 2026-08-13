@@ -113,7 +113,7 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 
 	expireVal := req.Expire
 	if expireVal == "" {
-		expireVal = time.Now().AddDate(0, 1, 0).Format("02-01-2006")
+		expireVal = time.Now().UTC().AddDate(0, 1, 0).Format("02.01.2006")
 	}
 
 	auth := req.Auth
@@ -146,7 +146,7 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 			sub, err := subRepo.FindByEmail(ctx, email)
 			if err != nil {
 				var endsAt *time.Time
-				if t, tErr := time.Parse("02-01-2006", expireVal); tErr == nil {
+				if t, tErr := parseExpiryDate(expireVal); tErr == nil {
 					endsAt = &t
 				}
 				userID, _ := generate.UUID()
@@ -190,7 +190,7 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 				sub.Status = "active"
 				sub.MaxDevices = limitInt
 				if expireVal != "" {
-					if t, tErr := time.Parse("02-01-2006", expireVal); tErr == nil {
+					if t, tErr := parseExpiryDate(expireVal); tErr == nil {
 						sub.EndsAt = &t
 					}
 				}
@@ -303,7 +303,7 @@ func (s *Service) UnlimitUser(ctx context.Context, req UnlimitUserRequest) (*Cre
 		subfile = generate.Subfile()
 	}
 	if expireVal == "" {
-		expireVal = time.Now().AddDate(0, 1, 0).Format("02-01-2006")
+		expireVal = time.Now().UTC().AddDate(0, 1, 0).Format("02.01.2006")
 	}
 	if auth == "" {
 		auth = generate.Secret(32)
@@ -560,12 +560,22 @@ func (s *Service) setExpireDB(ctx context.Context, email, expireStr string) {
 		if expireStr == "" || expireStr == "0" {
 			sub.EndsAt = nil
 		} else {
-			if t, err := time.Parse("02-01-2006", expireStr); err == nil {
+			if t, err := parseExpiryDate(expireStr); err == nil {
 				sub.EndsAt = &t
 			}
 		}
 		subRepo.Update(ctx, sub) //nolint:errcheck
 	}
+}
+
+func parseExpiryDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{"02.01.2006", "02-01-2006"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid expiry date %q", value)
 }
 
 func (s *Service) setLimitDB(ctx context.Context, email string, limit int) {

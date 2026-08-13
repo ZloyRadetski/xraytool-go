@@ -9,11 +9,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -45,10 +48,13 @@ optional plugins. Once stable in production this command replaces start-server.`
 			if err := requireRoot(); err != nil {
 				return err
 			}
+			if deps == nil || deps.Cfg == nil {
+				return fmt.Errorf("FATAL: конфигурация не загружена")
+			}
 			if deps.Cfg.Server.APIKey == "" || deps.Cfg.Server.APIKey == "CHANGE_ME_IN_CONFIG" {
 				return fmt.Errorf("FATAL: server.api_key не может быть пустым или дефолтным в xraytool.yml")
 			}
-			if !cmd.Flags().Changed("port") && deps.Cfg != nil {
+			if !cmd.Flags().Changed("port") {
 				port = deps.Cfg.Ports.APIServer
 			}
 			defer deps.RunCleanup()
@@ -95,7 +101,9 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		}
 		for _, sink := range host.EventSinks() {
 			go func(s pluginapi.EventSink, e pluginapi.Event) {
-				_ = s.Handle(context.Background(), e)
+				sinkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = s.Handle(sinkCtx, e)
 			}(sink, ev)
 		}
 	}
@@ -219,11 +227,6 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 			slog.Info("[KERNEL] Mounted HTTP routes for plugin", "name", meta.Name)
 		}
 	}
-	mux.HandleFunc("/undefined", func(w http.ResponseWriter, r *http.Request) {
-		logIntruder(r, "Hit catch-all undefined route")
-		http.NotFound(w, r)
-	})
-
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("127.0.0.1:%d", port),
 		Handler:      mux,
@@ -233,12 +236,30 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 	}
 	slog.Info("[KERNEL] API server (v2/plugin-host) listening", "addr", srv.Addr)
 
+	// Bind before creating the signal waiter. A bind failure must still shut down
+	// the already-loaded plugin host, but must not strand a goroutine on a
+	// signal channel that will never receive.
+	listener, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return errors.Join(fmt.Errorf("API server failed: %w", err), host.Shutdown(shutCtx))
+	}
+	defer listener.Close()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(quit)
 	done := make(chan struct{})
+	stopWaiter := make(chan struct{})
 
 	go func() {
-		<-quit
+		select {
+		case <-quit:
+		case <-ctx.Done():
+		case <-stopWaiter:
+			return
+		}
 		slog.Info("[KERNEL] Received shutdown signal — stopping gracefully")
 		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -252,8 +273,13 @@ func runKernelServer(ctx context.Context, deps *AppDeps, port int) error {
 		close(done)
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("API server failed: %w", err)
+	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+		// The listener failed after it was successfully bound. Stop the signal
+		// waiter and release host-owned plugin resources before returning.
+		close(stopWaiter)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return errors.Join(fmt.Errorf("API server failed: %w", err), host.Shutdown(shutCtx))
 	}
 	<-done
 	return nil
@@ -337,7 +363,13 @@ func prepareMultiEngine(
 ) (*pluginhost.MultiEngine, error) {
 	var engines []pluginapi.EngineProvider
 	var providers []pluginapi.EngineProvider
-	for name, entry := range cfg {
+	names := make([]string, 0, len(cfg))
+	for name := range cfg {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry := cfg[name]
 		if !entry.Enabled {
 			continue
 		}

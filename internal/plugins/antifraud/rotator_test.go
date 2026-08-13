@@ -66,7 +66,7 @@ func TestRotator_ForceRemoveStaleOldFile(t *testing.T) {
 	r := newRotator(logPath, 1, 10*time.Minute, mockCtrl, notifyCh, slog.Default())
 
 	// This should trigger rotation, force-delete the stale .old file, and execute new rotation
-	r.tryRotate()
+	r.tryRotate(context.Background())
 
 	assert.True(t, mockCtrl.called, "RestartLogger should have been called")
 

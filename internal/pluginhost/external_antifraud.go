@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -56,23 +57,26 @@ func (s *externalBanState) setSink(sink pluginapi.BanUpdateSink) {
 	}
 	now := s.clock()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.sink = sink
-	updates := make(map[string]time.Time, len(s.bans))
+	updates := make([]string, 0, len(s.bans))
 	for email, until := range s.bans {
 		if !until.After(now) {
 			delete(s.bans, email)
 			continue
 		}
-		updates[email] = until
+		updates = append(updates, email)
 	}
-	s.mu.Unlock()
 
 	// Init is allowed to restore bans before Host has installed the sink.  Replay
-	// the live snapshot now so Host.BanCache and the adapter converge without a
-	// poll or a special startup RPC.
+	// the live state now so Host.BanCache and the adapter converge without a
+	// poll or a special startup RPC. Keep s.mu while replaying: otherwise an
+	// interleaved pushUnban could be followed by a stale PushBanUpdate and
+	// resurrect a ban that was already cleared.
 	if sink != nil {
-		for email, until := range updates {
-			sink.PushBanUpdate(email, until)
+		sort.Strings(updates)
+		for _, email := range updates {
+			sink.PushBanUpdate(email, s.bans[email])
 		}
 	}
 }
@@ -214,8 +218,10 @@ func (p *externalPlugin) IngestEvents(ctx context.Context, sourceID string, even
 	payloadEvents := make([]map[string]any, 0, len(events))
 	for _, event := range events {
 		payloadEvents = append(payloadEvents, map[string]any{
-			"email": event.Email,
-			"ip":    event.IP,
+			"email":       event.Email,
+			"ip":          event.IP,
+			"occurred_at": event.OccurredAt.UTC().Format(time.RFC3339Nano),
+			"hash_key_id": event.HashKeyID,
 		})
 	}
 	_, err := p.Call(ctx, pluginrpc.CallRequest{

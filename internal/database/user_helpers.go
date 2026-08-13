@@ -14,7 +14,7 @@ func FindUserByPlatformID(db *gorm.DB, platform, id string) (*domain.User, error
 	if platform == "uuid" {
 		var user User
 		if err := db.Where("id = ?", id).First(&user).Error; err != nil {
-			return nil, err
+			return nil, wrapError(err)
 		}
 		dUser := user.ToDomain()
 		return &dUser, nil
@@ -58,10 +58,10 @@ func FindUserByPlatformID(db *gorm.DB, platform, id string) (*domain.User, error
 
 	result := query.Limit(1).Find(&users)
 	if result.Error != nil {
-		return nil, result.Error
+		return nil, wrapError(result.Error)
 	}
 	if len(users) == 0 {
-		return nil, gorm.ErrRecordNotFound
+		return nil, wrapError(gorm.ErrRecordNotFound)
 	}
 	dUser := users[0].ToDomain()
 	return &dUser, nil

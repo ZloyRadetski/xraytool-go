@@ -276,7 +276,10 @@ func parseVless(raw string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	uuid := u.User.Username()
+	uuid, err := requiredLinkUserinfo(u, "vless")
+	if err != nil {
+		return nil, err
+	}
 	host := u.Hostname()
 	portStr := u.Port()
 	port, err := strconv.Atoi(portStr)
@@ -408,7 +411,10 @@ func parseTrojan(raw string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	password := u.User.Username()
+	password, err := requiredLinkUserinfo(u, "trojan")
+	if err != nil {
+		return nil, err
+	}
 	host := u.Hostname()
 	portStr := u.Port()
 	port, err := strconv.Atoi(portStr)
@@ -451,21 +457,62 @@ func parseSS(raw string) (map[string]any, error) {
 
 	host := u.Hostname()
 	portStr := u.Port()
+	userinfo := ""
+	if u.User != nil {
+		userinfo = u.User.String()
+	}
+
+	// Support full-URI base64: ss://base64(method:password@host:port)#Tag
+	if (portStr == "" || userinfo == "") && u.Host != "" {
+		rawAuthority := u.Host
+		var decoded []byte
+		if dec, err := base64.URLEncoding.DecodeString(rawAuthority); err == nil {
+			decoded = dec
+		} else if dec, err := base64.RawURLEncoding.DecodeString(rawAuthority); err == nil {
+			decoded = dec
+		} else if dec, err := base64.StdEncoding.DecodeString(rawAuthority); err == nil {
+			decoded = dec
+		} else if dec, err := base64.RawStdEncoding.DecodeString(rawAuthority); err == nil {
+			decoded = dec
+		}
+
+		if len(decoded) > 0 {
+			if parsedU, err := url.Parse("ss://" + string(decoded)); err == nil {
+				if h := parsedU.Hostname(); h != "" {
+					host = h
+				}
+				if p := parsedU.Port(); p != "" {
+					portStr = p
+				}
+				if parsedU.User != nil && parsedU.User.String() != "" {
+					userinfo = parsedU.User.String()
+				}
+			}
+		}
+	}
+
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid port: %q", portStr)
 	}
 
-	method := ""
-	password := ""
+	if userinfo == "" {
+		return nil, fmt.Errorf("shadowsocks link is missing userinfo")
+	}
 
 	// userinfo may be base64(method:password) or plain method:password
-	userinfo := u.User.String()
-	if dec, err := base64.StdEncoding.DecodeString(userinfo); err == nil {
+	if dec, err := base64.URLEncoding.DecodeString(userinfo); err == nil {
+		userinfo = string(dec)
+	} else if dec, err := base64.RawURLEncoding.DecodeString(userinfo); err == nil {
+		userinfo = string(dec)
+	} else if dec, err := base64.StdEncoding.DecodeString(userinfo); err == nil {
 		userinfo = string(dec)
 	} else if dec, err := base64.RawStdEncoding.DecodeString(userinfo); err == nil {
 		userinfo = string(dec)
 	}
+
+	method := ""
+	password := ""
 	if parts := strings.SplitN(userinfo, ":", 2); len(parts) == 2 {
 		method = parts[0]
 		password = parts[1]
@@ -501,7 +548,10 @@ func parseHysteria2(raw string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	password := u.User.Username()
+	password, err := requiredLinkUserinfo(u, "hysteria2")
+	if err != nil {
+		return nil, err
+	}
 	host := u.Hostname()
 	portStr := u.Port()
 	port, err := strconv.Atoi(portStr)
@@ -538,6 +588,13 @@ func parseHysteria2(raw string) (map[string]any, error) {
 		"settings":       settings,
 		"streamSettings": ss,
 	}, nil
+}
+
+func requiredLinkUserinfo(u *url.URL, protocol string) (string, error) {
+	if u == nil || u.User == nil || u.User.Username() == "" {
+		return "", fmt.Errorf("%s link is missing userinfo", protocol)
+	}
+	return u.User.Username(), nil
 }
 
 // ---------------------------------------------------------------------------

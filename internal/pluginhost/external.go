@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os/exec"
 	"sort"
@@ -446,7 +447,7 @@ func (p *externalPlugin) restartAfterFailure(runCtx context.Context) {
 	if runCtx == nil || runCtx.Err() != nil {
 		return
 	}
-	if err := p.Restart(context.Background()); err != nil {
+	if err := p.Restart(runCtx); err != nil {
 		p.log.Error("[pluginhost] external plugin restart failed", "error", err)
 	}
 }
@@ -492,6 +493,11 @@ func (p *externalPlugin) stop(ctx context.Context, abort bool) error {
 	}
 	p.mu.Unlock()
 	p.opMu.Unlock()
+	if p.logs != nil {
+		if err := p.logs.close(); err != nil {
+			errs = append(errs, fmt.Errorf("external plugin %q close logs: %w", p.name, err))
+		}
+	}
 
 	if err := waitGroupWithContext(ctx, &p.restartedStarts); err != nil {
 		errs = append(errs, fmt.Errorf("external plugin %q wait for restarted Start: %w", p.name, err))
@@ -554,6 +560,13 @@ func (p *externalPlugin) Health(ctx context.Context) error {
 	rpcCtx, cancel := externalRPCCtx(ctx)
 	err := remote.Health(rpcCtx)
 	cancel()
+	if err == nil {
+		p.mu.Lock()
+		if p.restarts > 0 && !p.restarting {
+			p.restarts = 0
+		}
+		p.mu.Unlock()
+	}
 	return err
 }
 
@@ -609,6 +622,16 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 	// Release the outer opMu during the backoff sleep so that Shutdown (which
 	// takes opMu to Stop the plugin) doesn't deadlock.
 	p.opMu.Unlock()
+	cleanupOldConnection := func() {
+		// The caller's restart context can be cancelled exactly when the old
+		// subprocess must be reaped. Use a short independent cleanup context so
+		// cancellation cannot turn a failed restart into a leaked child process.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), externalPluginRPCTimeout)
+		defer cancel()
+		if err := stopExternalConnection(cleanupCtx, p.name, remote, client); err != nil {
+			p.log.Warn("[pluginhost] external plugin stop during restart failed", "error", err)
+		}
+	}
 
 	defer func() {
 		p.mu.Lock()
@@ -622,6 +645,7 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
+			cleanupOldConnection()
 			return fmt.Errorf("external plugin %q restart backoff: %w", p.name, ctx.Err())
 		}
 	}
@@ -629,11 +653,16 @@ func (p *externalPlugin) Restart(ctx context.Context) error {
 	// Re-acquire opMu before continuing the restart process.
 	p.opMu.Lock()
 	defer p.opMu.Unlock()
+	p.mu.RLock()
+	stopping := p.stopping
+	p.mu.RUnlock()
+	if stopping || (runCtx != nil && runCtx.Err() != nil) {
+		cleanupOldConnection()
+		return fmt.Errorf("external plugin %q restart cancelled during shutdown", p.name)
+	}
 
 	p.log.Warn("[pluginhost] restarting external plugin", "attempt", attempt, "max_restarts", p.entry.RestartPolicy.MaxRestarts)
-	if err := stopExternalConnection(ctx, p.name, remote, client); err != nil {
-		p.log.Warn("[pluginhost] external plugin stop during restart failed", "error", err)
-	}
+	cleanupOldConnection()
 
 	if err := p.connectLocked(ctx); err != nil {
 		return err
@@ -990,6 +1019,7 @@ func pricingPlanPayload(plan *pluginapi.Plan) any {
 		"months":                  plan.Months,
 		"base_price":              plan.BasePrice,
 		"global_discount_percent": plan.GlobalDiscountPercent,
+		"engine_ids":              append([]string(nil), plan.EngineIDs...),
 		"is_active":               plan.IsActive,
 		"created_at":              plan.CreatedAt,
 		"updated_at":              plan.UpdatedAt,
@@ -1050,12 +1080,11 @@ func decodePricingResult(payload map[string]any) (pluginapi.PricingResult, error
 		Description:     externalString(payload, "description"),
 	}
 	if value, ok := externalValue(payload, "applied_promo_id"); ok && value != nil {
-		id, err := externalIntValue(value, "applied_promo_id")
+		id, err := externalInt64Value(value, "applied_promo_id")
 		if err != nil {
 			return pluginapi.PricingResult{}, err
 		}
-		id64 := int64(id)
-		result.AppliedPromoID = &id64
+		result.AppliedPromoID = &id
 	}
 	return result, nil
 }
@@ -1114,22 +1143,33 @@ func externalInt(payload map[string]any, key string) (int, error) {
 }
 
 func externalIntValue(value any, key string) (int, error) {
+	parsed, err := externalInt64Value(value, key)
+	if err != nil {
+		return 0, err
+	}
+	if int64(int(parsed)) != parsed {
+		return 0, fmt.Errorf("%s is outside the platform int range: %d", key, parsed)
+	}
+	return int(parsed), nil
+}
+
+func externalInt64Value(value any, key string) (int64, error) {
 	switch value := value.(type) {
 	case float64:
-		if value != float64(int(value)) {
+		if value != math.Trunc(value) || value < math.MinInt64 || value > math.MaxInt64 {
 			return 0, fmt.Errorf("%s must be an integer, got %v", key, value)
 		}
-		return int(value), nil
+		return int64(value), nil
 	case int:
-		return value, nil
+		return int64(value), nil
 	case int64:
-		return int(value), nil
+		return value, nil
 	case json.Number:
 		parsed, err := value.Int64()
 		if err != nil {
 			return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 		}
-		return int(parsed), nil
+		return parsed, nil
 	default:
 		return 0, fmt.Errorf("%s must be an integer, got %T", key, value)
 	}

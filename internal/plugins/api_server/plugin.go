@@ -113,6 +113,9 @@ func (p *Plugin) Init(_ context.Context, _ pluginapi.RawConfig, reg pluginapi.Se
 }
 
 func (p *Plugin) Start(ctx context.Context) error {
+	if p.router != nil {
+		p.router.StartMaintenance(ctx)
+	}
 	<-ctx.Done()
 	return nil
 }

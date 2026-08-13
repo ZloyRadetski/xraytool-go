@@ -302,14 +302,21 @@ func (r *gormUserRepo) FindAdmins(ctx context.Context) ([]domain.User, error) {
 
 func (r *gormUserRepo) AdjustBalance(ctx context.Context, userID string, amount int) error {
 	query := "UPDATE users SET balance = CASE WHEN balance + ? < 0 THEN 0 ELSE balance + ? END WHERE id = ?"
-	return r.db.WithContext(ctx).Exec(query, amount, amount, userID).Error
+	return wrapError(r.db.WithContext(ctx).Exec(query, amount, amount, userID).Error)
 }
 
 func (r *gormUserRepo) UpdateIsBlocked(ctx context.Context, userID string, isBlocked bool) error {
-	return r.db.WithContext(ctx).Model(&User{}).Where("id = ?", userID).Update("is_blocked", isBlocked).Error
+	return wrapError(r.db.WithContext(ctx).Model(&User{}).Where("id = ?", userID).Update("is_blocked", isBlocked).Error)
 }
 
 func (r *gormUserRepo) ListUsers(ctx context.Context, page, limit int, search string) ([]domain.User, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
 	query := r.db.WithContext(ctx).Model(&User{})
 
 	if search != "" {
@@ -326,13 +333,13 @@ func (r *gormUserRepo) ListUsers(ctx context.Context, page, limit int, search st
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
+		return nil, 0, wrapError(err)
 	}
 
 	var users []User
 	offset := (page - 1) * limit
 	if err := query.Order("created_at desc").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
-		return nil, 0, err
+		return nil, 0, wrapError(err)
 	}
 
 	var d []domain.User
@@ -513,7 +520,7 @@ func (r *gormSubscriptionRepo) UpdateFields(ctx context.Context, id string, upda
 func (r *gormSubscriptionRepo) UpdateStatusIfActive(ctx context.Context, id string, newStatus string) (bool, error) {
 	res := r.db.WithContext(ctx).Model(&Subscription{}).Where("id = ? AND status = 'active'", id).Updates(map[string]interface{}{
 		"status":     newStatus,
-		"updated_at": time.Now(),
+		"updated_at": time.Now().UTC(),
 	})
 	return res.RowsAffected > 0, wrapError(res.Error)
 }
@@ -529,8 +536,25 @@ func (r *gormSubscriptionRepo) FindLatestByUserID(ctx context.Context, userID st
 }
 
 func (r *gormSubscriptionRepo) FindLatestByUserIDs(ctx context.Context, userIDs []string) ([]domain.Subscription, error) {
+	if len(userIDs) == 0 {
+		return []domain.Subscription{}, nil
+	}
+
 	var subs []Subscription
-	err := r.db.WithContext(ctx).Where("user_id IN ?", userIDs).Order("created_at desc").Find(&subs).Error
+	// Fetch only the newest row for each user in the database. Loading every
+	// historical subscription and de-duplicating it in Go makes this hot path
+	// grow without bound as accounts are renewed.
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT * FROM (
+			SELECT subscriptions.*, ROW_NUMBER() OVER (
+				PARTITION BY user_id ORDER BY created_at DESC, id DESC
+			) AS row_number
+			FROM subscriptions
+			WHERE user_id IN ?
+		) AS latest_subscriptions
+		WHERE row_number = 1
+		ORDER BY created_at DESC, id DESC
+	`, userIDs).Scan(&subs).Error
 	if err != nil {
 		return nil, wrapError(err)
 	}
@@ -567,8 +591,9 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 			if err := tx.First(&plan, *planID).Error; err != nil {
 				return fmt.Errorf("plan not found: %w", err)
 			}
-			baseTime := time.Now()
-			if sub.EndsAt != nil && sub.EndsAt.After(time.Now()) {
+			now := time.Now().UTC()
+			baseTime := now
+			if sub.EndsAt != nil && sub.EndsAt.After(now) {
 				baseTime = *sub.EndsAt
 			}
 			newEndsAt = baseTime.AddDate(0, plan.Months, 0)
@@ -602,16 +627,15 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 			}
 		}
 
-		now := time.Now()
+		now := time.Now().UTC()
 		updates := map[string]interface{}{
 			"status":      "active",
 			"ends_at":     newEndsAt,
 			"max_devices": maxDevices,
-			"starts_at":   now,
 			"updated_at":  now,
 		}
 		if err := tx.Model(&Subscription{}).
-			Where("user_id = ?", userID).
+			Where("id = ?", sub.ID).
 			Updates(updates).Error; err != nil {
 			return err
 		}
@@ -625,7 +649,7 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 		// and PostgreSQL JSONB behaviour instead of handing database/sql an
 		// unsupported Go map.
 		return tx.Model(&Subscription{}).
-			Where("user_id = ?", userID).
+			Where("id = ?", sub.ID).
 			Updates(&Subscription{Metadata: metadata}).Error
 	})
 }
@@ -700,7 +724,7 @@ func (r *gormPaymentRepo) FindAll(ctx context.Context) ([]domain.Payment, error)
 
 func (r *gormPaymentRepo) FindPendingByProvider(ctx context.Context, provider string) ([]domain.Payment, error) {
 	var payments []Payment
-	err := r.db.WithContext(ctx).Where("status = 'pending' AND provider = ?", provider).Find(&payments).Error
+	err := r.db.WithContext(ctx).Where("status = 'pending' AND method = ?", provider).Find(&payments).Error
 	if err != nil {
 		return nil, wrapError(err)
 	}
@@ -980,7 +1004,7 @@ func (r *gormAntifraudBanRepo) FindAll(ctx context.Context) ([]domain.AntifraudB
 
 func (r *gormAntifraudBanRepo) FindActive(ctx context.Context) ([]domain.AntifraudBan, error) {
 	var bans []AntifraudBan
-	err := r.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&bans).Error
+	err := r.db.WithContext(ctx).Where("expires_at > ?", time.Now().UTC()).Find(&bans).Error
 	if err != nil {
 		return nil, wrapError(err)
 	}
@@ -993,7 +1017,7 @@ func (r *gormAntifraudBanRepo) FindActive(ctx context.Context) ([]domain.Antifra
 
 func (r *gormAntifraudBanRepo) FindExpired(ctx context.Context) ([]domain.AntifraudBan, error) {
 	var bans []AntifraudBan
-	err := r.db.WithContext(ctx).Where("expires_at <= ?", time.Now()).Find(&bans).Error
+	err := r.db.WithContext(ctx).Where("expires_at <= ?", time.Now().UTC()).Find(&bans).Error
 	if err != nil {
 		return nil, wrapError(err)
 	}
@@ -1006,13 +1030,22 @@ func (r *gormAntifraudBanRepo) FindExpired(ctx context.Context) ([]domain.Antifr
 
 func (r *gormAntifraudBanRepo) Upsert(ctx context.Context, ban *domain.AntifraudBan) error {
 	dbModel := FromDomainAntifraudBan(*ban)
-	err := r.db.WithContext(ctx).Where(AntifraudBan{Email: dbModel.Email}).
-		Assign(AntifraudBan{BannedAt: dbModel.BannedAt, ExpiresAt: dbModel.ExpiresAt, Reason: dbModel.Reason}).
-		FirstOrCreate(&dbModel).Error
-	if err == nil {
-		*ban = dbModel.ToDomain()
+	err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "email"}},
+		DoUpdates: clause.AssignmentColumns([]string{"banned_at", "expires_at", "reason"}),
+	}).Create(&dbModel).Error
+	if err != nil {
+		return wrapError(err)
 	}
-	return wrapError(err)
+
+	// On a conflict GORM does not reliably hydrate the existing primary key on
+	// every supported dialect, so return the canonical row to the caller.
+	var persisted AntifraudBan
+	if err := r.db.WithContext(ctx).Where("email = ?", dbModel.Email).First(&persisted).Error; err != nil {
+		return wrapError(err)
+	}
+	*ban = persisted.ToDomain()
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
