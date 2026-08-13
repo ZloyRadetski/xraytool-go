@@ -186,9 +186,10 @@ func (g *GRPCClient) QueryStats(ctx context.Context) ([]UserStat, error) {
 			userMap[email] = &UserStat{Email: email}
 		}
 
-		if direction == "uplink" {
+		switch direction {
+		case "uplink":
 			userMap[email].Up = stat.Value
-		} else if direction == "downlink" {
+		case "downlink":
 			userMap[email].Down = stat.Value
 		}
 	}

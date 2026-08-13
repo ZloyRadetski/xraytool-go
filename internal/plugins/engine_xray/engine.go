@@ -131,23 +131,25 @@ func (a *Adapter) calculateStateHash(dbUsers []domain.VPNUserConfig) (string, er
 	if a.templatePath != "" {
 		data, err := os.ReadFile(a.templatePath)
 		if err == nil {
-			h.Write(data)
+			_, _ = h.Write(data)
 		} else {
-			h.Write([]byte("template_err"))
+			_, _ = h.Write([]byte("template_err"))
 		}
 	}
 	// 2. Hash reality rotation settings
-	h.Write([]byte(fmt.Sprintf("rot:%t;keys:%s;", a.realityRotation, a.realityKeysPath)))
+	_, _ = h.Write(fmt.Appendf(nil, "rot:%t;keys:%s;", a.realityRotation, a.realityKeysPath))
 	if a.realityRotation && a.realityKeysPath != "" {
 		data, err := os.ReadFile(a.realityKeysPath)
 		if err == nil {
-			h.Write(data)
+			_, _ = h.Write(data)
 		}
 	}
 
 	// 3. Hash blacklisted admins
-	for _, admin := range a.blacklistedAdmins {
-		h.Write([]byte("admin:" + admin + ";"))
+	sortedAdmins := append([]string(nil), a.blacklistedAdmins...)
+	sort.Strings(sortedAdmins)
+	for _, admin := range sortedAdmins {
+		_, _ = h.Write([]byte("admin:" + admin + ";"))
 	}
 
 	// 4. Sort users by Email to ensure stable ordering
@@ -159,7 +161,7 @@ func (a *Adapter) calculateStateHash(dbUsers []domain.VPNUserConfig) (string, er
 
 	// 5. Hash each user's fields
 	for _, u := range sortedUsers {
-		h.Write([]byte(fmt.Sprintf("u:%s|%s|%s|%s|%s|%d;", u.Email, u.UUID, u.Auth, u.Subfile, u.Expire, u.MaxDevices)))
+		_, _ = h.Write(fmt.Appendf(nil, "u:%s|%s|%s|%s|%s|%d|%s;", u.Email, u.UUID, u.Auth, u.Subfile, u.Expire, u.MaxDevices, u.Flow))
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -925,12 +927,11 @@ func (a *Adapter) syncUsersLocked(ctx context.Context, users []domain.VPNUserCon
 	// 6. Rebuild all hysteria2 inbounds to apply the full user list.
 	a.rebuildHysteriaInbounds(ctx, oldCfg)
 
-	// Save the new successfully applied state hash
-	if err == nil {
-		hashPath := a.configPath + ".hash"
-		if err := os.WriteFile(hashPath, []byte(dbHash), 0644); err != nil {
-			a.log.Warn("xray adapter: failed to write state hash", "err", err)
-		}
+	// Every error-producing step above returns immediately, so reaching this
+	// point means the desired state is safe to persist.
+	hashPath := a.configPath + ".hash"
+	if err := os.WriteFile(hashPath, []byte(dbHash), 0644); err != nil {
+		a.log.Warn("xray adapter: failed to write state hash", "err", err)
 	}
 
 	a.log.Info("xray adapter: sync completed",

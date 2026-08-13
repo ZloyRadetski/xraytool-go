@@ -238,6 +238,53 @@ func TestAdapter_SyncUsersHashOptimization(t *testing.T) {
 	}
 }
 
+func TestAdapterCalculateStateHashIsStableAndTracksEffectiveConfig(t *testing.T) {
+	templatePath := filepath.Join(t.TempDir(), "template.json")
+	if err := os.WriteFile(templatePath, []byte(`{"inbounds":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	adapterA := NewAdapter("127.0.0.1:1", "unused-a.json", templatePath, false, "", []string{"ops-b", "ops-a"}, log)
+	adapterB := NewAdapter("127.0.0.1:1", "unused-b.json", templatePath, false, "", []string{"ops-a", "ops-b"}, log)
+
+	users := []domain.VPNUserConfig{
+		{Email: "z@example.test", UUID: "uuid-z", Auth: "auth-z", Subfile: "z", Expire: "2027-01-01", MaxDevices: 2, Flow: "xtls-rprx-vision"},
+		{Email: "a@example.test", UUID: "uuid-a", Auth: "auth-a", Subfile: "a", Expire: "2027-01-02", MaxDevices: 3},
+	}
+	hashA, err := adapterA.calculateStateHash(users)
+	if err != nil {
+		t.Fatalf("calculateStateHash: %v", err)
+	}
+	hashB, err := adapterB.calculateStateHash([]domain.VPNUserConfig{users[1], users[0]})
+	if err != nil {
+		t.Fatalf("calculateStateHash with reordered users: %v", err)
+	}
+	if hashA != hashB {
+		t.Fatalf("hash must be independent of input ordering, got %q and %q", hashA, hashB)
+	}
+
+	changedFlow := append([]domain.VPNUserConfig(nil), users...)
+	changedFlow[0].Flow = ""
+	flowHash, err := adapterA.calculateStateHash(changedFlow)
+	if err != nil {
+		t.Fatalf("calculateStateHash with changed flow: %v", err)
+	}
+	if flowHash == hashA {
+		t.Fatal("changing Flow must invalidate the state hash")
+	}
+
+	if err := os.WriteFile(templatePath, []byte(`{"inbounds":[{"tag":"changed"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	templateHash, err := adapterA.calculateStateHash(users)
+	if err != nil {
+		t.Fatalf("calculateStateHash with changed template: %v", err)
+	}
+	if templateHash == hashA {
+		t.Fatal("changing the template must invalidate the state hash")
+	}
+}
+
 func TestAdapter_AddUserRepairsPartialInboundMembership(t *testing.T) {
 	handler := &mockHandlerServer{}
 	addr, cleanup := startMockGRPCServer(t, nil, handler)

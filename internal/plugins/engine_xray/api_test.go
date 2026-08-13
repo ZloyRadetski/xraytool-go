@@ -45,17 +45,36 @@ func TestParseStats(t *testing.T) {
 	}
 
 	for _, s := range stats {
-		if s.Email == "test@example.com" {
+		switch s.Email {
+		case "test@example.com":
 			if s.Up != 1000 || s.Down != 2000 {
 				t.Errorf("test@example.com unexpected values: up=%d down=%d", s.Up, s.Down)
 			}
-		} else if s.Email == "another@example.com" {
+		case "another@example.com":
 			if s.Up != 500 || s.Down != 0 {
 				t.Errorf("another@example.com unexpected values: up=%d down=%d", s.Up, s.Down)
 			}
-		} else {
+		default:
 			t.Errorf("Unexpected email: %s", s.Email)
 		}
+	}
+}
+
+func TestParseStatsSkipsUnknownTrafficDirection(t *testing.T) {
+	stats, err := parseStats([]byte(`{
+  "stat": [
+    {"name": "user>>>ignored@example.test>>>traffic>>>sideways", "value": 99},
+    {"name": "user>>>valid@example.test>>>traffic>>>downlink", "value": 42}
+  ]
+}`))
+	if err != nil {
+		t.Fatalf("parseStats: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("stats count = %d, want 1: %#v", len(stats), stats)
+	}
+	if stats[0] != (UserStat{Email: "valid@example.test", Down: 42}) {
+		t.Fatalf("stats = %#v, want valid downlink only", stats)
 	}
 }
 
