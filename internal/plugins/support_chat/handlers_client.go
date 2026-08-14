@@ -57,14 +57,15 @@ func (p *Plugin) lookupRequestUser(ctx context.Context, userID string) (*plugina
 
 	telegramID := strings.TrimPrefix(userID, "telegram:")
 	if id, err := strconv.ParseInt(telegramID, 10, 64); err == nil && id > 0 {
-		user, lookupErr := p.users.FindByTelegramID(ctx, id)
-		if lookupErr == nil || user != nil {
-			return user, lookupErr
+		if user, lookupErr := p.users.FindByTelegramID(ctx, id); lookupErr == nil && user != nil {
+			return user, nil
 		}
-		// Older deployments stored Telegram clients under platform=telegram,
-		// while newer integrations use platform=bot. Support both during the
-		// transition without trusting a role supplied by the caller.
-		return p.users.FindByPlatformID(ctx, "bot", telegramID)
+		if user, lookupErr := p.users.FindByPlatformID(ctx, "telegram", telegramID); lookupErr == nil && user != nil {
+			return user, nil
+		}
+		if user, lookupErr := p.users.FindByPlatformID(ctx, "bot", telegramID); lookupErr == nil && user != nil {
+			return user, nil
+		}
 	}
 
 	return p.users.FindByEmailOrUsername(ctx, strings.ToLower(userID))
