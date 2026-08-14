@@ -101,6 +101,21 @@ func (p *Plugin) serveWs(role string) http.HandlerFunc {
 			return
 		}
 
+		if role == "client" {
+			banned, _, err := p.store.IsUserBanned(r.Context(), userID)
+			if err != nil {
+				if p.log != nil {
+					p.log.Error("Failed to check support ban for websocket", "error", err, "user_id", userID)
+				}
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			if banned {
+				http.Error(w, "User is banned from support", http.StatusForbidden)
+				return
+			}
+		}
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			p.log.Error("Failed to upgrade websocket", "error", err)

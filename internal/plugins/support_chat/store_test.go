@@ -22,7 +22,7 @@ func setupTestStore(t *testing.T) *Store {
 		t.Fatalf("Failed to open db: %v", err)
 	}
 
-	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}, &AttachmentBlob{}); err != nil {
+	if err := db.AutoMigrate(&Conversation{}, &Message{}, &Attachment{}, &AttachmentBlob{}, &SupportBan{}); err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
 

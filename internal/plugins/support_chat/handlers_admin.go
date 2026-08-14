@@ -3,6 +3,7 @@ package support_chat
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 func (p *Plugin) handleAdminListConversations() http.HandlerFunc {
@@ -156,3 +157,190 @@ func (p *Plugin) handleAdminPatchStatus() http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 	}
 }
+
+func (p *Plugin) handleAdminDeleteConversation() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		convID := r.PathValue("id")
+		if convID == "" {
+			http.Error(w, "Missing conversation ID", http.StatusBadRequest)
+			return
+		}
+
+		adminID := getUserID(r)
+
+		conv, err := p.store.GetConversation(r.Context(), convID)
+		if err != nil {
+			http.Error(w, "Conversation not found", http.StatusNotFound)
+			return
+		}
+
+		if err := p.store.DeleteConversation(r.Context(), convID, p.cfg.Media.StoragePath); err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to delete conversation by admin", "error", err, "conv_id", convID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if p.log != nil {
+			p.log.Info("Support conversation deleted by admin", "conv_id", convID, "admin_id", adminID, "user_id", conv.UserID)
+		}
+
+		// Notify via websocket
+		if p.hub != nil {
+			if bMsg, err := json.Marshal(map[string]any{
+				"type": "conversation_deleted",
+				"payload": map[string]any{
+					"conversation_id": convID,
+					"deleted_by":      adminID,
+				},
+			}); err == nil {
+				p.hub.BroadcastToClient(conv.UserID, bMsg)
+				p.hub.BroadcastToAdmins(bMsg)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}
+}
+
+type createBanReq struct {
+	UserID    string     `json:"user_id"`
+	Reason    string     `json:"reason"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+func (p *Plugin) handleAdminCreateBan() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createBanReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.UserID == "" {
+			http.Error(w, "Missing user_id", http.StatusBadRequest)
+			return
+		}
+
+		adminID := getUserID(r)
+		ban, err := p.store.BanUser(r.Context(), req.UserID, req.Reason, adminID, req.ExpiresAt)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to ban user in support", "error", err, "user_id", req.UserID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if p.log != nil {
+			p.log.Info("Support ban created", "user_id", req.UserID, "admin_id", adminID, "expires_at", req.ExpiresAt)
+		}
+
+		// Terminate any active WebSocket session for the banned client
+		if p.hub != nil {
+			p.hub.DisconnectUser(req.UserID)
+
+			// Notify admins via websocket
+			if bMsg, err := json.Marshal(map[string]any{
+				"type": "user_banned",
+				"payload": map[string]any{
+					"user_id":    req.UserID,
+					"reason":     req.Reason,
+					"expires_at": req.ExpiresAt,
+					"banned_by":  adminID,
+				},
+			}); err == nil {
+				p.hub.BroadcastToAdmins(bMsg)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(ban)
+	}
+}
+
+func (p *Plugin) handleAdminDeleteBan() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetUserID := r.PathValue("user_id")
+		if targetUserID == "" {
+			http.Error(w, "Missing user_id", http.StatusBadRequest)
+			return
+		}
+
+		adminID := getUserID(r)
+		if err := p.store.UnbanUser(r.Context(), targetUserID); err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to unban user in support", "error", err, "user_id", targetUserID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if p.log != nil {
+			p.log.Info("Support ban removed", "user_id", targetUserID, "admin_id", adminID)
+		}
+
+		// Notify admins via websocket
+		if p.hub != nil {
+			if bMsg, err := json.Marshal(map[string]any{
+				"type": "user_unbanned",
+				"payload": map[string]any{
+					"user_id": targetUserID,
+				},
+			}); err == nil {
+				p.hub.BroadcastToAdmins(bMsg)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}
+}
+
+func (p *Plugin) handleAdminListBans() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bans, err := p.store.ListBans(r.Context())
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to list support bans", "error", err)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"bans": bans})
+	}
+}
+
+func (p *Plugin) handleAdminGetBan() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetUserID := r.PathValue("user_id")
+		if targetUserID == "" {
+			http.Error(w, "Missing user_id", http.StatusBadRequest)
+			return
+		}
+
+		ban, err := p.store.GetBan(r.Context(), targetUserID)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to get support ban", "error", err, "user_id", targetUserID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if ban == nil {
+			http.Error(w, "Ban not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ban)
+	}
+}
+
+

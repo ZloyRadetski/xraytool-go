@@ -88,3 +88,27 @@ type AttachmentBlob struct {
 	ContentDigest  string    `gorm:"uniqueIndex:idx_attachment_blob_digest;type:varchar(64)"`
 	CreatedAt      time.Time `gorm:"autoCreateTime;not null"`
 }
+
+// SupportBan records a user banned exclusively from the support chat system.
+// User identity, ban reason and author are encrypted at rest; blind indexing
+// enables indexed O(1) ban checks without exposing plaintext IDs.
+type SupportBan struct {
+	ID                 string     `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	UserID             string     `gorm:"-" json:"user_id"`
+	Reason             string     `gorm:"-" json:"reason,omitempty"`
+	BannedBy           string     `gorm:"-" json:"banned_by,omitempty"`
+	ExpiresAt          *time.Time `gorm:"index" json:"expires_at,omitempty"`
+	CreatedAt          time.Time  `gorm:"autoCreateTime;not null" json:"created_at"`
+	UpdatedAt          time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
+
+	UserIDCiphertext   []byte `gorm:"type:blob" json:"-"`
+	UserIDNonce        []byte `gorm:"type:blob" json:"-"`
+	UserIDHash         string `gorm:"index;type:varchar(64)" json:"-"`
+	ReasonCiphertext   []byte `gorm:"type:blob" json:"-"`
+	ReasonNonce        []byte `gorm:"type:blob" json:"-"`
+	BannedByCiphertext []byte `gorm:"type:blob" json:"-"`
+	BannedByNonce      []byte `gorm:"type:blob" json:"-"`
+	EncryptionVersion  uint16 `gorm:"not null;default:0" json:"-"`
+	KeyVersion         uint16 `gorm:"not null;default:0" json:"-"`
+}
+

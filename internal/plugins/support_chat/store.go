@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -182,6 +183,105 @@ func (s *Store) UpdateStatus(ctx context.Context, id string, status string) erro
 	}
 	return nil
 }
+
+// DeleteConversation removes a conversation, all its messages, and any
+// unreferenced attachment blobs from database and disk.
+func (s *Store) DeleteConversation(ctx context.Context, id string, mediaStoragePath string) error {
+	var filesToDelete []string
+
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 1. Verify conversation exists
+		var conv Conversation
+		if err := tx.Where("id = ?", id).First(&conv).Error; err != nil {
+			return err
+		}
+
+		// 2. Find all messages for this conversation
+		var msgs []Message
+		if err := tx.Where("conversation_id = ?", id).Find(&msgs).Error; err != nil {
+			return err
+		}
+
+		if len(msgs) > 0 {
+			msgIDs := make([]string, len(msgs))
+			for i, m := range msgs {
+				msgIDs[i] = m.ID
+			}
+
+			// 3. Find attachments linked to these messages
+			var attachments []Attachment
+			if err := tx.Where("message_id IN ?", msgIDs).Find(&attachments).Error; err != nil {
+				return err
+			}
+
+			if len(attachments) > 0 {
+				attIDs := make([]string, len(attachments))
+				for i, a := range attachments {
+					attIDs[i] = a.ID
+				}
+
+				// Check blob references for each attachment
+				for _, att := range attachments {
+					storageKey := attachmentStorageKey(&att)
+					var remainingCount int64
+					if err := tx.Model(&Attachment{}).
+						Where("(storage_key = ? OR id = ?) AND id NOT IN ?", storageKey, storageKey, attIDs).
+						Count(&remainingCount).Error; err != nil {
+						return err
+					}
+
+					if remainingCount == 0 {
+						// Safe to delete blob record and physical file
+						if err := tx.Where("storage_key = ?", storageKey).Delete(&AttachmentBlob{}).Error; err != nil {
+							return err
+						}
+						filePath := ""
+						if att.EncryptionVersion >= currentEncryptionVersion && mediaStoragePath != "" {
+							filePath = attachmentStoragePath(mediaStoragePath, storageKey)
+						} else if att.LegacyStoragePath != "" {
+							filePath = att.LegacyStoragePath
+						}
+						if filePath != "" {
+							filesToDelete = append(filesToDelete, filePath)
+						}
+					}
+				}
+
+				// Delete attachment records
+				if err := tx.Where("id IN ?", attIDs).Delete(&Attachment{}).Error; err != nil {
+					return err
+				}
+			}
+
+			// Delete message records
+			if err := tx.Where("conversation_id = ?", id).Delete(&Message{}).Error; err != nil {
+				return err
+			}
+		}
+
+		// 4. Delete the conversation itself
+		res := tx.Where("id = ?", id).Delete(&Conversation{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Clean up unreferenced media files after successful DB transaction
+	for _, filePath := range filesToDelete {
+		_ = os.Remove(filePath)
+	}
+
+	return nil
+}
+
 
 // MessageOutput is the decrypted representation returned by the API.
 type MessageOutput struct {
@@ -397,6 +497,130 @@ func (s *Store) MarkMessagesRead(ctx context.Context, convID, readerRole string)
 		Update("read_at", time.Now()).Error
 }
 
+// BanUser creates or replaces a support-only ban for the given user.
+func (s *Store) BanUser(ctx context.Context, userID, reason, bannedBy string, expiresAt *time.Time) (*SupportBan, error) {
+	ban := &SupportBan{
+		ID:                uuid.New().String(),
+		UserID:            userID,
+		Reason:            reason,
+		BannedBy:          bannedBy,
+		ExpiresAt:         expiresAt,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+		EncryptionVersion: currentEncryptionVersion,
+		KeyVersion:        s.keyVersion,
+		UserIDHash:        s.crypto.BlindIndex("support-ban-user-id", userID),
+	}
+
+	var err error
+	if ban.UserIDCiphertext, ban.UserIDNonce, err = s.crypto.EncryptField("support-ban-user-id", ban.ID, userID); err != nil {
+		return nil, fmt.Errorf("encrypt ban user id: %w", err)
+	}
+	if reason != "" {
+		if ban.ReasonCiphertext, ban.ReasonNonce, err = s.crypto.EncryptField("support-ban-reason", ban.ID, reason); err != nil {
+			return nil, fmt.Errorf("encrypt ban reason: %w", err)
+		}
+	}
+	if bannedBy != "" {
+		if ban.BannedByCiphertext, ban.BannedByNonce, err = s.crypto.EncryptField("support-ban-banned-by", ban.ID, bannedBy); err != nil {
+			return nil, fmt.Errorf("encrypt ban author: %w", err)
+		}
+	}
+
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Clean up any existing ban for this user
+		if err := tx.Where("user_id_hash = ?", ban.UserIDHash).Delete(&SupportBan{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(ban).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("save support ban: %w", err)
+	}
+
+	return ban, nil
+}
+
+// UnbanUser removes any support-only ban for the user.
+func (s *Store) UnbanUser(ctx context.Context, userID string) error {
+	userIDHash := s.crypto.BlindIndex("support-ban-user-id", userID)
+	return s.db.WithContext(ctx).Where("user_id_hash = ?", userIDHash).Delete(&SupportBan{}).Error
+}
+
+func (s *Store) hydrateBan(ban *SupportBan) error {
+	if len(ban.UserIDCiphertext) > 0 {
+		userID, err := s.decryptField("support-ban-user-id", ban.ID, ban.UserIDCiphertext, ban.UserIDNonce)
+		if err != nil {
+			return fmt.Errorf("decrypt ban user id: %w", err)
+		}
+		ban.UserID = userID
+	}
+	if len(ban.ReasonCiphertext) > 0 {
+		reason, err := s.decryptField("support-ban-reason", ban.ID, ban.ReasonCiphertext, ban.ReasonNonce)
+		if err != nil {
+			return fmt.Errorf("decrypt ban reason: %w", err)
+		}
+		ban.Reason = reason
+	}
+	if len(ban.BannedByCiphertext) > 0 {
+		bannedBy, err := s.decryptField("support-ban-banned-by", ban.ID, ban.BannedByCiphertext, ban.BannedByNonce)
+		if err != nil {
+			return fmt.Errorf("decrypt ban author: %w", err)
+		}
+		ban.BannedBy = bannedBy
+	}
+	return nil
+}
+
+// IsUserBanned checks whether the user is actively banned from support.
+func (s *Store) IsUserBanned(ctx context.Context, userID string) (bool, *SupportBan, error) {
+	userIDHash := s.crypto.BlindIndex("support-ban-user-id", userID)
+	var ban SupportBan
+	err := s.db.WithContext(ctx).
+		Where("user_id_hash = ? AND (expires_at IS NULL OR expires_at > ?)", userIDHash, time.Now()).
+		First(&ban).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil, nil
+	}
+	if err != nil {
+		return false, nil, err
+	}
+	if err := s.hydrateBan(&ban); err != nil {
+		return false, nil, err
+	}
+	return true, &ban, nil
+}
+
+// GetBan returns the active ban for the user if one exists.
+func (s *Store) GetBan(ctx context.Context, userID string) (*SupportBan, error) {
+	banned, ban, err := s.IsUserBanned(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !banned {
+		return nil, nil
+	}
+	return ban, nil
+}
+
+// ListBans returns all active support bans.
+func (s *Store) ListBans(ctx context.Context) ([]SupportBan, error) {
+	var bans []SupportBan
+	err := s.db.WithContext(ctx).
+		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+		Order("created_at DESC").
+		Find(&bans).Error
+	if err != nil {
+		return nil, err
+	}
+	for i := range bans {
+		if err := s.hydrateBan(&bans[i]); err != nil {
+			return nil, fmt.Errorf("decrypt ban %s: %w", bans[i].ID, err)
+		}
+	}
+	return bans, nil
+}
+
 func attachmentStoragePath(mediaRoot, storageKey string) string {
 	return filepath.Join(mediaRoot, storageKey+".bin")
 }
@@ -407,3 +631,4 @@ func attachmentStorageKey(att *Attachment) string {
 	}
 	return att.ID
 }
+

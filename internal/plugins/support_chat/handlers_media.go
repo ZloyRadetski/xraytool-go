@@ -20,6 +20,19 @@ func (p *Plugin) handleUploadAttachment() http.HandlerFunc {
 			return
 		}
 
+		banned, _, err := p.store.IsUserBanned(r.Context(), userID)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to check support ban", "error", err, "user_id", userID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if banned {
+			http.Error(w, "User is banned from support", http.StatusForbidden)
+			return
+		}
+
 		// Enforce size limit
 		maxBytes := int64(p.cfg.Media.MaxFileSizeMB) * 1024 * 1024
 		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)

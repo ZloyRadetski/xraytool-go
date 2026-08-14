@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"xraytool/internal/pluginapi"
 
@@ -35,6 +36,23 @@ func (p *Provider) UnreadCount(ctx context.Context, userID string) (int, error) 
 
 	return int(count), err
 }
+
+// IsBanned reports whether the user is actively banned in the support chat system.
+func (p *Provider) IsBanned(ctx context.Context, userID string) (bool, error) {
+	if p.db == nil {
+		return false, fmt.Errorf("support_chat: not initialised")
+	}
+	if p.crypto == nil {
+		return false, fmt.Errorf("support_chat: crypto not initialised")
+	}
+	userIDHash := p.crypto.BlindIndex("support-ban-user-id", userID)
+	var count int64
+	err := p.db.WithContext(ctx).Model(&SupportBan{}).
+		Where("user_id_hash = ? AND (expires_at IS NULL OR expires_at > ?)", userIDHash, time.Now()).
+		Count(&count).Error
+	return count > 0, err
+}
+
 
 // Plugin implements pluginapi.Plugin, pluginapi.HTTPContributor, and pluginapi.ServiceProvider.
 type Plugin struct {
@@ -214,16 +232,23 @@ func (p *Plugin) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/support/conversations", protected(p.handleClientCreateConversation()))
 	mux.Handle("GET /api/v1/support/conversations", protected(p.handleClientListConversations()))
 	mux.Handle("GET /api/v1/support/conversations/{id}", protected(p.handleClientGetConversation()))
+	mux.Handle("DELETE /api/v1/support/conversations/{id}", protected(p.handleClientDeleteConversation()))
 	mux.Handle("GET /api/v1/support/conversations/{id}/messages", protected(p.handleClientListMessages()))
 	mux.Handle("POST /api/v1/support/conversations/{id}/messages", protected(p.handleClientCreateMessage()))
 	mux.Handle("POST /api/v1/support/attachments", protected(p.handleUploadAttachment()))
 	mux.Handle("GET /api/v1/support/attachments/{id}/download", protected(p.handleDownloadAttachment()))
+	mux.Handle("GET /api/v1/support/ban-status", protected(p.handleClientGetBanStatus()))
 
 	// Admin routes
 	mux.Handle("GET /api/v1/admin/support/conversations", adminOnly(p.handleAdminListConversations()))
+	mux.Handle("DELETE /api/v1/admin/support/conversations/{id}", adminOnly(p.handleAdminDeleteConversation()))
 	mux.Handle("GET /api/v1/admin/support/conversations/{id}/messages", adminOnly(p.handleAdminListMessages()))
 	mux.Handle("POST /api/v1/admin/support/conversations/{id}/messages", adminOnly(p.handleAdminCreateMessage()))
 	mux.Handle("PATCH /api/v1/admin/support/conversations/{id}/status", adminOnly(p.handleAdminPatchStatus()))
+	mux.Handle("GET /api/v1/admin/support/bans", adminOnly(p.handleAdminListBans()))
+	mux.Handle("POST /api/v1/admin/support/bans", adminOnly(p.handleAdminCreateBan()))
+	mux.Handle("GET /api/v1/admin/support/bans/{user_id}", adminOnly(p.handleAdminGetBan()))
+	mux.Handle("DELETE /api/v1/admin/support/bans/{user_id}", adminOnly(p.handleAdminDeleteBan()))
 
 	// WebSocket routes
 	mux.Handle("GET /api/v1/support/conversations/{id}/ws", protected(p.serveWs("client")))

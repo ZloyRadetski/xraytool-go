@@ -117,6 +117,21 @@ func (h *Hub) BroadcastToClient(userID string, data []byte) {
 	})
 }
 
+// DisconnectUser closes and removes all active WebSocket connections for a user.
+func (h *Hub) DisconnectUser(userID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		if client.userID == userID {
+			delete(h.clients, client)
+			close(client.send)
+			if h.log != nil {
+				h.log.Info("Disconnected WebSocket client due to support ban", "user_id", userID)
+			}
+		}
+	}
+}
+
 // enqueueBroadcast deliberately drops a message when the bounded hub queue is
 // full. A slow or disconnected WebSocket consumer must not be able to block
 // an HTTP request goroutine indefinitely.
@@ -129,3 +144,4 @@ func (h *Hub) enqueueBroadcast(msg broadcastMsg) {
 		}
 	}
 }
+

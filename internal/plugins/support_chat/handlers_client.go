@@ -86,6 +86,26 @@ func (p *Plugin) handleClientCreateConversation() http.HandlerFunc {
 			return
 		}
 
+		banned, ban, err := p.store.IsUserBanned(r.Context(), userID)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to check support ban", "error", err, "user_id", userID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if banned {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":      "banned_from_support",
+				"message":    "User is banned from support",
+				"reason":     ban.Reason,
+				"expires_at": ban.ExpiresAt,
+			})
+			return
+		}
+
 		var req createConversationReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -205,6 +225,73 @@ func (p *Plugin) handleClientGetConversation() http.HandlerFunc {
 	}
 }
 
+func (p *Plugin) handleClientDeleteConversation() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := getUserID(r)
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		banned, _, err := p.store.IsUserBanned(r.Context(), userID)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to check support ban", "error", err, "user_id", userID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if banned {
+			http.Error(w, "User is banned from support", http.StatusForbidden)
+			return
+		}
+
+		convID := r.PathValue("id")
+		if convID == "" {
+			http.Error(w, "Missing conversation ID", http.StatusBadRequest)
+			return
+		}
+
+		conv, err := p.store.GetConversation(r.Context(), convID)
+		if err != nil {
+			http.Error(w, "Conversation not found", http.StatusNotFound)
+			return
+		}
+		if conv.UserID != userID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		if err := p.store.DeleteConversation(r.Context(), convID, p.cfg.Media.StoragePath); err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to delete conversation", "error", err, "conv_id", convID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if p.log != nil {
+			p.log.Info("Support conversation deleted by client", "conv_id", convID, "user_id", userID)
+		}
+
+		// Notify admins via websocket
+		if p.hub != nil {
+			if bMsg, err := json.Marshal(map[string]any{
+				"type": "conversation_deleted",
+				"payload": map[string]any{
+					"conversation_id": convID,
+					"user_id":         userID,
+				},
+			}); err == nil {
+				p.hub.BroadcastToAdmins(bMsg)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}
+}
+
 func (p *Plugin) handleClientListMessages() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := getUserID(r)
@@ -259,6 +346,26 @@ func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
 			return
 		}
 
+		banned, ban, err := p.store.IsUserBanned(r.Context(), userID)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to check support ban", "error", err, "user_id", userID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if banned {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":      "banned_from_support",
+				"message":    "User is banned from support",
+				"reason":     ban.Reason,
+				"expires_at": ban.ExpiresAt,
+			})
+			return
+		}
+
 		convID := r.PathValue("id")
 		if convID == "" {
 			http.Error(w, "Missing conversation ID", http.StatusBadRequest)
@@ -292,20 +399,58 @@ func (p *Plugin) handleClientCreateMessage() http.HandlerFunc {
 
 		msg, err := p.store.CreateMessage(r.Context(), convID, "client", req.Text, req.Attachments)
 		if err != nil {
-			p.log.Error("Failed to create message", "error", err)
+			if p.log != nil {
+				p.log.Error("Failed to create message", "error", err)
+			}
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
 		// Notify via websocket (phase 6)
-		if bMsg, err := json.Marshal(map[string]any{
-			"type":    "new_message",
-			"payload": msg,
-		}); err == nil {
-			p.hub.BroadcastToAdmins(bMsg)
+		if p.hub != nil {
+			if bMsg, err := json.Marshal(map[string]any{
+				"type":    "new_message",
+				"payload": msg,
+			}); err == nil {
+				p.hub.BroadcastToAdmins(bMsg)
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(msg)
 	}
 }
+
+func (p *Plugin) handleClientGetBanStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := getUserID(r)
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		banned, ban, err := p.store.IsUserBanned(r.Context(), userID)
+		if err != nil {
+			if p.log != nil {
+				p.log.Error("Failed to check support ban", "error", err, "user_id", userID)
+			}
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Content-Type", "application/json")
+		if banned && ban != nil {
+			json.NewEncoder(w).Encode(map[string]any{
+				"is_banned":  true,
+				"reason":     ban.Reason,
+				"expires_at": ban.ExpiresAt,
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"is_banned": false,
+		})
+	}
+}
+
