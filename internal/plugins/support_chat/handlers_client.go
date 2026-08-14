@@ -68,6 +68,10 @@ func (p *Plugin) lookupRequestUser(ctx context.Context, userID string) (*plugina
 		}
 	}
 
+	if user, lookupErr := p.users.FindByPlatformID(ctx, "web", userID); lookupErr == nil && user != nil {
+		return user, nil
+	}
+
 	return p.users.FindByEmailOrUsername(ctx, strings.ToLower(userID))
 }
 
