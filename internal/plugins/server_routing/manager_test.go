@@ -1013,4 +1013,38 @@ func TestManager_ResolveOutboundTag_FromTemplate(t *testing.T) {
 	}
 }
 
+func TestManager_ResolveOutboundTag_FromLiveExistingTags(t *testing.T) {
+	mgr, _ := createTestManager(t)
+
+	// No template file created!
+	existingTags := map[string]bool{
+		"relay-NLD": true,
+		"direct":    true,
+		"block":     true,
+	}
+
+	// Should match nld-master -> relay-NLD
+	tag := mgr.ResolveOutboundTagWithExisting("nld-master", existingTags)
+	if tag != "relay-NLD" {
+		t.Errorf("expected tag relay-NLD from live existing tags, got: %s", tag)
+	}
+
+	rules := []RoutingRule{
+		{
+			ID:           "rule-1",
+			TargetServer: "nld-master",
+			Domain:       []string{"example.com"},
+			Enabled:      true,
+		},
+	}
+	compiled, err := mgr.CompileServerRulesWithExisting(rules, existingTags)
+	if err != nil {
+		t.Fatalf("CompileServerRulesWithExisting failed: %v", err)
+	}
+	if len(compiled) != 1 || compiled[0]["outboundTag"] != "relay-NLD" {
+		t.Errorf("expected compiled outboundTag to be relay-NLD, got: %v", compiled[0]["outboundTag"])
+	}
+}
+
+
 

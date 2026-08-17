@@ -581,9 +581,20 @@ func (m *Manager) GenerateXrayRouting(serverName string, rules []RoutingRule) ([
 	return m.CompileServerRules(rules)
 }
 
+// GenerateXrayRoutingWithExisting converts RoutingRule slice into Xray rules using existing live outbound tags.
+func (m *Manager) GenerateXrayRoutingWithExisting(serverName string, rules []RoutingRule, existingTags map[string]bool) ([]map[string]any, error) {
+	return m.CompileServerRulesWithExisting(rules, existingTags)
+}
+
 // ResolveOutboundTag determines the exact Xray outboundTag for a given target server.
 // If an outbound template file exists (e.g. outbounds/<target>.json), its declared "tag" is used.
 func (m *Manager) ResolveOutboundTag(target string) string {
+	return m.ResolveOutboundTagWithExisting(target, nil)
+}
+
+// ResolveOutboundTagWithExisting determines the exact Xray outboundTag, checking outbound templates first,
+// then matching existing tags in the live Xray config (e.g. matching "relay-NLD" for "nld-master").
+func (m *Manager) ResolveOutboundTagWithExisting(target string, existingTags map[string]bool) string {
 	tgt := strings.TrimSpace(target)
 	switch strings.ToLower(tgt) {
 	case "direct":
@@ -594,6 +605,7 @@ func (m *Manager) ResolveOutboundTag(target string) string {
 		return "ru-traffic-portal"
 	}
 
+	// 1. Check if an outbound template file exists on disk
 	if m != nil && m.routingDir != "" {
 		tplPath := m.OutboundTemplatePath(tgt)
 		if data, err := os.ReadFile(tplPath); err == nil {
@@ -606,6 +618,36 @@ func (m *Manager) ResolveOutboundTag(target string) string {
 		}
 	}
 
+	// 2. Check existing tags in live Xray config for exact or fuzzy matches (e.g. "relay-NLD" for "nld-master")
+	if len(existingTags) > 0 {
+		candidates := []string{
+			tgt,
+			fmt.Sprintf("relay_%s", tgt),
+			fmt.Sprintf("relay-%s", tgt),
+			fmt.Sprintf("relay_%s", strings.ToUpper(tgt)),
+			fmt.Sprintf("relay-%s", strings.ToUpper(tgt)),
+		}
+		// If tgt is like "nld-master", also check "relay-NLD", "relay_NLD", "relay-nld", etc.
+		parts := strings.FieldsFunc(tgt, func(r rune) bool { return r == '-' || r == '_' })
+		if len(parts) > 0 {
+			first := parts[0]
+			candidates = append(candidates,
+				fmt.Sprintf("relay-%s", strings.ToUpper(first)),
+				fmt.Sprintf("relay_%s", strings.ToUpper(first)),
+				fmt.Sprintf("relay-%s", strings.ToLower(first)),
+				fmt.Sprintf("relay_%s", strings.ToLower(first)),
+			)
+		}
+
+		for _, c := range candidates {
+			for existingTag := range existingTags {
+				if strings.EqualFold(existingTag, c) {
+					return existingTag
+				}
+			}
+		}
+	}
+
 	if strings.HasPrefix(tgt, "relay-") || strings.HasPrefix(tgt, "relay_") || strings.HasPrefix(tgt, "portal-") || strings.HasSuffix(tgt, "-portal") {
 		return tgt
 	}
@@ -614,6 +656,11 @@ func (m *Manager) ResolveOutboundTag(target string) string {
 
 // CompileServerRules produces the JSON array of Xray routing rules for a server.
 func (m *Manager) CompileServerRules(rules []RoutingRule) ([]map[string]any, error) {
+	return m.CompileServerRulesWithExisting(rules, nil)
+}
+
+// CompileServerRulesWithExisting produces the JSON array of Xray routing rules for a server with existing tags context.
+func (m *Manager) CompileServerRulesWithExisting(rules []RoutingRule, existingTags map[string]bool) ([]map[string]any, error) {
 	sorted := make([]RoutingRule, len(rules))
 	copy(sorted, rules)
 
@@ -630,7 +677,7 @@ func (m *Manager) CompileServerRules(rules []RoutingRule) ([]map[string]any, err
 			continue
 		}
 
-		outboundTag := m.ResolveOutboundTag(r.TargetServer)
+		outboundTag := m.ResolveOutboundTagWithExisting(r.TargetServer, existingTags)
 
 		ruleMap := map[string]any{
 			"type":        "field",
@@ -1018,7 +1065,23 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 			root = make(map[string]json.RawMessage)
 		}
 
-		xrayRules, err := m.GenerateXrayRouting(matchedNode, nodeRules)
+		var existingOutbounds []map[string]json.RawMessage
+		if rawOutbounds, ok := root["outbounds"]; ok {
+			_ = json.Unmarshal(rawOutbounds, &existingOutbounds)
+		}
+
+		// Build a set of outbound tags already present in the live Xray config
+		existingOutboundTags := make(map[string]bool, len(existingOutbounds))
+		for _, ob := range existingOutbounds {
+			if rawTag, ok := ob["tag"]; ok {
+				var tag string
+				if err := json.Unmarshal(rawTag, &tag); err == nil && tag != "" {
+					existingOutboundTags[tag] = true
+				}
+			}
+		}
+
+		xrayRules, err := m.GenerateXrayRoutingWithExisting(matchedNode, nodeRules, existingOutboundTags)
 		if err != nil {
 			return fmt.Errorf("generate xray routing: %w", err)
 		}
@@ -1088,22 +1151,6 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 			return fmt.Errorf("marshal routing map: %w", err)
 		}
 		root["routing"] = routingJSON
-
-		var existingOutbounds []map[string]json.RawMessage
-		if rawOutbounds, ok := root["outbounds"]; ok {
-			_ = json.Unmarshal(rawOutbounds, &existingOutbounds)
-		}
-
-		// Build a set of outbound tags already present in the live Xray config
-		existingOutboundTags := make(map[string]bool, len(existingOutbounds))
-		for _, ob := range existingOutbounds {
-			if rawTag, ok := ob["tag"]; ok {
-				var tag string
-				if err := json.Unmarshal(rawTag, &tag); err == nil && tag != "" {
-					existingOutboundTags[tag] = true
-				}
-			}
-		}
 
 		relayOutbounds, err := m.getRequiredOutboundsLocked(matchedNode, nodeRules, existingOutboundTags)
 		if err != nil {
