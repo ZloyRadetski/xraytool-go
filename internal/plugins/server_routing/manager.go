@@ -881,8 +881,14 @@ func (m *Manager) ApplyTransaction(ctx context.Context, configs []ServerRoutingC
 
 func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []ServerRoutingConfig, configPath string, targetNodeName string) error {
 	// 1. Validation (including O(P * (V + E)) cycle check)
-	if err := m.ValidateRules(configs); err != nil {
-		return err
+	// Skip strict validation on slave nodes where m.cfg is nil: the master
+	// has already validated the full rule set with complete cluster context.
+	// Re-validating on a slave that lacks GetKnownServers() context would
+	// reject valid cross-node targets like "nld-master".
+	if m.cfg != nil {
+		if err := m.ValidateRules(configs); err != nil {
+			return err
+		}
 	}
 
 	if configPath == "" {
