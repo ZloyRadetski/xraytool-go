@@ -741,7 +741,13 @@ func preflightCheckXray(candidateConfig []byte) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
-		if strings.Contains(outStr, "failed to initialize access logger") || strings.Contains(outStr, "failed to initialize error logger") {
+		if strings.Contains(outStr, "failed to initialize access logger") ||
+			strings.Contains(outStr, "failed to initialize error logger") ||
+			strings.Contains(outStr, "failed to find available ipv6 table index") ||
+			strings.Contains(outStr, "failed to find available table index") ||
+			strings.Contains(outStr, "Using kernel TUN") ||
+			strings.Contains(outStr, "address already in use") ||
+			strings.Contains(outStr, "operation not permitted") {
 			return nil
 		}
 		return fmt.Errorf("xray configuration test failed: %s (err: %w)", outStr, err)
@@ -1076,21 +1082,21 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 
 		// 6. Pre-flight check on candidate config
 		if err := preflightCheckXray(candidateXrayConfig); err != nil {
-			return fmt.Errorf("pre-flight validation failed: %w", err)
+			return fmt.Errorf("сервер %q: ошибка валидации конфига Xray: %w", matchedNode, err)
 		}
 	}
 
 	// 7. Write all server routing rule files to disk
 	if err := m.saveRoutingLocked(configs); err != nil {
 		rollbackAll()
-		return fmt.Errorf("save routing files failed: %w", err)
+		return fmt.Errorf("сервер %q: ошибка сохранения файлов маршрутизации: %w", matchedNode, err)
 	}
 
 	// 8. Write candidate Xray config and restart service
 	if hasNodeRules && xrayConfigExists && len(candidateXrayConfig) > 0 {
 		if err := safeio.WriteToFile(configPath, candidateXrayConfig, 0o644); err != nil {
 			rollbackAll()
-			return fmt.Errorf("write updated xray config failed: %w", err)
+			return fmt.Errorf("сервер %q: запись обновленного config.json не удалась: %w", matchedNode, err)
 		}
 
 		restartCtx, cancelRestart := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1109,7 +1115,7 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 
 		if serviceErr != nil {
 			rollbackAll()
-			return fmt.Errorf("xray restart failed (%w), transaction rolled back to previous state", serviceErr)
+			return fmt.Errorf("сервер %q: перезапуск службы Xray не удался (%w), изменения откатаны назад (rolled back to previous state)", matchedNode, serviceErr)
 		}
 	}
 
