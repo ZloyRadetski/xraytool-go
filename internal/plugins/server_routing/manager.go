@@ -713,8 +713,6 @@ func (m *Manager) CompileServerRulesWithExisting(rules []RoutingRule, existingTa
 }
 
 // getRequiredOutboundsLocked reads JSON outbound templates assuming lock is held or internal caller.
-// existingTags contains outbound tags already present in the live Xray config; targets whose
-// resolved tag is already present are silently skipped (no template required).
 func (m *Manager) getRequiredOutboundsLocked(serverName string, rules []RoutingRule, existingTags map[string]bool) ([]json.RawMessage, error) {
 	neededTargets := make(map[string]bool)
 	for _, r := range rules {
@@ -735,15 +733,14 @@ func (m *Manager) getRequiredOutboundsLocked(serverName string, rules []RoutingR
 
 	outbounds := make([]json.RawMessage, 0, len(targets))
 	for _, tgt := range targets {
-		// Check if the resolved outboundTag for this target already exists in the live config
-		resolvedTag := m.ResolveOutboundTag(tgt)
-		if existingTags != nil && existingTags[resolvedTag] {
-			continue
-		}
-
 		tplPath := m.OutboundTemplatePath(tgt)
 		data, err := os.ReadFile(tplPath)
 		if err != nil {
+			// If template file does not exist, check if live config already has the outbound
+			resolvedTag := m.ResolveOutboundTagWithExisting(tgt, existingTags)
+			if existingTags != nil && existingTags[resolvedTag] {
+				continue
+			}
 			if os.IsNotExist(err) {
 				return nil, fmt.Errorf("outbound template missing for target server %q at %s", tgt, tplPath)
 			}
@@ -1152,32 +1149,64 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 		}
 		root["routing"] = routingJSON
 
+		// Determine all needed outbound tags by:
+		// 1. Dynamic node rules
+		neededRelayTags := make(map[string]bool)
+		for _, r := range nodeRules {
+			if !r.Enabled {
+				continue
+			}
+			tgt := strings.TrimSpace(r.TargetServer)
+			if tgt != "" && !strings.EqualFold(tgt, "direct") && !strings.EqualFold(tgt, "block") && !strings.EqualFold(tgt, "ru-traffic-portal") && tgt != matchedNode {
+				tag := m.ResolveOutboundTagWithExisting(tgt, existingOutboundTags)
+				neededRelayTags[tag] = true
+			}
+		}
+
+		// 2. Preserved static / cascade / API rules
+		for _, r := range append(apiRules, staticRules...) {
+			if rawOutbound, ok := r["outboundTag"]; ok {
+				var tag string
+				if err := json.Unmarshal(rawOutbound, &tag); err == nil && tag != "" {
+					neededRelayTags[tag] = true
+				}
+			}
+		}
+
 		relayOutbounds, err := m.getRequiredOutboundsLocked(matchedNode, nodeRules, existingOutboundTags)
 		if err != nil {
 			return fmt.Errorf("get required outbounds: %w", err)
 		}
 
-		// Collect tags of newly required outbounds
-		newOutboundTags := make(map[string]bool)
+		// Collect tags of newly required outbounds from templates
+		templateOutboundTags := make(map[string]bool)
 		for _, rawOb := range relayOutbounds {
 			var obMap map[string]json.RawMessage
 			if err := json.Unmarshal(rawOb, &obMap); err == nil {
 				if rawTag, ok := obMap["tag"]; ok {
 					var tag string
 					if err := json.Unmarshal(rawTag, &tag); err == nil && tag != "" {
-						newOutboundTags[tag] = true
+						templateOutboundTags[tag] = true
 					}
 				}
 			}
 		}
 
-		cleanOutbounds := make([]map[string]json.RawMessage, 0, len(existingOutbounds))
+		cleanOutbounds := make([]map[string]json.RawMessage, 0, len(existingOutbounds)+len(relayOutbounds))
 		for _, ob := range existingOutbounds {
 			if rawTag, ok := ob["tag"]; ok {
 				var tag string
 				if err := json.Unmarshal(rawTag, &tag); err == nil {
-					if newOutboundTags[tag] || strings.HasPrefix(tag, "relay_") {
+					// If this tag is being updated/replaced by a template outbound, skip the old copy
+					if templateOutboundTags[tag] {
 						continue
+					}
+					// If this is a relay tag (starts with relay_ or relay-)
+					if strings.HasPrefix(tag, "relay_") || strings.HasPrefix(tag, "relay-") {
+						// Keep it ONLY if it is still actively needed by rules
+						if !neededRelayTags[tag] {
+							continue
+						}
 					}
 				}
 			}
