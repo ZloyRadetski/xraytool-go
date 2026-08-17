@@ -926,3 +926,51 @@ func TestManager_ApplyToLocalXray_PreservesStaticAndCascadeRules(t *testing.T) {
 		t.Errorf("expected relay-NLD outbound to be preserved in outbounds array")
 	}
 }
+
+func TestManager_ApplyToLocalXray_RuTrafficPortal(t *testing.T) {
+	mgr, tmpDir := createTestManager(t)
+	ctx := context.Background()
+
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	validJSON := `{"routing": {"rules": []}}`
+	if err := os.WriteFile(cfgPath, []byte(validJSON), 0o644); err != nil {
+		t.Fatalf("failed to write config.json: %v", err)
+	}
+
+	// Rule targeting ru-traffic-portal
+	configs := []ServerRoutingConfig{
+		{
+			Server: "master.test.com",
+			Rules: []RoutingRule{
+				{
+					ID:           "rule-ru-1",
+					Name:         "Российский трафик через ru-traffic-portal",
+					SourceServer: "master.test.com",
+					TargetServer: "ru-traffic-portal",
+					Domain:       []string{"geosite:category-ru"},
+					IP:           []string{"geoip:ru"},
+					Priority:     1,
+					Enabled:      true,
+				},
+			},
+		},
+		{
+			Server: "msk-slave",
+			Rules:  []RoutingRule{},
+		},
+		{
+			Server: "de-slave",
+			Rules:  []RoutingRule{},
+		},
+	}
+
+	if err := mgr.ValidateRules(configs); err != nil {
+		t.Fatalf("ValidateRules failed for ru-traffic-portal: %v", err)
+	}
+
+	err := mgr.ApplyTransaction(ctx, configs, cfgPath)
+	if err != nil {
+		t.Fatalf("ApplyTransaction failed for ru-traffic-portal: %v", err)
+	}
+}
+

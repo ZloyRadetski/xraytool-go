@@ -518,10 +518,13 @@ func (m *Manager) ValidateRules(configs []ServerRoutingConfig) error {
 				return &ValidationError{Message: fmt.Sprintf("rule %q on server %q cannot target itself", ruleID, srvName)}
 			}
 
-			// Target must be a known server, "direct", or "block"
-			if !strings.EqualFold(target, "direct") && !strings.EqualFold(target, "block") {
+			// Target must be a known server, "direct", "block", "ru-traffic-portal", or have an outbound template
+			if !strings.EqualFold(target, "direct") && !strings.EqualFold(target, "block") && !strings.EqualFold(target, "ru-traffic-portal") {
 				if _, exists := knownServers[target]; !exists {
-					return &ValidationError{Message: fmt.Sprintf("rule %q targets unknown server %q", rule.Name, target)}
+					tplPath := m.OutboundTemplatePath(target)
+					if _, err := os.Stat(tplPath); err != nil {
+						return &ValidationError{Message: fmt.Sprintf("rule %q targets unknown server %q", rule.Name, target)}
+					}
 				}
 			}
 
@@ -575,18 +578,23 @@ func (m *Manager) ValidateRules(configs []ServerRoutingConfig) error {
 
 // GenerateXrayRouting converts RoutingRule slice into Xray Core routing.rules JSON objects.
 func (m *Manager) GenerateXrayRouting(serverName string, rules []RoutingRule) ([]map[string]any, error) {
-	outRules := make([]map[string]any, 0, len(rules))
+	return CompileServerRules(rules)
+}
 
-	sortedRules := make([]RoutingRule, len(rules))
-	copy(sortedRules, rules)
-	sort.Slice(sortedRules, func(i, j int) bool {
-		if sortedRules[i].Priority != sortedRules[j].Priority {
-			return sortedRules[i].Priority < sortedRules[j].Priority
+// CompileServerRules produces the JSON array of Xray routing rules for a server.
+func CompileServerRules(rules []RoutingRule) ([]map[string]any, error) {
+	sorted := make([]RoutingRule, len(rules))
+	copy(sorted, rules)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Priority != sorted[j].Priority {
+			return sorted[i].Priority < sorted[j].Priority
 		}
-		return sortedRules[i].ID < sortedRules[j].ID
+		return sorted[i].ID < sorted[j].ID
 	})
 
-	for _, r := range sortedRules {
+	outRules := make([]map[string]any, 0, len(sorted))
+	for _, r := range sorted {
 		if !r.Enabled {
 			continue
 		}
@@ -598,8 +606,14 @@ func (m *Manager) GenerateXrayRouting(serverName string, rules []RoutingRule) ([
 			outboundTag = "direct"
 		case "block":
 			outboundTag = "block"
+		case "ru-traffic-portal":
+			outboundTag = "ru-traffic-portal"
 		default:
-			outboundTag = fmt.Sprintf("relay_%s", tgt)
+			if strings.HasPrefix(tgt, "relay-") || strings.HasPrefix(tgt, "relay_") || strings.HasPrefix(tgt, "portal-") || strings.HasSuffix(tgt, "-portal") {
+				outboundTag = tgt
+			} else {
+				outboundTag = fmt.Sprintf("relay_%s", tgt)
+			}
 		}
 
 		ruleMap := map[string]any{
@@ -643,7 +657,7 @@ func (m *Manager) getRequiredOutboundsLocked(serverName string, rules []RoutingR
 			continue
 		}
 		tgt := strings.TrimSpace(r.TargetServer)
-		if tgt != "" && !strings.EqualFold(tgt, "direct") && !strings.EqualFold(tgt, "block") && tgt != serverName {
+		if tgt != "" && !strings.EqualFold(tgt, "direct") && !strings.EqualFold(tgt, "block") && !strings.EqualFold(tgt, "ru-traffic-portal") && tgt != serverName {
 			neededTargets[tgt] = true
 		}
 	}
