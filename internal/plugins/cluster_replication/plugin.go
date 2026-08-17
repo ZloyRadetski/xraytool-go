@@ -162,6 +162,8 @@ func (p *Plugin) Init(_ context.Context, raw pluginapi.RawConfig, resolver plugi
 	if config.RoutingDir == "" {
 		if _, statErr := os.Stat("/etc/xraytool/routing"); statErr == nil {
 			config.RoutingDir = "/etc/xraytool/routing"
+		} else if _, statErr := os.Stat("/etc/xraytool"); statErr == nil {
+			config.RoutingDir = "/etc/xraytool/routing"
 		} else {
 			config.RoutingDir = "/root/xraytool/data/routing"
 		}

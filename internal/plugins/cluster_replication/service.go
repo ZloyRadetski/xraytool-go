@@ -253,6 +253,8 @@ func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string, 
 	if rDir == "" {
 		if _, err := os.Stat("/etc/xraytool/routing"); err == nil {
 			rDir = "/etc/xraytool/routing"
+		} else if _, err := os.Stat("/etc/xraytool"); err == nil {
+			rDir = "/etc/xraytool/routing"
 		} else if _, err := os.Stat("/root/xraytool/data/routing"); err == nil {
 			rDir = "/root/xraytool/data/routing"
 		}
@@ -429,6 +431,8 @@ func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64,
 		rDir := strings.TrimSpace(routingDir)
 		if rDir == "" {
 			if _, err := os.Stat("/etc/xraytool/routing"); err == nil {
+				rDir = "/etc/xraytool/routing"
+			} else if _, err := os.Stat("/etc/xraytool"); err == nil {
 				rDir = "/etc/xraytool/routing"
 			} else {
 				rDir = "/root/xraytool/data/routing"

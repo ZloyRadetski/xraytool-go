@@ -1256,6 +1256,8 @@ func ApplyLocalServerRouting(ctx context.Context, nodeName, routingDir, xrayConf
 	if strings.TrimSpace(routingDir) == "" {
 		if _, err := os.Stat("/etc/xraytool/routing"); err == nil {
 			routingDir = "/etc/xraytool/routing"
+		} else if _, err := os.Stat("/etc/xraytool"); err == nil {
+			routingDir = "/etc/xraytool/routing"
 		} else {
 			routingDir = "/root/xraytool/data/routing"
 		}
