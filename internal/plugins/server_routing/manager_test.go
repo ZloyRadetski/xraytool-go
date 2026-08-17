@@ -974,3 +974,43 @@ func TestManager_ApplyToLocalXray_RuTrafficPortal(t *testing.T) {
 	}
 }
 
+func TestManager_ResolveOutboundTag_FromTemplate(t *testing.T) {
+	mgr, tmpDir := createTestManager(t)
+
+	// Create outbounds/nld-master.json with tag "relay-NLD"
+	nldTemplate := `{
+		"tag": "relay-NLD",
+		"protocol": "vless",
+		"settings": {"vnext": []}
+	}`
+	outboundsDir := filepath.Join(tmpDir, "outbounds")
+	if err := os.MkdirAll(outboundsDir, 0o755); err != nil {
+		t.Fatalf("failed to mkdir outbounds: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outboundsDir, "nld-master.json"), []byte(nldTemplate), 0o644); err != nil {
+		t.Fatalf("failed to write outbound template: %v", err)
+	}
+
+	tag := mgr.ResolveOutboundTag("nld-master")
+	if tag != "relay-NLD" {
+		t.Errorf("expected tag relay-NLD from template, got: %s", tag)
+	}
+
+	rules := []RoutingRule{
+		{
+			ID:           "rule-1",
+			TargetServer: "nld-master",
+			Domain:       []string{"example.com"},
+			Enabled:      true,
+		},
+	}
+	compiled, err := mgr.CompileServerRules(rules)
+	if err != nil {
+		t.Fatalf("CompileServerRules failed: %v", err)
+	}
+	if len(compiled) != 1 || compiled[0]["outboundTag"] != "relay-NLD" {
+		t.Errorf("expected compiled outboundTag to be relay-NLD, got: %v", compiled[0]["outboundTag"])
+	}
+}
+
+

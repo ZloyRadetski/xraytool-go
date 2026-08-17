@@ -578,11 +578,42 @@ func (m *Manager) ValidateRules(configs []ServerRoutingConfig) error {
 
 // GenerateXrayRouting converts RoutingRule slice into Xray Core routing.rules JSON objects.
 func (m *Manager) GenerateXrayRouting(serverName string, rules []RoutingRule) ([]map[string]any, error) {
-	return CompileServerRules(rules)
+	return m.CompileServerRules(rules)
+}
+
+// ResolveOutboundTag determines the exact Xray outboundTag for a given target server.
+// If an outbound template file exists (e.g. outbounds/<target>.json), its declared "tag" is used.
+func (m *Manager) ResolveOutboundTag(target string) string {
+	tgt := strings.TrimSpace(target)
+	switch strings.ToLower(tgt) {
+	case "direct":
+		return "direct"
+	case "block":
+		return "block"
+	case "ru-traffic-portal":
+		return "ru-traffic-portal"
+	}
+
+	if m != nil && m.routingDir != "" {
+		tplPath := m.OutboundTemplatePath(tgt)
+		if data, err := os.ReadFile(tplPath); err == nil {
+			var parsed struct {
+				Tag string `json:"tag"`
+			}
+			if err := json.Unmarshal(data, &parsed); err == nil && strings.TrimSpace(parsed.Tag) != "" {
+				return strings.TrimSpace(parsed.Tag)
+			}
+		}
+	}
+
+	if strings.HasPrefix(tgt, "relay-") || strings.HasPrefix(tgt, "relay_") || strings.HasPrefix(tgt, "portal-") || strings.HasSuffix(tgt, "-portal") {
+		return tgt
+	}
+	return fmt.Sprintf("relay_%s", tgt)
 }
 
 // CompileServerRules produces the JSON array of Xray routing rules for a server.
-func CompileServerRules(rules []RoutingRule) ([]map[string]any, error) {
+func (m *Manager) CompileServerRules(rules []RoutingRule) ([]map[string]any, error) {
 	sorted := make([]RoutingRule, len(rules))
 	copy(sorted, rules)
 
@@ -599,22 +630,7 @@ func CompileServerRules(rules []RoutingRule) ([]map[string]any, error) {
 			continue
 		}
 
-		tgt := strings.TrimSpace(r.TargetServer)
-		outboundTag := ""
-		switch strings.ToLower(tgt) {
-		case "direct":
-			outboundTag = "direct"
-		case "block":
-			outboundTag = "block"
-		case "ru-traffic-portal":
-			outboundTag = "ru-traffic-portal"
-		default:
-			if strings.HasPrefix(tgt, "relay-") || strings.HasPrefix(tgt, "relay_") || strings.HasPrefix(tgt, "portal-") || strings.HasSuffix(tgt, "-portal") {
-				outboundTag = tgt
-			} else {
-				outboundTag = fmt.Sprintf("relay_%s", tgt)
-			}
-		}
+		outboundTag := m.ResolveOutboundTag(r.TargetServer)
 
 		ruleMap := map[string]any{
 			"type":        "field",
@@ -1075,12 +1091,28 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 			_ = json.Unmarshal(rawOutbounds, &existingOutbounds)
 		}
 
+		// Collect tags of newly required outbounds
+		newOutboundTags := make(map[string]bool)
+		for _, rawOb := range relayOutbounds {
+			var obMap map[string]json.RawMessage
+			if err := json.Unmarshal(rawOb, &obMap); err == nil {
+				if rawTag, ok := obMap["tag"]; ok {
+					var tag string
+					if err := json.Unmarshal(rawTag, &tag); err == nil && tag != "" {
+						newOutboundTags[tag] = true
+					}
+				}
+			}
+		}
+
 		cleanOutbounds := make([]map[string]json.RawMessage, 0, len(existingOutbounds))
 		for _, ob := range existingOutbounds {
 			if rawTag, ok := ob["tag"]; ok {
 				var tag string
-				if err := json.Unmarshal(rawTag, &tag); err == nil && strings.HasPrefix(tag, "relay_") {
-					continue
+				if err := json.Unmarshal(rawTag, &tag); err == nil {
+					if newOutboundTags[tag] || strings.HasPrefix(tag, "relay_") {
+						continue
+					}
 				}
 			}
 			cleanOutbounds = append(cleanOutbounds, ob)
