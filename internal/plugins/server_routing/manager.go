@@ -80,8 +80,13 @@ func (m *Manager) OutboundTemplatePath(serverName string) string {
 
 // MasterName returns the name identifier of the master node.
 func (m *Manager) MasterName() string {
-	if m != nil && m.cfg != nil && strings.TrimSpace(m.cfg.Server.Domain) != "" {
-		return strings.TrimSpace(m.cfg.Server.Domain)
+	if m != nil && m.cfg != nil {
+		if strings.TrimSpace(m.cfg.Replication.NodeID) != "" {
+			return strings.TrimSpace(m.cfg.Replication.NodeID)
+		}
+		if strings.TrimSpace(m.cfg.Server.Domain) != "" {
+			return strings.TrimSpace(m.cfg.Server.Domain)
+		}
 	}
 	return "master"
 }
@@ -90,6 +95,9 @@ func (m *Manager) MasterName() string {
 func (m *Manager) LocalNodeName() string {
 	if m != nil && m.cfg != nil {
 		if m.cfg.Mode == "slave" && strings.TrimSpace(m.cfg.Replication.NodeID) != "" {
+			return strings.TrimSpace(m.cfg.Replication.NodeID)
+		}
+		if strings.TrimSpace(m.cfg.Replication.NodeID) != "" {
 			return strings.TrimSpace(m.cfg.Replication.NodeID)
 		}
 		if strings.TrimSpace(m.cfg.Server.Domain) != "" {
@@ -149,22 +157,20 @@ func (m *Manager) GetKnownServers() map[string]ServerNode {
 		}
 	}
 
-	// If cfg is nil or has no allowed nodes, discover servers from valid routing config files
-	if m.cfg == nil || len(m.cfg.Replication.AllowedNodes) == 0 {
-		if m.routingDir != "" {
-			if entries, err := os.ReadDir(m.routingDir); err == nil {
-				for _, e := range entries {
-					if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-						data, readErr := os.ReadFile(filepath.Join(m.routingDir, e.Name()))
-						if readErr == nil {
-							var parsed ServerRoutingConfig
-							if err := json.Unmarshal(data, &parsed); err == nil && parsed.Server != "" {
-								if _, exists := nodes[parsed.Server]; !exists {
-									nodes[parsed.Server] = ServerNode{
-										Name:     parsed.Server,
-										IsMaster: parsed.Server == masterName,
-										Online:   true,
-									}
+	// Always discover any additional servers from valid routing config files in routingDir
+	if m.routingDir != "" {
+		if entries, err := os.ReadDir(m.routingDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+					data, readErr := os.ReadFile(filepath.Join(m.routingDir, e.Name()))
+					if readErr == nil {
+						var parsed ServerRoutingConfig
+						if err := json.Unmarshal(data, &parsed); err == nil && parsed.Server != "" {
+							if _, exists := nodes[parsed.Server]; !exists {
+								nodes[parsed.Server] = ServerNode{
+									Name:     parsed.Server,
+									IsMaster: parsed.Server == masterName,
+									Online:   true,
 								}
 							}
 						}
@@ -179,12 +185,14 @@ func (m *Manager) GetKnownServers() map[string]ServerNode {
 		if entries, err := os.ReadDir(m.OutboundsDir()); err == nil {
 			for _, e := range entries {
 				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-					name := strings.TrimSuffix(e.Name(), ".json")
-					if _, exists := nodes[name]; !exists && name != "" {
-						nodes[name] = ServerNode{
-							Name:     name,
-							IsMaster: name == masterName,
-							Online:   true,
+					targetName := strings.TrimSuffix(e.Name(), ".json")
+					if targetName != "" && targetName != "direct" && targetName != "block" {
+						if _, exists := nodes[targetName]; !exists {
+							nodes[targetName] = ServerNode{
+								Name:     targetName,
+								IsMaster: targetName == masterName,
+								Online:   true,
+							}
 						}
 					}
 				}

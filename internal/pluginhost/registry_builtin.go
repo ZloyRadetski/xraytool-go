@@ -83,7 +83,7 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 
 		// Support chat
 		"support_chat":               func() pluginapi.Plugin { return supportChatPlugin.New() },
-		"server_routing":             func() pluginapi.Plugin { return serverRoutingPlugin.New() },
+		"server_routing":             func() pluginapi.Plugin { return serverRoutingPlugin.New(cfg) },
 		"billing":                    func() pluginapi.Plugin { return billingPlugin.NewPlugin(cfg) },
 		"promo":                      func() pluginapi.Plugin { return promoPlugin.NewPlugin() },
 		"referral":                   func() pluginapi.Plugin { return referralPlugin.NewPlugin() },

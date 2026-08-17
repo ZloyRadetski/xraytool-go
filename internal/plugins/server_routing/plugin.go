@@ -16,14 +16,19 @@ type replicationSyncer interface {
 // Plugin provides the administrative routing-management API and storage.
 type Plugin struct {
 	log                 pluginapi.Logger
+	appCfg              *appconfig.Config
 	cfg                 pluginConfig
 	manager             *Manager
 	replicationProvider replicationSyncer
 }
 
-// New creates an uninitialised server-routing plugin.
-func New() *Plugin {
-	return &Plugin{}
+// New creates a server-routing plugin instance.
+func New(appCfg ...*appconfig.Config) *Plugin {
+	p := &Plugin{}
+	if len(appCfg) > 0 {
+		p.appCfg = appCfg[0]
+	}
+	return p
 }
 
 func (p *Plugin) Metadata() pluginapi.Metadata {
@@ -55,13 +60,15 @@ func (p *Plugin) Init(_ context.Context, rawCfg pluginapi.RawConfig, reg plugina
 	p.cfg = cfg
 
 	// Resolve appconfig if available
-	var appCfg *appconfig.Config
-	if reg != nil {
+	appCfg := p.appCfg
+	if appCfg == nil && reg != nil {
 		if srv, err := reg.Resolve("app_config"); err == nil {
 			if ac, ok := srv.(*appconfig.Config); ok {
 				appCfg = ac
 			}
 		}
+	}
+	if reg != nil {
 		if srv, err := reg.Resolve(pluginapi.ServiceClusterReplicationProvider); err == nil {
 			if rp, ok := srv.(replicationSyncer); ok {
 				p.replicationProvider = rp
