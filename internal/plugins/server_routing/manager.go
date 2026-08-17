@@ -913,6 +913,24 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 		xrayConfigExists = true
 		xrayBackup = make([]byte, len(data))
 		copy(xrayBackup, data)
+	} else {
+		for _, fallbackPath := range []string{
+			"/usr/local/etc/xray/config.json",
+			"/etc/xraytool/configs/configs_json.json",
+			"/etc/xraytool/config.json",
+			"/root/xraytool/data/configs/configs_json.json",
+		} {
+			if fallbackPath == configPath {
+				continue
+			}
+			if data, readErr := os.ReadFile(fallbackPath); readErr == nil {
+				xrayConfigExists = true
+				xrayBackup = make([]byte, len(data))
+				copy(xrayBackup, data)
+				configPath = fallbackPath
+				break
+			}
+		}
 	}
 
 	// Rollback helper to restore both rule files and Xray config
@@ -928,7 +946,7 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 		defer cancel()
 		if m.restartFn != nil {
 			_ = m.restartFn(restartCtx)
-		} else {
+		} else if _, lookErr := exec.LookPath("systemctl"); lookErr == nil {
 			_ = exec.CommandContext(restartCtx, "systemctl", "restart", "xray").Run()
 		}
 	}
@@ -1105,6 +1123,10 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 		var serviceErr error
 		if m.restartFn != nil {
 			serviceErr = m.restartFn(restartCtx)
+		} else if _, lookErr := exec.LookPath("systemctl"); lookErr != nil {
+			if m.log != nil {
+				m.log.Warn("systemctl is not available in environment, skipped systemctl restart xray")
+			}
 		} else {
 			cmd := exec.CommandContext(restartCtx, "systemctl", "restart", "xray")
 			out, execErr := cmd.CombinedOutput()
@@ -1128,10 +1150,27 @@ func ApplyLocalServerRouting(ctx context.Context, nodeName, routingDir, xrayConf
 		return fmt.Errorf("nodeName is required")
 	}
 	if strings.TrimSpace(routingDir) == "" {
-		routingDir = "/root/xraytool/data/routing"
+		if _, err := os.Stat("/etc/xraytool/routing"); err == nil {
+			routingDir = "/etc/xraytool/routing"
+		} else {
+			routingDir = "/root/xraytool/data/routing"
+		}
 	}
 	if strings.TrimSpace(xrayConfigPath) == "" {
-		xrayConfigPath = "/usr/local/etc/xray/config.json"
+		for _, candidate := range []string{
+			"/usr/local/etc/xray/config.json",
+			"/etc/xraytool/configs/configs_json.json",
+			"/etc/xraytool/config.json",
+			"/root/xraytool/data/configs/configs_json.json",
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				xrayConfigPath = candidate
+				break
+			}
+		}
+		if xrayConfigPath == "" {
+			xrayConfigPath = "/usr/local/etc/xray/config.json"
+		}
 	}
 
 	mgr := NewManager(routingDir, nil, nil)

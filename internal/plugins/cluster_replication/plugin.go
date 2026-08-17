@@ -5,6 +5,7 @@ import (
 	"fmt"
 	json "github.com/goccy/go-json"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,7 @@ func (*Plugin) Metadata() pluginapi.Metadata {
 			{Name: "domain_registry"},
 			{Name: "domain_engine"},
 			{Name: pluginapi.ServiceTrafficSnapshotProvider, Optional: true},
+			{Name: "app_config", Optional: true},
 		},
 		Publishes: []pluginapi.ServiceRef{{Name: ServiceClusterReplicationProvider}},
 	}
@@ -128,9 +130,41 @@ func (p *Plugin) Init(_ context.Context, raw pluginapi.RawConfig, resolver plugi
 				p.trafficSnapshot = provider
 			}
 		}
+		if value, resolveErr := resolver.Resolve("app_config"); resolveErr == nil {
+			if ac, ok := value.(*appconfig.Config); ok && ac != nil {
+				if config.XrayConfigPath == "" && ac.Paths.XrayConfig != "" {
+					config.XrayConfigPath = ac.Paths.XrayConfig
+				}
+			}
+		}
 	}
 	if registry == nil || engine == nil {
 		return fmt.Errorf("runtime Registry and Engine are required")
+	}
+
+	// Resolve automatic path fallbacks if not explicitly set
+	if config.XrayConfigPath == "" {
+		for _, candidate := range []string{
+			"/usr/local/etc/xray/config.json",
+			"/etc/xraytool/configs/configs_json.json",
+			"/etc/xraytool/config.json",
+			"/root/xraytool/data/configs/configs_json.json",
+		} {
+			if _, statErr := os.Stat(candidate); statErr == nil {
+				config.XrayConfigPath = candidate
+				break
+			}
+		}
+		if config.XrayConfigPath == "" {
+			config.XrayConfigPath = "/usr/local/etc/xray/config.json"
+		}
+	}
+	if config.RoutingDir == "" {
+		if _, statErr := os.Stat("/etc/xraytool/routing"); statErr == nil {
+			config.RoutingDir = "/etc/xraytool/routing"
+		} else {
+			config.RoutingDir = "/root/xraytool/data/routing"
+		}
 	}
 
 	log := p.runtime.Logger
