@@ -30,6 +30,20 @@ requires:
 	require.Equal(t, "antifraud_provider", manifest.Metadata().Publishes[0].Name)
 }
 
+func TestParse_AcceptsAdminToolKind(t *testing.T) {
+	manifest, err := Parse([]byte(`
+name: server_routing
+kind: admin_tool
+version: 1.0.0
+api_version: "1"
+description: "Admin traffic routing management."
+type: internal
+mandatory: false
+`))
+	require.NoError(t, err)
+	require.Equal(t, "admin_tool", manifest.Kind)
+}
+
 func TestBuiltinManifestFilesAreValid(t *testing.T) {
 	paths := []string{
 		filepath.Join("..", "plugins", "core", "plugin.yaml"),
@@ -67,7 +81,9 @@ func TestBuiltinManifestFilesAreValid(t *testing.T) {
 }
 
 func TestBuiltinManifestFilesWithoutConfigSchemaAreValid(t *testing.T) {
-	paths := []string{}
+	paths := []string{
+		filepath.Join("..", "plugins", "server_routing", "plugin.yaml"),
+	}
 	for _, path := range paths {
 		path := path
 		t.Run(path, func(t *testing.T) {

@@ -15,10 +15,12 @@ func TestWriteToFile_Errors(t *testing.T) {
 		t.Errorf("expected error when MkdirAll fails")
 	}
 
-	// Bad dir path to cause CreateTemp to fail (e.g. read-only dir, or invalid path)
-	// On Windows, a volume that doesn't exist usually fails.
-	err = WriteToFile(`Z:\invalid\path\file.txt`, []byte("data"), 0o644)
-	if err == nil {
-		t.Errorf("expected error for invalid path")
+	// Read-only directory to cause CreateTemp to fail
+	readOnlyDir := filepath.Join(t.TempDir(), "readonly")
+	if err := os.MkdirAll(readOnlyDir, 0o555); err == nil {
+		err = WriteToFile(filepath.Join(readOnlyDir, "file.txt"), []byte("data"), 0o644)
+		if err == nil {
+			t.Errorf("expected error for read-only directory")
+		}
 	}
 }

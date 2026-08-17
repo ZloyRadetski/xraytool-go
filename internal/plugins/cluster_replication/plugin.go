@@ -192,6 +192,30 @@ func (p *Plugin) Start(ctx context.Context) error {
 	return nil
 }
 
+func (p *Plugin) TriggerSync(ctx context.Context) error {
+	p.mu.RLock()
+	service := p.service
+	config := p.config
+	log := p.log
+	p.mu.RUnlock()
+
+	if service == nil || config.Mode != "master" {
+		return nil
+	}
+
+	count, err := service.PublishArtifacts(ctx, config.RealityKeysPath, config.RoutingDir)
+	if err != nil {
+		if log != nil {
+			log.Error("replication artifact trigger sync failed", "err", err)
+		}
+		return err
+	}
+	if count > 0 && log != nil {
+		log.Info("replication artifacts appended on trigger", "count", count)
+	}
+	return nil
+}
+
 func (p *Plugin) runMasterLoop(ctx context.Context, service *Service, config Config, log *slog.Logger) {
 	run := func() {
 		if changed, err := service.DetectDesiredState(ctx); err != nil {
@@ -199,7 +223,7 @@ func (p *Plugin) runMasterLoop(ctx context.Context, service *Service, config Con
 		} else if changed {
 			log.Info("replication snapshot marker appended")
 		}
-		if count, err := service.PublishArtifacts(ctx, config.RealityKeysPath); err != nil {
+		if count, err := service.PublishArtifacts(ctx, config.RealityKeysPath, config.RoutingDir); err != nil {
 			log.Error("replication artifact scan failed", "err", err)
 		} else if count > 0 {
 			log.Info("replication artifacts appended", "count", count)

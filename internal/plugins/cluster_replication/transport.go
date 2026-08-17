@@ -41,6 +41,8 @@ type Config struct {
 	MasterScanInterval string   `json:"master_scan_interval"`
 	StatsInterval      string   `json:"stats_interval"`
 	RealityKeysPath    string   `json:"reality_keys_path"`
+	RoutingDir         string   `json:"routing_dir"`
+	XrayConfigPath     string   `json:"xray_config_path"`
 }
 
 func (c Config) Validate() error {
@@ -386,7 +388,7 @@ func (s *replicationServer) sendEventsAfter(ctx context.Context, stream protocol
 func (s *replicationServer) sendSnapshot(ctx context.Context, stream protocol.Replication_ConnectServer) (int64, error) {
 	// A snapshot is a complete desired-state transfer. Refresh the remaining
 	// configuration artifacts here as well as in the periodic master loop.
-	if count, err := s.service.PublishArtifacts(ctx, s.config.RealityKeysPath); err != nil {
+	if count, err := s.service.PublishArtifacts(ctx, s.config.RealityKeysPath, s.config.RoutingDir); err != nil {
 		return 0, fmt.Errorf("refresh replication artifacts for snapshot: %w", err)
 	} else if count > 0 {
 		s.log.Info("replication snapshot artifacts refreshed", "count", count)
@@ -572,7 +574,7 @@ func receiveSlaveFrames(
 				return err
 			}
 			event := Event{Revision: frame.Revision, Kind: wire.Kind, Checksum: wire.Checksum, Payload: payload}
-			if err := service.ApplyEvent(ctx, config.MasterAddress, event, config.RealityKeysPath); err != nil {
+			if err := service.ApplyEvent(ctx, config.MasterAddress, event, config.RealityKeysPath, config.RoutingDir, config.NodeID, config.XrayConfigPath); err != nil {
 				return err
 			}
 			if err := session.send(protocol.Frame{Kind: protocol.KindAck, Revision: frame.Revision}); err != nil {
@@ -605,7 +607,7 @@ func receiveSlaveFrames(
 			if activeSnapshot == "" {
 				return fmt.Errorf("replication snapshot artifact received without begin")
 			}
-			if err := service.applyArtifact(ctx, frame.Payload, frame.Revision, config.RealityKeysPath); err != nil {
+			if err := service.applyArtifact(ctx, frame.Payload, frame.Revision, config.RealityKeysPath, config.RoutingDir, config.NodeID, config.XrayConfigPath); err != nil {
 				return err
 			}
 		case protocol.KindSnapshotEnd:

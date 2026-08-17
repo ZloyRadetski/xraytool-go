@@ -28,6 +28,7 @@ import (
 	pricingPlugin "xraytool/internal/plugins/pricing_default"
 	promoPlugin "xraytool/internal/plugins/promo"
 	referralPlugin "xraytool/internal/plugins/referral"
+	serverRoutingPlugin "xraytool/internal/plugins/server_routing"
 	autoBalancerPlugin "xraytool/internal/plugins/subscription_autobalancer"
 	formatPlugin "xraytool/internal/plugins/subscription_format_legacy"
 	lifecyclePlugin "xraytool/internal/plugins/subscription_lifecycle"
@@ -57,7 +58,7 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 		// ── Phase 1.1: Optional built-in plugins ────────────────────────────
 		// Antifraud: multi-IP soft-ban, log tailing.
 		// Config keys under plugins.antifraud.config: enabled, log_path, max_ips, ...
-		"antifraud": func() pluginapi.Plugin { return antifraudPlugin.New() },
+		"antifraud":           func() pluginapi.Plugin { return antifraudPlugin.New() },
 		"cluster_replication": func() pluginapi.Plugin { return clusterReplicationPlugin.NewCLI(cfg) },
 
 		// ── Phase 1.5: Xray Engine plugin ─────────────────────────────────────
@@ -82,6 +83,7 @@ func BuiltinRegistry(cfg *appconfig.Config) map[string]func() pluginapi.Plugin {
 
 		// Support chat
 		"support_chat":               func() pluginapi.Plugin { return supportChatPlugin.New() },
+		"server_routing":             func() pluginapi.Plugin { return serverRoutingPlugin.New() },
 		"billing":                    func() pluginapi.Plugin { return billingPlugin.NewPlugin(cfg) },
 		"promo":                      func() pluginapi.Plugin { return promoPlugin.NewPlugin() },
 		"referral":                   func() pluginapi.Plugin { return referralPlugin.NewPlugin() },

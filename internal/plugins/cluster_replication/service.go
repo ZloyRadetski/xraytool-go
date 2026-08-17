@@ -15,11 +15,14 @@ import (
 	"sync"
 
 	"xraytool/internal/domain"
+	server_routing "xraytool/internal/plugins/server_routing"
 	vpn "xraytool/internal/plugins/engine_xray"
+	"xraytool/internal/safeio"
 )
 
 const (
 	artifactRealityKeys          = "reality_keys"
+	artifactRoutingPrefix        = "routing_file:"
 	legacyStaticClientsArtifact  = "static_clients"
 	legacyStaticClientsDigestKey = "master_artifact_digest_static_clients"
 )
@@ -47,6 +50,20 @@ type Service struct {
 	log      *slog.Logger
 
 	reconcileMu sync.Mutex
+	restartFn   func(ctx context.Context) error
+}
+
+func (s *Service) logger() *slog.Logger {
+	if s == nil || s.log == nil {
+		return slog.Default()
+	}
+	return s.log
+}
+
+func (s *Service) SetRestartFunc(fn func(ctx context.Context) error) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	s.restartFn = fn
 }
 
 func NewService(registry domain.Registry, engine domain.Engine, store *Store, log *slog.Logger) *Service {
@@ -210,7 +227,7 @@ func desiredDigest(users []domain.VPNUserConfig) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string) (int, error) {
+func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string, routingDir ...string) (int, error) {
 	if err := s.store.DeleteArtifact(ctx, legacyStaticClientsArtifact); err != nil {
 		return 0, fmt.Errorf("remove obsolete static client artifact: %w", err)
 	}
@@ -226,6 +243,34 @@ func (s *Service) PublishArtifacts(ctx context.Context, realityKeysPath string) 
 			}
 		} else {
 			artifacts[artifactRealityKeys] = payload
+		}
+	}
+
+	var rDir string
+	if len(routingDir) > 0 {
+		rDir = strings.TrimSpace(routingDir[0])
+	}
+	if rDir != "" {
+		if entries, err := os.ReadDir(rDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+					p := filepath.Join(rDir, entry.Name())
+					if data, readErr := os.ReadFile(p); readErr == nil {
+						artifacts[artifactRoutingPrefix+entry.Name()] = data
+					}
+				}
+			}
+		}
+		outboundsDir := filepath.Join(rDir, "outbounds")
+		if entries, err := os.ReadDir(outboundsDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+					p := filepath.Join(outboundsDir, entry.Name())
+					if data, readErr := os.ReadFile(p); readErr == nil {
+						artifacts[artifactRoutingPrefix+"outbounds/"+entry.Name()] = data
+					}
+				}
+			}
 		}
 	}
 
@@ -267,7 +312,7 @@ func templateUserSnapshotter(engine domain.Engine) (domain.TemplateUserSnapshott
 	return snapshotter, ok
 }
 
-func (s *Service) ApplyEvent(ctx context.Context, masterID string, event Event, realityKeysPath string) error {
+func (s *Service) ApplyEvent(ctx context.Context, masterID string, event Event, realityKeysPath string, routingDirAndNode ...string) error {
 	if checksum(event.Kind, event.Payload) != event.Checksum {
 		return fmt.Errorf("replication event %d checksum mismatch", event.Revision)
 	}
@@ -309,7 +354,19 @@ func (s *Service) ApplyEvent(ctx context.Context, masterID string, event Event, 
 			return err
 		}
 	case eventArtifact:
-		if err := s.applyArtifact(ctx, event.Payload, event.Revision, realityKeysPath); err != nil {
+		routingDir := ""
+		nodeID := ""
+		xrayConfigPath := ""
+		if len(routingDirAndNode) > 0 {
+			routingDir = routingDirAndNode[0]
+		}
+		if len(routingDirAndNode) > 1 {
+			nodeID = routingDirAndNode[1]
+		}
+		if len(routingDirAndNode) > 2 {
+			xrayConfigPath = routingDirAndNode[2]
+		}
+		if err := s.applyArtifact(ctx, event.Payload, event.Revision, realityKeysPath, routingDir, nodeID, xrayConfigPath); err != nil {
 			return err
 		}
 	case eventResnapshot:
@@ -322,7 +379,7 @@ func (s *Service) ApplyEvent(ctx context.Context, masterID string, event Event, 
 	return s.store.MarkApplied(ctx, masterID, event)
 }
 
-func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64, realityKeysPath string) error {
+func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64, realityKeysPath string, routingDir string, nodeID string, xrayConfigPath string) error {
 	var payload artifactPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return fmt.Errorf("decode replication artifact: %w", err)
@@ -331,8 +388,8 @@ func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64,
 	if err != nil {
 		return fmt.Errorf("decode replication artifact body: %w", err)
 	}
-	switch payload.Kind {
-	case legacyStaticClientsArtifact:
+	switch {
+	case payload.Kind == legacyStaticClientsArtifact:
 		// A mixed-version cluster can still deliver a previously journaled
 		// artifact. Ignore it safely: hardcoded users now arrive in ordinary
 		// snapshot user frames and no sidecar is recreated.
@@ -341,7 +398,7 @@ func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64,
 			return fmt.Errorf("remove obsolete static client artifact: %w", err)
 		}
 		return nil
-	case artifactRealityKeys:
+	case payload.Kind == artifactRealityKeys:
 		path := strings.TrimSpace(realityKeysPath)
 		if path == "" {
 			return fmt.Errorf("received reality key artifact but reality_keys_path is unset")
@@ -355,6 +412,32 @@ func (s *Service) applyArtifact(ctx context.Context, raw []byte, revision int64,
 			if err := synchronizer.SyncRealityKeys(ctx, data); err != nil {
 				return fmt.Errorf("apply reality key artifact: %w", err)
 			}
+		}
+	case strings.HasPrefix(payload.Kind, artifactRoutingPrefix):
+		relPath := strings.TrimPrefix(payload.Kind, artifactRoutingPrefix)
+		cleanPath := filepath.Clean(relPath)
+		if strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) {
+			return fmt.Errorf("invalid routing artifact path %q: potential path traversal", relPath)
+		}
+		rDir := strings.TrimSpace(routingDir)
+		if rDir == "" {
+			rDir = "/root/xraytool/data/routing"
+		}
+		dest := filepath.Join(rDir, cleanPath)
+		if err := safeio.WriteToFile(dest, data, 0o644); err != nil {
+			return fmt.Errorf("write routing artifact %s: %w", dest, err)
+		}
+		// If the written file matches the slave's nodeID or is an outbound template, apply to local Xray
+		targetNode := strings.TrimSpace(nodeID)
+		if targetNode != "" && (cleanPath == targetNode+".json" || strings.HasPrefix(cleanPath, "outbounds/")) {
+			s.reconcileMu.Lock()
+			restartFn := s.restartFn
+			s.reconcileMu.Unlock()
+			if applyErr := server_routing.ApplyLocalServerRouting(ctx, targetNode, rDir, xrayConfigPath, restartFn); applyErr != nil {
+				s.logger().Error("failed to apply slave routing to local xray", "node", targetNode, "file", cleanPath, "err", applyErr)
+				return fmt.Errorf("apply slave routing (%s): %w", cleanPath, applyErr)
+			}
+			s.logger().Info("successfully applied slave routing to local xray", "node", targetNode, "file", cleanPath)
 		}
 	default:
 		return fmt.Errorf("unknown replication artifact %q", payload.Kind)

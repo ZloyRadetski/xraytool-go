@@ -2,9 +2,12 @@ package clusterreplication
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -139,4 +142,150 @@ func TestSlaveSchedulerReportsTrafficWhileSessionStaysOpen(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("slave scheduler did not stop after cancellation")
 	}
+}
+
+func TestRoutingReplication_MasterPublishesArtifacts(t *testing.T) {
+	store := newTestStore(t)
+	service := &Service{store: store}
+	ctx := context.Background()
+
+	tmpRoutingDir := t.TempDir()
+	outboundsDir := filepath.Join(tmpRoutingDir, "outbounds")
+	require.NoError(t, os.MkdirAll(outboundsDir, 0o755))
+
+	// Write server config and outbound template
+	require.NoError(t, os.WriteFile(filepath.Join(tmpRoutingDir, "msk-slave.json"), []byte(`{"server":"msk-slave","rules":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(outboundsDir, "nld-master.json"), []byte(`{"tag":"relay_nld-master"}`), 0o644))
+
+	count, err := service.PublishArtifacts(ctx, "", tmpRoutingDir)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+
+	// Verify artifacts are stored
+	arts, err := store.Artifacts(ctx)
+	require.NoError(t, err)
+	require.Len(t, arts, 2)
+
+	foundMsk := false
+	foundNld := false
+	for _, a := range arts {
+		if a.Kind == "routing_file:msk-slave.json" {
+			foundMsk = true
+			require.Contains(t, string(a.Payload), "msk-slave")
+		}
+		if a.Kind == "routing_file:outbounds/nld-master.json" {
+			foundNld = true
+			require.Contains(t, string(a.Payload), "relay_nld-master")
+		}
+	}
+	require.True(t, foundMsk)
+	require.True(t, foundNld)
+}
+
+func TestRoutingReplication_SlaveAppliesXrayConfig(t *testing.T) {
+	store := newTestStore(t)
+	service := &Service{store: store}
+	ctx := context.Background()
+
+	restarted := false
+	service.SetRestartFunc(func(ctx context.Context) error {
+		restarted = true
+		return nil
+	})
+
+	slaveRoutingDir := t.TempDir()
+	outboundsDir := filepath.Join(slaveRoutingDir, "outbounds")
+	require.NoError(t, os.MkdirAll(outboundsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outboundsDir, "nld-master.json"), []byte(`{"protocol":"freedom","tag":"relay_nld-master"}`), 0o644))
+
+	xrayCfgPath := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(xrayCfgPath, []byte(`{"routing":{"rules":[]},"outbounds":[]}`), 0o644))
+
+	ruleContent := `{"server":"msk-slave","rules":[{"id":"r1","name":"Telegram","source_server":"msk-slave","target_server":"nld-master","domain":["geosite:telegram"],"priority":1,"enabled":true}]}`
+	payload, _ := json.Marshal(artifactPayload{
+		Kind: "routing_file:msk-slave.json",
+		Data: base64.StdEncoding.EncodeToString([]byte(ruleContent)),
+	})
+	event := Event{
+		Revision: 1,
+		Kind:     eventArtifact,
+		Checksum: checksum(eventArtifact, payload),
+		Payload:  payload,
+	}
+
+	err := service.ApplyEvent(ctx, "master", event, "", slaveRoutingDir, "msk-slave", xrayCfgPath)
+	require.NoError(t, err)
+	require.True(t, restarted)
+
+	// Verify file was written to disk
+	writtenFile, err := os.ReadFile(filepath.Join(slaveRoutingDir, "msk-slave.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(writtenFile), "Telegram")
+
+	// Verify Xray config was patched
+	xrayData, err := os.ReadFile(xrayCfgPath)
+	require.NoError(t, err)
+	require.Contains(t, string(xrayData), "geosite:telegram")
+	require.Contains(t, string(xrayData), "relay_nld-master")
+}
+
+func TestRoutingReplication_SlaveRollbackOnRestartFailure(t *testing.T) {
+	store := newTestStore(t)
+	service := &Service{store: store}
+	ctx := context.Background()
+
+	service.SetRestartFunc(func(ctx context.Context) error {
+		return errors.New("simulated systemd failure")
+	})
+
+	slaveRoutingDir := t.TempDir()
+	outboundsDir := filepath.Join(slaveRoutingDir, "outbounds")
+	require.NoError(t, os.MkdirAll(outboundsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outboundsDir, "nld-master.json"), []byte(`{"protocol":"freedom","tag":"relay_nld-master"}`), 0o644))
+
+	xrayCfgPath := filepath.Join(t.TempDir(), "config.json")
+	origConfig := `{"routing":{"rules":[{"type":"field","outboundTag":"direct"}]},"outbounds":[]}`
+	require.NoError(t, os.WriteFile(xrayCfgPath, []byte(origConfig), 0o644))
+
+	ruleContent := `{"server":"msk-slave","rules":[{"id":"r1","name":"Telegram","source_server":"msk-slave","target_server":"nld-master","domain":["geosite:telegram"],"priority":1,"enabled":true}]}`
+	payload, _ := json.Marshal(artifactPayload{
+		Kind: "routing_file:msk-slave.json",
+		Data: base64.StdEncoding.EncodeToString([]byte(ruleContent)),
+	})
+	event := Event{
+		Revision: 1,
+		Kind:     eventArtifact,
+		Checksum: checksum(eventArtifact, payload),
+		Payload:  payload,
+	}
+
+	err := service.ApplyEvent(ctx, "master", event, "", slaveRoutingDir, "msk-slave", xrayCfgPath)
+	require.Error(t, err)
+
+	// Verify Xray config was rolled back to original
+	xrayData, err := os.ReadFile(xrayCfgPath)
+	require.NoError(t, err)
+	require.Equal(t, origConfig, string(xrayData))
+}
+
+func TestRoutingReplication_PathTraversalRejected(t *testing.T) {
+	store := newTestStore(t)
+	service := &Service{store: store}
+	ctx := context.Background()
+
+	slaveRoutingDir := t.TempDir()
+	payload, _ := json.Marshal(artifactPayload{
+		Kind: "routing_file:../../evil.txt",
+		Data: base64.StdEncoding.EncodeToString([]byte("malicious content")),
+	})
+	event := Event{
+		Revision: 1,
+		Kind:     eventArtifact,
+		Checksum: checksum(eventArtifact, payload),
+		Payload:  payload,
+	}
+
+	err := service.ApplyEvent(ctx, "master", event, "", slaveRoutingDir, "msk-slave", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "path traversal")
 }

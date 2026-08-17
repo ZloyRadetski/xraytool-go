@@ -500,6 +500,13 @@ func defaultPluginConfigs(cfg *Config) PluginsConf {
 			Source:  "builtin",
 			Config:  map[string]any{},
 		},
+		"server_routing": {
+			Enabled: cfg.IsMaster(),
+			Source:  "builtin",
+			Config: map[string]any{
+				"routing_dir": "/root/xraytool/data/routing",
+			},
+		},
 		"antifraud": {
 			Enabled: cfg.AntiFraud.Enabled,
 			Source:  "builtin",

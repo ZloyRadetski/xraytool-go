@@ -1,0 +1,7 @@
+name: server_routing
+kind: admin_tool
+version: 1.0.0
+api_version: "1"
+description: "Administrative Xray server traffic routing management."
+type: internal
+mandatory: false
