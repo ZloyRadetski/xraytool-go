@@ -666,7 +666,9 @@ func (m *Manager) CompileServerRules(rules []RoutingRule) ([]map[string]any, err
 }
 
 // getRequiredOutboundsLocked reads JSON outbound templates assuming lock is held or internal caller.
-func (m *Manager) getRequiredOutboundsLocked(serverName string, rules []RoutingRule) ([]json.RawMessage, error) {
+// existingTags contains outbound tags already present in the live Xray config; targets whose
+// resolved tag is already present are silently skipped (no template required).
+func (m *Manager) getRequiredOutboundsLocked(serverName string, rules []RoutingRule, existingTags map[string]bool) ([]json.RawMessage, error) {
 	neededTargets := make(map[string]bool)
 	for _, r := range rules {
 		if !r.Enabled {
@@ -686,6 +688,12 @@ func (m *Manager) getRequiredOutboundsLocked(serverName string, rules []RoutingR
 
 	outbounds := make([]json.RawMessage, 0, len(targets))
 	for _, tgt := range targets {
+		// Check if the resolved outboundTag for this target already exists in the live config
+		resolvedTag := m.ResolveOutboundTag(tgt)
+		if existingTags != nil && existingTags[resolvedTag] {
+			continue
+		}
+
 		tplPath := m.OutboundTemplatePath(tgt)
 		data, err := os.ReadFile(tplPath)
 		if err != nil {
@@ -712,7 +720,7 @@ func (m *Manager) GetRequiredOutbounds(serverName string, rules []RoutingRule) (
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return m.getRequiredOutboundsLocked(serverName, rules)
+	return m.getRequiredOutboundsLocked(serverName, rules, nil)
 }
 
 // preflightCheckXray tests candidate config against xray binary if available.
@@ -1081,14 +1089,25 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 		}
 		root["routing"] = routingJSON
 
-		relayOutbounds, err := m.getRequiredOutboundsLocked(matchedNode, nodeRules)
-		if err != nil {
-			return fmt.Errorf("get required outbounds: %w", err)
-		}
-
 		var existingOutbounds []map[string]json.RawMessage
 		if rawOutbounds, ok := root["outbounds"]; ok {
 			_ = json.Unmarshal(rawOutbounds, &existingOutbounds)
+		}
+
+		// Build a set of outbound tags already present in the live Xray config
+		existingOutboundTags := make(map[string]bool, len(existingOutbounds))
+		for _, ob := range existingOutbounds {
+			if rawTag, ok := ob["tag"]; ok {
+				var tag string
+				if err := json.Unmarshal(rawTag, &tag); err == nil && tag != "" {
+					existingOutboundTags[tag] = true
+				}
+			}
+		}
+
+		relayOutbounds, err := m.getRequiredOutboundsLocked(matchedNode, nodeRules, existingOutboundTags)
+		if err != nil {
+			return fmt.Errorf("get required outbounds: %w", err)
 		}
 
 		// Collect tags of newly required outbounds
