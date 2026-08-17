@@ -1250,7 +1250,30 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 			return fmt.Errorf("сервер %q: запись обновленного config.json не удалась: %w", matchedNode, err)
 		}
 
-		// Also update template files if they exist so template and live config stay permanently in sync
+		restartCtx, cancelRestart := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelRestart()
+
+		var serviceErr error
+		if m.restartFn != nil {
+			serviceErr = m.restartFn(restartCtx)
+		} else if _, lookErr := exec.LookPath("systemctl"); lookErr != nil {
+			if m.log != nil {
+				m.log.Warn("systemctl is not available in environment, skipped systemctl restart xray")
+			}
+		} else {
+			cmd := exec.CommandContext(restartCtx, "systemctl", "restart", "xray")
+			out, execErr := cmd.CombinedOutput()
+			if execErr != nil {
+				serviceErr = fmt.Errorf("systemctl restart xray failed: %s (%w)", strings.TrimSpace(string(out)), execErr)
+			}
+		}
+
+		if serviceErr != nil {
+			rollbackAll()
+			return fmt.Errorf("сервер %q: перезапуск службы Xray не удался (%w), изменения откатаны назад (rolled back to previous state)", matchedNode, serviceErr)
+		}
+
+		// Also update template files if they exist so template and live config stay permanently in sync (executed only on successful commit)
 		var templateCandidates []string
 		if m.cfg != nil && m.cfg.Paths.XrayTemplate != "" {
 			templateCandidates = append(templateCandidates, m.cfg.Paths.XrayTemplate)
@@ -1278,29 +1301,6 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 					}
 				}
 			}
-		}
-
-		restartCtx, cancelRestart := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancelRestart()
-
-		var serviceErr error
-		if m.restartFn != nil {
-			serviceErr = m.restartFn(restartCtx)
-		} else if _, lookErr := exec.LookPath("systemctl"); lookErr != nil {
-			if m.log != nil {
-				m.log.Warn("systemctl is not available in environment, skipped systemctl restart xray")
-			}
-		} else {
-			cmd := exec.CommandContext(restartCtx, "systemctl", "restart", "xray")
-			out, execErr := cmd.CombinedOutput()
-			if execErr != nil {
-				serviceErr = fmt.Errorf("systemctl restart xray failed: %s (%w)", strings.TrimSpace(string(out)), execErr)
-			}
-		}
-
-		if serviceErr != nil {
-			rollbackAll()
-			return fmt.Errorf("сервер %q: перезапуск службы Xray не удался (%w), изменения откатаны назад (rolled back to previous state)", matchedNode, serviceErr)
 		}
 	}
 
