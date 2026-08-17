@@ -10,7 +10,7 @@ import (
 )
 
 type replicationSyncer interface {
-	TriggerSync(ctx context.Context) error
+	TriggerSync(ctx context.Context, routingDir ...string) error
 }
 
 // Plugin provides the administrative routing-management API and storage.
@@ -39,6 +39,9 @@ func (p *Plugin) Metadata() pluginapi.Metadata {
 		APIVersion:  pluginapi.CurrentAPIVersion,
 		Description: "Administrative Xray server traffic routing management.",
 		Mandatory:   false,
+		Requires: []pluginapi.ServiceRef{
+			{Name: pluginapi.ServiceClusterReplicationProvider, Optional: true},
+		},
 	}
 }
 

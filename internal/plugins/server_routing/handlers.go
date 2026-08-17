@@ -93,12 +93,12 @@ func (p *Plugin) handleApplyRouting() http.HandlerFunc {
 
 		// Trigger immediate cluster replication to sync routing files to all connected slaves
 		if p.replicationProvider != nil {
-			if trigErr := p.replicationProvider.TriggerSync(req.Context()); trigErr != nil {
+			if trigErr := p.replicationProvider.TriggerSync(req.Context(), p.cfg.RoutingDir); trigErr != nil {
 				if p.log != nil {
 					p.log.Warn("server_routing: failed to trigger cluster replication sync", "err", trigErr)
 				}
 			} else if p.log != nil {
-				p.log.Info("server_routing: triggered cluster replication sync for all slaves")
+				p.log.Info("server_routing: triggered cluster replication sync for all slaves", "routing_dir", p.cfg.RoutingDir)
 			}
 		}
 

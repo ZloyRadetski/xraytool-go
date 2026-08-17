@@ -192,7 +192,7 @@ func (p *Plugin) Start(ctx context.Context) error {
 	return nil
 }
 
-func (p *Plugin) TriggerSync(ctx context.Context) error {
+func (p *Plugin) TriggerSync(ctx context.Context, routingDir ...string) error {
 	p.mu.RLock()
 	service := p.service
 	config := p.config
@@ -203,7 +203,12 @@ func (p *Plugin) TriggerSync(ctx context.Context) error {
 		return nil
 	}
 
-	count, err := service.PublishArtifacts(ctx, config.RealityKeysPath, config.RoutingDir)
+	rDir := config.RoutingDir
+	if len(routingDir) > 0 && strings.TrimSpace(routingDir[0]) != "" {
+		rDir = strings.TrimSpace(routingDir[0])
+	}
+
+	count, err := service.PublishArtifacts(ctx, config.RealityKeysPath, rDir)
 	if err != nil {
 		if log != nil {
 			log.Error("replication artifact trigger sync failed", "err", err)
@@ -642,7 +647,7 @@ func parseConfig(raw pluginapi.RawConfig) (Config, error) {
 		{"master_address", &config.MasterAddress}, {"ca_file", &config.CAFile}, {"cert_file", &config.CertFile},
 		{"key_file", &config.KeyFile}, {"server_name", &config.ServerName}, {"reconnect_interval", &config.ReconnectInterval},
 		{"drift_interval", &config.DriftInterval}, {"master_scan_interval", &config.MasterScanInterval}, {"stats_interval", &config.StatsInterval},
-		{"reality_keys_path", &config.RealityKeysPath},
+		{"reality_keys_path", &config.RealityKeysPath}, {"routing_dir", &config.RoutingDir}, {"xray_config_path", &config.XrayConfigPath},
 	} {
 		if err := readString(field.key, field.target); err != nil {
 			return Config{}, err
