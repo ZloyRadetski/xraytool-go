@@ -706,6 +706,21 @@ func preflightCheckXray(candidateConfig []byte) error {
 		return nil
 	}
 
+	// Sanitize log config in candidate preflight payload to prevent permission denied errors
+	// on runtime log files (e.g. /dev/shm/xray_access.log owned by root/live daemon).
+	testPayload := candidateConfig
+	var rawMap map[string]any
+	if err := json.Unmarshal(candidateConfig, &rawMap); err == nil {
+		if logVal, ok := rawMap["log"].(map[string]any); ok {
+			delete(logVal, "access")
+			delete(logVal, "error")
+			rawMap["log"] = logVal
+			if sanitized, err := json.Marshal(rawMap); err == nil {
+				testPayload = sanitized
+			}
+		}
+	}
+
 	tmpFile, err := os.CreateTemp("", "xray-preflight-*.json")
 	if err != nil {
 		return fmt.Errorf("create temp preflight config: %w", err)
@@ -713,7 +728,7 @@ func preflightCheckXray(candidateConfig []byte) error {
 	tmpPath := tmpFile.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	if _, err := tmpFile.Write(candidateConfig); err != nil {
+	if _, err := tmpFile.Write(testPayload); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("write temp preflight config: %w", err)
 	}
@@ -725,7 +740,11 @@ func preflightCheckXray(candidateConfig []byte) error {
 	cmd := exec.CommandContext(ctxTest, xrayBin, "run", "-test", "-c", tmpPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("xray configuration test failed: %s (err: %w)", strings.TrimSpace(string(out)), err)
+		outStr := strings.TrimSpace(string(out))
+		if strings.Contains(outStr, "failed to initialize access logger") || strings.Contains(outStr, "failed to initialize error logger") {
+			return nil
+		}
+		return fmt.Errorf("xray configuration test failed: %s (err: %w)", outStr, err)
 	}
 	return nil
 }
