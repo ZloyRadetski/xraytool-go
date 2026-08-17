@@ -240,6 +240,7 @@ func (m *Manager) LoadTopology(ctx context.Context) (*TopologyResponse, error) {
 	specialNodes := []SpecialNode{
 		{Name: "direct", Type: "direct"},
 		{Name: "block", Type: "block"},
+		{Name: "ru-traffic-portal", Type: "portal"},
 	}
 
 	// Read all available outbound template names from outbounds directory
@@ -370,7 +371,7 @@ func detectRoutingCycles(configs []ServerRoutingConfig) error {
 				continue
 			}
 			target := strings.TrimSpace(r.TargetServer)
-			if target == "" || strings.EqualFold(target, "direct") || strings.EqualFold(target, "block") {
+			if target == "" || strings.EqualFold(target, "direct") || strings.EqualFold(target, "block") || strings.EqualFold(target, "ru-traffic-portal") {
 				continue
 			}
 

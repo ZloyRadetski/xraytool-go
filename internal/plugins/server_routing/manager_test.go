@@ -54,8 +54,8 @@ func TestManager_LoadTopology_Empty(t *testing.T) {
 	if len(topo.Servers) != 3 {
 		t.Errorf("expected 3 servers, got %d", len(topo.Servers))
 	}
-	if len(topo.SpecialNodes) != 2 {
-		t.Errorf("expected 2 special nodes, got %d", len(topo.SpecialNodes))
+	if len(topo.SpecialNodes) != 3 {
+		t.Errorf("expected 3 special nodes, got %d", len(topo.SpecialNodes))
 	}
 	if len(topo.Routing) != 3 {
 		t.Errorf("expected 3 routing configs, got %d", len(topo.Routing))
