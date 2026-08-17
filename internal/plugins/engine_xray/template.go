@@ -129,6 +129,16 @@ func RegenerateConfig(templatePath, configPath string, users []domain.VPNUserCon
 		return fmt.Errorf("regenerate: merge users: %w", err)
 	}
 
+	// Preserve existing dynamic routing and outbounds from the live config if it exists
+	if existing, err := Read(configPath); err == nil && existing != nil {
+		if rawRouting, ok := existing["routing"]; ok && len(rawRouting) > 0 {
+			merged["routing"] = rawRouting
+		}
+		if rawOutbounds, ok := existing["outbounds"]; ok && len(rawOutbounds) > 0 {
+			merged["outbounds"] = rawOutbounds
+		}
+	}
+
 	if err := Write(configPath, merged); err != nil {
 		return fmt.Errorf("regenerate: write config %q: %w", configPath, err)
 	}

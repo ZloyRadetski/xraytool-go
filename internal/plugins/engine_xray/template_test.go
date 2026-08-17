@@ -453,6 +453,60 @@ func TestTemplateUsers_ExcludeBlacklistedAdmins(t *testing.T) {
 	}
 }
 
+func TestRegenerateConfig_PreservesExistingRoutingAndOutbounds(t *testing.T) {
+	tmplPath := writeTempFile(t, minXrayTemplate)
+
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "config.json")
+
+	// Pre-populate outPath with custom routing and outbounds
+	existingContent := `{
+		"inbounds": [],
+		"outbounds": [{"tag": "relay-NLD", "protocol": "vless"}],
+		"routing": {
+			"rules": [{"outboundTag": "relay-NLD", "domain": ["example.com"]}]
+		}
+	}`
+	if err := os.WriteFile(outPath, []byte(existingContent), 0o600); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+
+	dbUsers := []domain.VPNUserConfig{
+		{Email: "client1@example.com", UUID: "uuid-1"},
+	}
+
+	err := RegenerateConfig(tmplPath, outPath, dbUsers, false, "")
+	if err != nil {
+		t.Fatalf("RegenerateConfig: %v", err)
+	}
+
+	// Read back and verify routing and outbounds were NOT wiped out
+	cfg := readRawConfig(t, outPath)
+	var routing struct {
+		Rules []map[string]any `json:"rules"`
+	}
+	if rawRouting, ok := cfg["routing"]; !ok {
+		t.Fatal("routing missing from regenerated config")
+	} else if err := json.Unmarshal(rawRouting, &routing); err != nil {
+		t.Fatalf("unmarshal routing: %v", err)
+	}
+
+	if len(routing.Rules) != 1 || routing.Rules[0]["outboundTag"] != "relay-NLD" {
+		t.Errorf("expected routing rule to be preserved, got: %+v", routing.Rules)
+	}
+
+	var outbounds []map[string]any
+	if rawOutbounds, ok := cfg["outbounds"]; !ok {
+		t.Fatal("outbounds missing from regenerated config")
+	} else if err := json.Unmarshal(rawOutbounds, &outbounds); err != nil {
+		t.Fatalf("unmarshal outbounds: %v", err)
+	}
+	if len(outbounds) != 1 || outbounds[0]["tag"] != "relay-NLD" {
+		t.Errorf("expected outbounds to be preserved, got: %+v", outbounds)
+	}
+}
+
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

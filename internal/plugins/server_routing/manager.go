@@ -1221,6 +1221,36 @@ func (m *Manager) applyTransactionWithNode(ctx context.Context, configs []Server
 			return fmt.Errorf("сервер %q: запись обновленного config.json не удалась: %w", matchedNode, err)
 		}
 
+		// Also update template files if they exist so template and live config stay permanently in sync
+		var templateCandidates []string
+		if m.cfg != nil && m.cfg.Paths.XrayTemplate != "" {
+			templateCandidates = append(templateCandidates, m.cfg.Paths.XrayTemplate)
+		}
+		templateCandidates = append(templateCandidates,
+			"/etc/xraytool/xray_template.json",
+			"/etc/xraytool/configs/configs_json.json",
+			"/root/xraytool/data/configs/configs_json.json",
+			"/etc/xraytool/config.template.json",
+		)
+		var candRoot map[string]json.RawMessage
+		_ = json.Unmarshal(candidateXrayConfig, &candRoot)
+
+		for _, tpl := range templateCandidates {
+			if tpl == configPath {
+				continue
+			}
+			if tplData, err := os.ReadFile(tpl); err == nil && len(tplData) > 0 {
+				var tplRoot map[string]json.RawMessage
+				if err := json.Unmarshal(tplData, &tplRoot); err == nil && tplRoot != nil && candRoot != nil {
+					tplRoot["routing"] = candRoot["routing"]
+					tplRoot["outbounds"] = candRoot["outbounds"]
+					if updatedTpl, err := json.MarshalIndent(tplRoot, "", "  "); err == nil {
+						_ = safeio.WriteToFile(tpl, updatedTpl, 0o644)
+					}
+				}
+			}
+		}
+
 		restartCtx, cancelRestart := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancelRestart()
 
