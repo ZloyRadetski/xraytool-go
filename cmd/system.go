@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"xraytool/internal/safeio"
 )
 
 // updateXrayCmd downloads the latest xray-core binary.
@@ -87,6 +89,13 @@ func downloadGeoAtomically(ctx context.Context, url, dest string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
+	_ = os.Chmod(dir, 0o755)
+
+	var existingInfo os.FileInfo
+	if fi, err := os.Stat(dest); err == nil {
+		existingInfo = fi
+	}
+
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".*.download")
 	if err != nil {
 		return fmt.Errorf("create temporary destination: %w", err)
@@ -111,6 +120,14 @@ func downloadGeoAtomically(ctx context.Context, url, dest string) error {
 	if info.Size() == 0 {
 		return fmt.Errorf("downloaded file is empty")
 	}
+
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return fmt.Errorf("set permissions on downloaded file: %w", err)
+	}
+	if existingInfo != nil {
+		_ = safeio.CopyOwnership(existingInfo, tmpPath)
+	}
+
 	if err := os.Rename(tmpPath, dest); err != nil {
 		return fmt.Errorf("replace destination atomically: %w", err)
 	}
