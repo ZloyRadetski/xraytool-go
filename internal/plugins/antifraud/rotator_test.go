@@ -9,14 +9,19 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockLoggerController struct {
-	called bool
+	called  bool
+	logPath string
 }
 
 func (m *mockLoggerController) RestartLogger(ctx context.Context) error {
 	m.called = true
+	if m.logPath != "" {
+		_ = os.WriteFile(m.logPath, []byte{}, 0644)
+	}
 	return nil
 }
 
@@ -62,7 +67,7 @@ func TestRotator_ForceRemoveStaleOldFile(t *testing.T) {
 	assert.NoError(t, err)
 
 	notifyCh := make(chan struct{}, 1)
-	mockCtrl := &mockLoggerController{}
+	mockCtrl := &mockLoggerController{logPath: logPath}
 	r := newRotator(logPath, 1, 10*time.Minute, mockCtrl, notifyCh, slog.Default())
 
 	// This should trigger rotation, force-delete the stale .old file, and execute new rotation
@@ -72,6 +77,6 @@ func TestRotator_ForceRemoveStaleOldFile(t *testing.T) {
 
 	// Verify that the new access.log is now truncated/empty
 	info, err := os.Stat(logPath)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, int64(0), info.Size(), "log file should be truncated after rotation")
 }

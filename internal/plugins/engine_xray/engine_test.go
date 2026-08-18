@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"xraytool/internal/domain"
@@ -20,13 +21,24 @@ func setupTrackerMockXray(t *testing.T) string {
 		t.Fatalf("failed to create call log file: %v", err)
 	}
 
-	batPath := filepath.Join(tmp, "xray.bat")
-	batContent := `@echo off
+	if runtime.GOOS == "windows" {
+		batPath := filepath.Join(tmp, "xray.bat")
+		batContent := `@echo off
 echo %* >> "` + logPath + `"
 exit /b 0
 `
-	if err := os.WriteFile(batPath, []byte(batContent), 0755); err != nil {
-		t.Fatalf("failed to write tracker xray.bat: %v", err)
+		if err := os.WriteFile(batPath, []byte(batContent), 0755); err != nil {
+			t.Fatalf("failed to write tracker xray.bat: %v", err)
+		}
+	} else {
+		shPath := filepath.Join(tmp, "xray")
+		shContent := `#!/bin/sh
+echo "$@" >> "` + logPath + `"
+exit 0
+`
+		if err := os.WriteFile(shPath, []byte(shContent), 0755); err != nil {
+			t.Fatalf("failed to write tracker xray script: %v", err)
+		}
 	}
 
 	oldPath := os.Getenv("PATH")

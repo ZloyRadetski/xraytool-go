@@ -5,16 +5,17 @@ import (
 	json "github.com/goccy/go-json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
-// setupMockXray creates a fake xray.bat script in a temporary directory and prepends it to PATH.
+// setupMockXray creates a fake xray script in a temporary directory and prepends it to PATH.
 func setupMockXray(t *testing.T) {
 	tmp := t.TempDir()
-	batPath := filepath.Join(tmp, "xray.bat")
 
-	// A batch script to simulate xray behavior based on environment variables
-	batContent := `@echo off
+	if runtime.GOOS == "windows" {
+		batPath := filepath.Join(tmp, "xray.bat")
+		batContent := `@echo off
 if "%MOCK_XRAY_FAIL%"=="1" (
 	echo Mock error output
 	exit /b 1
@@ -48,8 +49,47 @@ if "%MOCK_XRAY_RMU_OUTPUT%"=="1" (
 )
 exit /b 0
 `
-	if err := os.WriteFile(batPath, []byte(batContent), 0755); err != nil {
-		t.Fatalf("failed to write mock xray.bat: %v", err)
+		if err := os.WriteFile(batPath, []byte(batContent), 0755); err != nil {
+			t.Fatalf("failed to write mock xray.bat: %v", err)
+		}
+	} else {
+		shPath := filepath.Join(tmp, "xray")
+		shContent := `#!/bin/sh
+if [ "$MOCK_XRAY_FAIL" = "1" ]; then
+	echo "Mock error output" >&2
+	exit 1
+fi
+if [ "$MOCK_XRAY_PARTIAL_FAIL" = "1" ]; then
+	if [ -n "$5" ] && [ -f "$5" ] && grep -q "failtag" "$5" 2>/dev/null; then
+		echo "Single tag fail" >&2
+		exit 1
+	fi
+fi
+if [ "$MOCK_XRAY_STATS" = "1" ]; then
+	echo '{ "stat": [ { "name": "user>>>test@example.com>>>traffic>>>uplink", "value": 123 } ] }'
+	exit 0
+fi
+if [ "$MOCK_XRAY_STATS_EMPTY" = "1" ]; then
+	echo 'null'
+	exit 0
+fi
+if [ "$MOCK_XRAY_STATS_BAD_JSON" = "1" ]; then
+	echo '{ bad json'
+	exit 0
+fi
+if [ "$MOCK_XRAY_ADU_OUTPUT" = "1" ]; then
+	echo "Successfully added"
+	exit 0
+fi
+if [ "$MOCK_XRAY_RMU_OUTPUT" = "1" ]; then
+	echo "Successfully removed"
+	exit 0
+fi
+exit 0
+`
+		if err := os.WriteFile(shPath, []byte(shContent), 0755); err != nil {
+			t.Fatalf("failed to write mock xray script: %v", err)
+		}
 	}
 
 	oldPath := os.Getenv("PATH")

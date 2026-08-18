@@ -1,6 +1,7 @@
 package promo
 
 import (
+	"errors"
 	json "github.com/goccy/go-json"
 	"net/http"
 	"strconv"
@@ -45,7 +46,7 @@ func (p *Plugin) handleAdminCreatePromoCode(w http.ResponseWriter, req *http.Req
 	}
 
 	if err := p.registry.Promos().Create(req.Context(), &promo); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if errors.Is(err, domain.ErrDuplicate) || strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "duplicate") {
 			http.Error(w, `{"error": "promo code already exists"}`, http.StatusConflict)
 			return
 		}
@@ -142,7 +143,7 @@ func (p *Plugin) handleAdminEditPromoCode(w http.ResponseWriter, req *http.Reque
 	promo.ExpiresAt = payload.ExpiresAt
 
 	if err := p.registry.Promos().Update(req.Context(), promo); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if errors.Is(err, domain.ErrDuplicate) || strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "duplicate") {
 			http.Error(w, `{"error": "promo code name already exists"}`, http.StatusConflict)
 			return
 		}
