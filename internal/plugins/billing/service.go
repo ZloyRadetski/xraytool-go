@@ -78,6 +78,7 @@ type CreatePaymentRequest struct {
 	MaxDevices  int
 	PromoCode   string
 	Platform    string
+	CustomData  map[string]interface{}
 }
 
 // ProcessExternalPaymentStatus maps an external status and updates the payment, dispatching events if needed.
@@ -239,6 +240,9 @@ func (s *Service) CreatePayment(ctx context.Context, req CreatePaymentRequest) (
 	}
 	if req.MaxDevices > 0 {
 		customData["max_devices"] = req.MaxDevices
+	}
+	for k, v := range req.CustomData {
+		customData[k] = v
 	}
 
 	payment := domain.Payment{

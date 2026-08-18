@@ -55,18 +55,19 @@ func buildPaymentResponse(p *domain.Payment) map[string]interface{} {
 
 func (p *Plugin) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 	var body struct {
-		TelegramID  int64  `json:"telegram_id"`
-		Email       string `json:"email"`
-		Amount      int    `json:"amount"`
-		PaymentType string `json:"payment_type"`
-		Method      string `json:"method"`
-		ExternalID  string `json:"external_id"`
-		PlanID      *int64 `json:"plan_id"`
-		MaxDevices  int    `json:"max_devices"`
-		PromoCode   string `json:"promo_code"`
-		Platform    string `json:"platform"`
-		SuccessURL  string `json:"success_url"`
-		FailedURL   string `json:"failed_url"`
+		TelegramID  int64                  `json:"telegram_id"`
+		Email       string                 `json:"email"`
+		Amount      int                    `json:"amount"`
+		PaymentType string                 `json:"payment_type"`
+		Method      string                 `json:"method"`
+		ExternalID  string                 `json:"external_id"`
+		PlanID      *int64                 `json:"plan_id"`
+		MaxDevices  int                    `json:"max_devices"`
+		PromoCode   string                 `json:"promo_code"`
+		Platform    string                 `json:"platform"`
+		SuccessURL  string                 `json:"success_url"`
+		FailedURL   string                 `json:"failed_url"`
+		CustomData  map[string]interface{} `json:"custom_data"`
 	}
 	if !readBody(w, req, &body) {
 		return
@@ -82,6 +83,7 @@ func (p *Plugin) handleCreatePayment(w http.ResponseWriter, req *http.Request) {
 		MaxDevices:  body.MaxDevices,
 		PromoCode:   body.PromoCode,
 		Platform:    body.Platform,
+		CustomData:  body.CustomData,
 	}
 
 	pay, err := p.paymentSvc.CreatePayment(req.Context(), reqPayload)

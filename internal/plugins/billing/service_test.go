@@ -443,6 +443,11 @@ func TestCreatePayment_Success(t *testing.T) {
 		PlanID:      &f.plan.ID,
 		MaxDevices:  3,
 		Platform:    "web",
+		CustomData: map[string]interface{}{
+			"months":     1,
+			"plan_price": 500,
+			"promo":      "WELCOME",
+		},
 	}
 
 	pay, err := f.service.CreatePayment(ctx, req)
@@ -451,6 +456,9 @@ func TestCreatePayment_Success(t *testing.T) {
 	require.Equal(t, f.user.ID, pay.UserID)
 	require.Equal(t, "pending_card", pay.Status)
 	require.Equal(t, 500, pay.Amount)
+	require.Equal(t, 1, pay.CustomData["months"])
+	require.Equal(t, 500, pay.CustomData["plan_price"])
+	require.Equal(t, "WELCOME", pay.CustomData["promo"])
 }
 
 func TestCreatePayment_UserNotFound(t *testing.T) {
