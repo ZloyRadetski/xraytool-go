@@ -354,3 +354,97 @@ func TestExpiryWorker_BatchMixedUsers(t *testing.T) {
 		t.Errorf("sub-late should have 0 notifications, got %d", len(notifs))
 	}
 }
+
+func TestExpiryWorker_RenewalCycle_NotificationsRetrigger(t *testing.T) {
+	db := setupTestDB(t)
+	registry := database.NewRegistry(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	subID := "sub-renew-cycle"
+	userID := "user-renew-cycle"
+
+	db.Create(&database.User{ID: userID, Username: "renew_cycle_user", Balance: 500})
+
+	endsAt12h := now.Add(12 * time.Hour)
+	sub := database.Subscription{
+		ID:         subID,
+		UserID:     userID,
+		UUID:       "uuid-renew-cycle",
+		Email:      "cycle@example.com",
+		Status:     "active",
+		EndsAt:     &endsAt12h,
+		MaxDevices: 3,
+	}
+	db.Create(&sub)
+
+	cfg := &appconfig.Config{
+		Worker: appconfig.WorkerConf{
+			ExpirationWarnings: []string{"72h", "24h", "3h", "1h"},
+		},
+	}
+	worker := setupTestWorker(t, db, cfg)
+
+	// 1. Initial run at 12h: marks 72h and triggers 24h
+	worker.ProcessOnce(ctx)
+
+	var notifs []database.SubscriptionNotification
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	if len(notifs) != 2 {
+		t.Fatalf("expected 2 notifications (72h and 24h), got %d: %+v", len(notifs), notifs)
+	}
+
+	// 2. User renews subscription for 30 days via AutoRenewSubscription
+	newEndsAt30d := now.Add(30 * 24 * time.Hour)
+	if err := registry.Subscriptions().AutoRenewSubscription(ctx, userID, nil, 100, &newEndsAt30d, 3); err != nil {
+		t.Fatalf("AutoRenewSubscription failed: %v", err)
+	}
+
+	// Check DB: notifications should be cleared
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	if len(notifs) != 0 {
+		t.Fatalf("expected 0 notifications after 30d renewal, got %d: %+v", len(notifs), notifs)
+	}
+
+	// Worker runs: 30 days remaining, no notifications should be triggered
+	worker.ProcessOnce(ctx)
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	if len(notifs) != 0 {
+		t.Fatalf("expected 0 notifications when 30d remaining, got %d: %+v", len(notifs), notifs)
+	}
+
+	// 3. Time advances: 48 hours left in the new billing period
+	endsAt48h := time.Now().UTC().Add(48 * time.Hour)
+	db.Model(&database.Subscription{}).Where("id = ?", subID).Update("ends_at", endsAt48h)
+
+	// Worker runs: should trigger 72h warning in the new cycle!
+	worker.ProcessOnce(ctx)
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	if len(notifs) != 1 || notifs[0].WarningLevel != "72h" {
+		t.Fatalf("expected 1 notification (72h) in new cycle, got %d: %+v", len(notifs), notifs)
+	}
+
+	// 4. Admin extends by 1 day (ends_at becomes now + 26h)
+	endsAt26h := time.Now().UTC().Add(26 * time.Hour)
+	if err := registry.Notifications().ResetForEndsAt(ctx, subID, &endsAt26h, nil); err != nil {
+		t.Fatalf("ResetForEndsAt failed: %v", err)
+	}
+	db.Model(&database.Subscription{}).Where("id = ?", subID).Update("ends_at", endsAt26h)
+
+	// Worker runs at 26h: 72h is marked as passed, 24h is NOT yet reached -> no new notification
+	worker.ProcessOnce(ctx)
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	if len(notifs) != 1 || notifs[0].WarningLevel != "72h" {
+		t.Fatalf("expected 72h to remain marked, got %d: %+v", len(notifs), notifs)
+	}
+
+	// 5. Time reaches 23h remaining (< 24h):
+	endsAt23h := time.Now().UTC().Add(23 * time.Hour)
+	db.Model(&database.Subscription{}).Where("id = ?", subID).Update("ends_at", endsAt23h)
+
+	worker.ProcessOnce(ctx)
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	if len(notifs) != 2 {
+		t.Fatalf("expected 2 notifications (72h and 24h), got %d: %+v", len(notifs), notifs)
+	}
+}

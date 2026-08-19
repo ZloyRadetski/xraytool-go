@@ -135,6 +135,9 @@ func (p *Plugin) ExtendSubscription(ctx context.Context, subscriptionID string, 
 		endsAt := base.AddDate(0, months, 0)
 		subscription.EndsAt = &endsAt
 		subscription.Status = "active"
+		if err := tx.Notifications().ResetForEndsAt(ctx, subscription.ID, &endsAt, nil); err != nil {
+			return err
+		}
 		return tx.Subscriptions().Update(ctx, subscription)
 	})
 }

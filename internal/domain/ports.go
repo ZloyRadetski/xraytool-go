@@ -153,6 +153,7 @@ type AntifraudBanRepository interface {
 type SubscriptionNotificationRepository interface {
 	CreateIfNotExists(ctx context.Context, notif *SubscriptionNotification) (bool, error)
 	DeleteBySubscriptionID(ctx context.Context, subID string) error
+	ResetForEndsAt(ctx context.Context, subID string, endsAt *time.Time, warningLevels []string) error
 }
 
 // EventPropagator is the driven port for notifying external systems (e.g. slave nodes)

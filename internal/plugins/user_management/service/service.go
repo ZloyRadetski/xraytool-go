@@ -691,6 +691,10 @@ func (s *Service) DeleteNotificationsBySubID(ctx context.Context, subID string) 
 	return s.registry.Notifications().DeleteBySubscriptionID(ctx, subID)
 }
 
+func (s *Service) ResetNotificationsForEndsAt(ctx context.Context, subID string, endsAt *time.Time, warningLevels []string) error {
+	return s.registry.Notifications().ResetForEndsAt(ctx, subID, endsAt, warningLevels)
+}
+
 func (s *Service) UpdateUser(ctx context.Context, user *domain.User) error {
 	return s.registry.Users().Update(ctx, user)
 }
@@ -700,6 +704,16 @@ func (s *Service) ListUsers(ctx context.Context, page, limit int, search string)
 }
 
 func (s *Service) UpdateSubscriptionFields(ctx context.Context, subID string, updates map[string]interface{}) error {
+	if endsAtVal, ok := updates["ends_at"]; ok {
+		var endsAt *time.Time
+		switch v := endsAtVal.(type) {
+		case time.Time:
+			endsAt = &v
+		case *time.Time:
+			endsAt = v
+		}
+		_ = s.registry.Notifications().ResetForEndsAt(ctx, subID, endsAt, nil)
+	}
 	return s.registry.Subscriptions().UpdateFields(ctx, subID, updates)
 }
 

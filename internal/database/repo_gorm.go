@@ -639,6 +639,11 @@ func (r *gormSubscriptionRepo) AutoRenewSubscription(ctx context.Context, userID
 			Updates(updates).Error; err != nil {
 			return err
 		}
+
+		if err := resetNotificationsForEndsAtTx(tx, sub.ID, &newEndsAt, nil); err != nil {
+			return err
+		}
+
 		if planID == nil {
 			return nil
 		}
@@ -1188,4 +1193,65 @@ func (r *gormNotificationRepo) CreateIfNotExists(ctx context.Context, notif *dom
 
 func (r *gormNotificationRepo) DeleteBySubscriptionID(ctx context.Context, subID string) error {
 	return r.db.WithContext(ctx).Where("subscription_id = ?", subID).Delete(&SubscriptionNotification{}).Error
+}
+
+func (r *gormNotificationRepo) ResetForEndsAt(ctx context.Context, subID string, endsAt *time.Time, warningLevels []string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return resetNotificationsForEndsAtTx(tx, subID, endsAt, warningLevels)
+	})
+}
+
+func resetNotificationsForEndsAtTx(tx *gorm.DB, subID string, endsAt *time.Time, warningLevels []string) error {
+	if endsAt == nil {
+		return tx.Where("subscription_id = ?", subID).Delete(&SubscriptionNotification{}).Error
+	}
+
+	if len(warningLevels) == 0 {
+		warningLevels = []string{"72h", "24h", "3h", "1h"}
+	}
+
+	now := time.Now().UTC()
+	timeLeft := endsAt.UTC().Sub(now)
+
+	if timeLeft <= 0 {
+		return nil
+	}
+
+	var toDeleteLevels []string
+	var toMarkLevels []string
+
+	for _, warnStr := range warningLevels {
+		warnDur, err := time.ParseDuration(warnStr)
+		if err != nil {
+			continue
+		}
+
+		if timeLeft > warnDur {
+			// Threshold is in the future: clear old notification flag so it will trigger fresh
+			toDeleteLevels = append(toDeleteLevels, warnStr)
+		} else {
+			// Threshold is in the past: ensure record exists so worker doesn't immediately send a stale warning
+			toMarkLevels = append(toMarkLevels, warnStr)
+		}
+	}
+
+	if len(toDeleteLevels) > 0 {
+		if err := tx.Where("subscription_id = ? AND warning_level IN ?", subID, toDeleteLevels).
+			Delete(&SubscriptionNotification{}).Error; err != nil {
+			return err
+		}
+	}
+
+	for _, lvl := range toMarkLevels {
+		notif := SubscriptionNotification{
+			SubscriptionID: subID,
+			WarningLevel:   lvl,
+			SentAt:         now,
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&notif).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

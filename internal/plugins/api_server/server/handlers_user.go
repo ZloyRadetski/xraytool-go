@@ -1234,8 +1234,8 @@ func (r *Router) handleAdminSetExpire(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Delete any sent notification flags so they can be re-triggered
-	r.userSvc.DeleteNotificationsBySubID(context.Background(), sub.ID) //nolint:errcheck
+	// Smart reset notification flags for the new ends_at
+	r.userSvc.ResetNotificationsForEndsAt(context.Background(), sub.ID, &expireTime, nil) //nolint:errcheck
 
 	r.unbanUserInXrayAsync(*sub)
 

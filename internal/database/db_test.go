@@ -535,3 +535,116 @@ func TestPromoCode_CRUD(t *testing.T) {
 		t.Fatal("expected error reading deleted promo code, got nil")
 	}
 }
+
+func TestResetNotificationsForEndsAt(t *testing.T) {
+	db := newTestDB(t)
+	registry := database.NewRegistry(db)
+	ctx := context.Background()
+
+	subID := "sub-smart-reset"
+	now := time.Now().UTC()
+
+	// Seed all 4 warning levels
+	for _, lvl := range []string{"72h", "24h", "3h", "1h"} {
+		db.Create(&database.SubscriptionNotification{
+			SubscriptionID: subID,
+			WarningLevel:   lvl,
+			SentAt:         now.Add(-time.Hour),
+		})
+	}
+
+	// 1. Extend to +26 hours (between 24h and 72h)
+	endsAt26h := now.Add(26 * time.Hour)
+	if err := registry.Notifications().ResetForEndsAt(ctx, subID, &endsAt26h, nil); err != nil {
+		t.Fatalf("ResetForEndsAt failed: %v", err)
+	}
+
+	var notifs []database.SubscriptionNotification
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+
+	// 72h should be kept/present (so worker won't send "72h" false warning),
+	// 24h, 3h, 1h should be deleted (so they will fire when their threshold comes).
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notification record (72h), got %d: %+v", len(notifs), notifs)
+	}
+	if notifs[0].WarningLevel != "72h" {
+		t.Errorf("expected warning level '72h', got '%s'", notifs[0].WarningLevel)
+	}
+
+	// 2. Extend to +30 days (full renewal)
+	endsAt30d := now.Add(30 * 24 * time.Hour)
+	if err := registry.Notifications().ResetForEndsAt(ctx, subID, &endsAt30d, nil); err != nil {
+		t.Fatalf("ResetForEndsAt failed: %v", err)
+	}
+
+	notifs = nil
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	// All should be cleared for full 30-day renewal
+	if len(notifs) != 0 {
+		t.Fatalf("expected 0 notifications after full 30d renewal, got %d: %+v", len(notifs), notifs)
+	}
+
+	// 3. Extend to +2 hours (between 1h and 3h)
+	// Pre-seed some notifications
+	db.Create(&database.SubscriptionNotification{SubscriptionID: subID, WarningLevel: "1h", SentAt: now})
+	endsAt2h := now.Add(2 * time.Hour)
+	if err := registry.Notifications().ResetForEndsAt(ctx, subID, &endsAt2h, nil); err != nil {
+		t.Fatalf("ResetForEndsAt failed: %v", err)
+	}
+
+	notifs = nil
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+	// 72h, 24h, 3h should be present (marked as passed), 1h should be cleared (future)
+	presentLevels := make(map[string]bool)
+	for _, n := range notifs {
+		presentLevels[n.WarningLevel] = true
+	}
+	if !presentLevels["72h"] || !presentLevels["24h"] || !presentLevels["3h"] {
+		t.Errorf("expected 72h, 24h, 3h to be marked as passed, got: %+v", presentLevels)
+	}
+	if presentLevels["1h"] {
+		t.Errorf("expected 1h to be cleared, but it was present")
+	}
+}
+
+func TestAutoRenewSubscription_ResetsNotifications(t *testing.T) {
+	db := newTestDB(t)
+	registry := database.NewRegistry(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	subID := "sub-autorenew-reset"
+	userID := "user-autorenew"
+
+	db.Create(&database.User{ID: userID, Username: "autorenew_user", Balance: 1000})
+	db.Create(&database.Subscription{
+		ID:         subID,
+		UserID:     userID,
+		Email:      "autorenew@test.com",
+		UUID:       "uuid-autorenew",
+		Status:     "active",
+		EndsAt:     &now,
+		MaxDevices: 3,
+	})
+
+	// Pre-seed old notifications
+	for _, lvl := range []string{"72h", "24h", "3h", "1h"} {
+		db.Create(&database.SubscriptionNotification{
+			SubscriptionID: subID,
+			WarningLevel:   lvl,
+			SentAt:         now.Add(-time.Hour),
+		})
+	}
+
+	newEndsAt := now.Add(30 * 24 * time.Hour)
+	if err := registry.Subscriptions().AutoRenewSubscription(ctx, userID, nil, 100, &newEndsAt, 3); err != nil {
+		t.Fatalf("AutoRenewSubscription failed: %v", err)
+	}
+
+	var notifs []database.SubscriptionNotification
+	db.Where("subscription_id = ?", subID).Find(&notifs)
+
+	if len(notifs) != 0 {
+		t.Fatalf("expected 0 notifications after AutoRenewSubscription to 30d, got %d: %+v", len(notifs), notifs)
+	}
+}
